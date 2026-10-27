@@ -1,9 +1,11 @@
 import cors from "cors";
 import express from "express";
-import type { ActivityEvent, ProposedAction, SimulatedExecution, UntrustedContent, UserIntent } from "@agentshield/engine";
+import type { ActivityEvent, PendingApproval, ProposedAction, SimulatedExecution, UntrustedContent, UserIntent } from "@agentshield/engine";
 import { evaluateAction, getScenario, MAX_SCAN_LENGTH, SCENARIOS } from "@agentshield/engine";
 import {
   createApprovalStore,
+  expirePendingApprovals,
+  markExpiryEventRecorded,
   processApproval,
   processRejection,
   createPendingApproval,
@@ -71,11 +73,13 @@ export interface AppDeps {
   approvalStore?: ApprovalStore;
   modelService?: ModelAnalysisService;
   modelConfig?: ModelConfig;
+  /** Injectable so tests can fault-inject event writes. Defaults to a fresh in-memory list. */
+  events?: ActivityEvent[];
 }
 
 export function createApp(deps: AppDeps = {}) {
   const app = express();
-  const events: ActivityEvent[] = [];
+  const events: ActivityEvent[] = deps.events ?? [];
   const simulator = deps.simulator ?? createSimulator();
   const approvalStore = deps.approvalStore ?? createApprovalStore();
   const modelConfig = deps.modelConfig ?? loadModelConfig();
@@ -214,7 +218,46 @@ export function createApp(deps: AppDeps = {}) {
     res.json({ evaluation, event, executed: execution.executed, execution, pendingApproval, modelAnalysis });
   });
 
+  /**
+   * Writes the single EXPIRED lifecycle event for an expiry transition.
+   * The event timestamp is when expiry was detected (listing, approve or
+   * reject), not the exact instant the TTL elapsed. A failed write is
+   * swallowed on purpose: the record keeps its pending marker, so a later
+   * listing, approve or reject retries it. Delivery is retry-based and
+   * in-memory only, not strict exactly-once (see README).
+   */
+  function recordExpiryEvent(approval: PendingApproval): void {
+    recordEvent({
+      scenarioId: approval.scenarioId,
+      intentTask: approval.intent.task,
+      actionType: approval.action.type,
+      tool: approval.action.tool,
+      destination: approval.action.destination,
+      decision: approval.decision,
+      riskScore: approval.riskScore,
+      findings: approval.findings,
+      explanation:
+        "Approval expiry detected on review: the record passed its 15-minute expiry and no handler was invoked. Event time is detection time, not the exact expiry instant.",
+      approvalId: approval.id,
+      lifecycle: "EXPIRED",
+    });
+  }
+
+  /** Retries a pending expiry event; a failed write keeps the pending marker. */
+  function tryRecordExpiryEvent(approval: PendingApproval): void {
+    try {
+      recordExpiryEvent(approval);
+      markExpiryEventRecorded(approvalStore, approval.id);
+    } catch {
+      // Pending marker remains set; the next operation retries the write.
+      console.warn(`approval-expiry-event status=write-failed approvalId=${approval.id} retry=pending`);
+    }
+  }
+
   app.get("/api/approvals", (_req, res) => {
+    // Surface the documented TTL in listings: stale PENDING records are
+    // reported as EXPIRED instead of pending forever.
+    expirePendingApprovals(approvalStore, new Date(), recordExpiryEvent);
     const approvals = [...approvalStore.records.values()].map(toPublicApproval).reverse();
     res.json({ approvals });
   });
@@ -253,6 +296,7 @@ export function createApp(deps: AppDeps = {}) {
       return;
     }
     if (outcome.kind === "expired") {
+      if (outcome.expiryEventPending) tryRecordExpiryEvent(outcome.approval);
       res.status(410).json({ error: `Approval ${id} has expired.`, approval: outcome.approval, executed: false });
       return;
     }
@@ -301,6 +345,11 @@ export function createApp(deps: AppDeps = {}) {
     }
     if (outcome.kind === "already-final") {
       res.status(409).json({ error: `Approval ${id} is already ${outcome.approval.status}.`, approval: outcome.approval, executed: false });
+      return;
+    }
+    if (outcome.kind === "expired") {
+      if (outcome.expiryEventPending) tryRecordExpiryEvent(outcome.approval);
+      res.status(410).json({ error: `Approval ${id} has expired.`, approval: outcome.approval, executed: false });
       return;
     }
     recordEvent({

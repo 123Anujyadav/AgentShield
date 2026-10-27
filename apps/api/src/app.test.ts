@@ -1,5 +1,6 @@
 import request from "supertest";
 import { describe, expect, it } from "vitest";
+import type { ActivityEvent } from "@agentshield/engine";
 import { createApp } from "./app.js";
 import { createApprovalStore } from "./approvals.js";
 import { createSimulator } from "./simulator.js";
@@ -167,7 +168,118 @@ describe("approval lifecycle and guarded execution", () => {
     expect(simulator.invocationCount).toBe(0);
 
     const again = await request(app).post(`/api/approvals/${id}/approve`).send({});
-    expect(again.status).toBe(409);
+    expect(again.status).toBe(410);
+    expect(again.body.approval.status).toBe("EXPIRED");
+    expect(simulator.invocationCount).toBe(0);
+
+    const events = await request(app).get("/api/events");
+    const expiryEvents = events.body.events.filter(
+      (e: { lifecycle?: string; approvalId?: string }) => e.lifecycle === "EXPIRED" && e.approvalId === id,
+    );
+    expect(expiryEvents).toHaveLength(1);
+  });
+
+  it("expired approvals surface as EXPIRED in the approvals list and never execute", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const app = createApp({ simulator, approvalStore });
+    const res = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const id = res.body.pendingApproval.id as string;
+    const record = approvalStore.records.get(id);
+    if (!record) throw new Error("pending record missing");
+    record.expiresAt = new Date(Date.now() - 1000).toISOString();
+
+    const list = await request(app).get("/api/approvals");
+    expect(list.status).toBe(200);
+    expect(list.body.approvals).toHaveLength(1);
+    expect(list.body.approvals[0].status).toBe("EXPIRED");
+
+    const approveAfterExpiryListed = await request(app).post(`/api/approvals/${id}/approve`).send({});
+    expect(approveAfterExpiryListed.status).toBe(410);
+    expect(approveAfterExpiryListed.body.approval.status).toBe("EXPIRED");
+    expect(approveAfterExpiryListed.body.executed).toBe(false);
+    expect(simulator.invocationCount).toBe(0);
+  });
+
+  it("listing before reject: expired rejection returns 410 in both orders and records one EXPIRED event", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const app = createApp({ simulator, approvalStore });
+    const res = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const id = res.body.pendingApproval.id as string;
+    const record = approvalStore.records.get(id);
+    if (!record) throw new Error("pending record missing");
+    record.expiresAt = new Date(Date.now() - 1000).toISOString();
+
+    const list = await request(app).get("/api/approvals");
+    expect(list.body.approvals[0].status).toBe("EXPIRED");
+
+    const rejectAfterList = await request(app).post(`/api/approvals/${id}/reject`).send({});
+    expect(rejectAfterList.status).toBe(410);
+    expect(rejectAfterList.body.approval.status).toBe("EXPIRED");
+    expect(rejectAfterList.body.executed).toBe(false);
+
+    const rejectAgain = await request(app).post(`/api/approvals/${id}/reject`).send({});
+    expect(rejectAgain.status).toBe(410);
+    expect(rejectAgain.body.executed).toBe(false);
+
+    const approveAfter = await request(app).post(`/api/approvals/${id}/approve`).send({});
+    expect(approveAfter.status).toBe(410);
+    expect(simulator.invocationCount).toBe(0);
+
+    const events = await request(app).get("/api/events");
+    const expiryEvents = events.body.events.filter(
+      (e: { lifecycle?: string; approvalId?: string }) => e.lifecycle === "EXPIRED" && e.approvalId === id,
+    );
+    expect(expiryEvents).toHaveLength(1);
+    expect(expiryEvents[0].decision).toBe("CONFIRM");
+    expect(expiryEvents[0].actionType).toBe("create_summary");
+  });
+
+  it("reject before listing: first rejection expires the record and later operations stay 410 with one event", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const app = createApp({ simulator, approvalStore });
+    const res = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const id = res.body.pendingApproval.id as string;
+    const record = approvalStore.records.get(id);
+    if (!record) throw new Error("pending record missing");
+    record.expiresAt = new Date(Date.now() - 1000).toISOString();
+
+    const rejectFirst = await request(app).post(`/api/approvals/${id}/reject`).send({});
+    expect(rejectFirst.status).toBe(410);
+    expect(rejectFirst.body.approval.status).toBe("EXPIRED");
+
+    const list = await request(app).get("/api/approvals");
+    expect(list.body.approvals[0].status).toBe("EXPIRED");
+
+    const rejectAgain = await request(app).post(`/api/approvals/${id}/reject`).send({});
+    expect(rejectAgain.status).toBe(410);
+    const approveAfter = await request(app).post(`/api/approvals/${id}/approve`).send({});
+    expect(approveAfter.status).toBe(410);
+    expect(simulator.invocationCount).toBe(0);
+
+    const events = await request(app).get("/api/events");
+    const expiryEvents = events.body.events.filter(
+      (e: { lifecycle?: string; approvalId?: string }) => e.lifecycle === "EXPIRED" && e.approvalId === id,
+    );
+    expect(expiryEvents).toHaveLength(1);
+  });
+
+  it("rejecting an expired approval returns 410 and does not execute", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const app = createApp({ simulator, approvalStore });
+    const res = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const id = res.body.pendingApproval.id as string;
+    const record = approvalStore.records.get(id);
+    if (!record) throw new Error("pending record missing");
+    record.expiresAt = new Date(Date.now() - 1000).toISOString();
+
+    const rejected = await request(app).post(`/api/approvals/${id}/reject`).send({});
+    expect(rejected.status).toBe(410);
+    expect(rejected.body.executed).toBe(false);
+    expect(rejected.body.approval.status).toBe("EXPIRED");
     expect(simulator.invocationCount).toBe(0);
   });
 
@@ -192,6 +304,268 @@ describe("approval lifecycle and guarded execution", () => {
     const recheckEvent = events.body.events.find((e: { lifecycle?: string }) => e.lifecycle === "BLOCKED_ON_RECHECK");
     expect(recheckEvent).toBeTruthy();
     expect(recheckEvent.decision).toBe("BLOCK");
+  });
+
+  function createFaultyEventList() {
+    const events: ActivityEvent[] = [];
+    const realPush = events.push.bind(events);
+    let failNextExpiryWrite = false;
+    events.push = ((...items: ActivityEvent[]) => {
+      if (failNextExpiryWrite && items.some((e) => e.lifecycle === "EXPIRED")) {
+        failNextExpiryWrite = false;
+        throw new Error("injected event-write failure");
+      }
+      return realPush(...items);
+    }) as typeof events.push;
+    return {
+      events,
+      armExpiryWriteFailure() {
+        failNextExpiryWrite = true;
+      },
+    };
+  }
+
+  async function expiredEvents(app: ReturnType<typeof createApp>, id: string) {
+    const res = await request(app).get("/api/events");
+    return res.body.events.filter(
+      (e: { lifecycle?: string; approvalId?: string }) => e.lifecycle === "EXPIRED" && e.approvalId === id,
+    ) as ActivityEvent[];
+  }
+
+  it("event-write failure on the approve path keeps the event pending and a retry records it once", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const faulty = createFaultyEventList();
+    const app = createApp({ simulator, approvalStore, events: faulty.events });
+    const res = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const id = res.body.pendingApproval.id as string;
+    expect(JSON.stringify(res.body.pendingApproval)).not.toContain("expiryEventPending");
+    const record = approvalStore.records.get(id);
+    if (!record) throw new Error("pending record missing");
+    record.expiresAt = new Date(Date.now() - 1000).toISOString();
+
+    faulty.armExpiryWriteFailure();
+    const approve = await request(app).post(`/api/approvals/${id}/approve`).send({});
+    expect(approve.status).toBe(410);
+    expect(approve.body.approval.status).toBe("EXPIRED");
+    expect(approve.body.executed).toBe(false);
+    expect(JSON.stringify(approve.body)).not.toContain("expiryEventPending");
+    expect(record.status).toBe("EXPIRED");
+    expect(record.expiryEventPending).toBe(true);
+    expect(simulator.invocationCount).toBe(0);
+    expect(await expiredEvents(app, id)).toHaveLength(0);
+
+    const list = await request(app).get("/api/approvals");
+    expect(list.body.approvals[0].status).toBe("EXPIRED");
+    expect(JSON.stringify(list.body)).not.toContain("expiryEventPending");
+    expect(record.expiryEventPending).toBe(false);
+    expect(await expiredEvents(app, id)).toHaveLength(1);
+
+    expect((await request(app).post(`/api/approvals/${id}/reject`).send({})).status).toBe(410);
+    expect((await request(app).post(`/api/approvals/${id}/approve`).send({})).status).toBe(410);
+    await request(app).get("/api/approvals");
+    expect(await expiredEvents(app, id)).toHaveLength(1);
+    expect(simulator.invocationCount).toBe(0);
+  });
+
+  it("event-write failure on the reject path keeps the event pending and a retry records it once", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const faulty = createFaultyEventList();
+    const app = createApp({ simulator, approvalStore, events: faulty.events });
+    const res = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const id = res.body.pendingApproval.id as string;
+    const record = approvalStore.records.get(id);
+    if (!record) throw new Error("pending record missing");
+    record.expiresAt = new Date(Date.now() - 1000).toISOString();
+    const backdatedExpiry = record.expiresAt;
+
+    // First rejection transitions the record to EXPIRED, but the deliberately
+    // failed event write leaves the expiry event pending.
+    faulty.armExpiryWriteFailure();
+    const reject = await request(app).post(`/api/approvals/${id}/reject`).send({});
+    expect(reject.status).toBe(410);
+    expect(reject.body.approval.status).toBe("EXPIRED");
+    expect(reject.body.executed).toBe(false);
+    expect(JSON.stringify(reject.body)).not.toContain("expiryEventPending");
+    expect(record.status).toBe("EXPIRED");
+    expect(record.expiryEventPending).toBe(true);
+    expect(simulator.invocationCount).toBe(0);
+    expect(await expiredEvents(app, id)).toHaveLength(0);
+
+    // T-1: with the record already EXPIRED and its event still pending, a
+    // client-supplied marker (plus unrelated status/expiry fields) must not
+    // clear the pending marker or alter the record while the retried event
+    // write also fails.
+    faulty.armExpiryWriteFailure();
+    const tampered = await request(app)
+      .post(`/api/approvals/${id}/reject`)
+      .send({ expiryEventPending: false, status: "EXECUTED", expiresAt: "2999-01-01T00:00:00.000Z" });
+    expect(tampered.status).toBe(410);
+    expect(tampered.body.approval.status).toBe("EXPIRED");
+    expect(tampered.body.executed).toBe(false);
+    expect(JSON.stringify(tampered.body)).not.toContain("expiryEventPending");
+    expect(record.status).toBe("EXPIRED");
+    expect(record.expiryEventPending).toBe(true);
+    expect(record.expiresAt).toBe(backdatedExpiry);
+    expect(simulator.invocationCount).toBe(0);
+    expect(await expiredEvents(app, id)).toHaveLength(0);
+
+    const approve = await request(app).post(`/api/approvals/${id}/approve`).send({});
+    expect(approve.status).toBe(410);
+    expect(JSON.stringify(approve.body)).not.toContain("expiryEventPending");
+    expect(record.expiryEventPending).toBe(false);
+    expect(await expiredEvents(app, id)).toHaveLength(1);
+
+    expect((await request(app).post(`/api/approvals/${id}/reject`).send({})).status).toBe(410);
+    await request(app).get("/api/approvals");
+    expect(await expiredEvents(app, id)).toHaveLength(1);
+    expect(simulator.invocationCount).toBe(0);
+  });
+
+  it("public approval responses never expose the internal expiry marker", async () => {
+    const app = createApp();
+    const evaluated = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    expect(JSON.stringify(evaluated.body)).not.toContain("expiryEventPending");
+    const id = evaluated.body.pendingApproval.id as string;
+    const approved = await request(app).post(`/api/approvals/${id}/approve`).send({});
+    expect(approved.status).toBe(200);
+    expect(JSON.stringify(approved.body)).not.toContain("expiryEventPending");
+    const list = await request(app).get("/api/approvals");
+    expect(JSON.stringify(list.body)).not.toContain("expiryEventPending");
+  });
+
+  it("one listing expires multiple stale approvals, each with its own single EXPIRED event", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const app = createApp({ simulator, approvalStore });
+    const ids: string[] = [];
+    for (let i = 0; i < 2; i += 1) {
+      const res = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+      const id = res.body.pendingApproval.id as string;
+      ids.push(id);
+      const record = approvalStore.records.get(id);
+      if (!record) throw new Error("pending record missing");
+      record.expiresAt = new Date(Date.now() - 1000).toISOString();
+    }
+
+    const list = await request(app).get("/api/approvals");
+    expect(list.body.approvals.map((a: { status: string }) => a.status)).toEqual(["EXPIRED", "EXPIRED"]);
+    await request(app).get("/api/approvals");
+
+    const events = await request(app).get("/api/events");
+    const expiryEvents = events.body.events.filter((e: { lifecycle?: string }) => e.lifecycle === "EXPIRED");
+    expect(expiryEvents).toHaveLength(2);
+    expect(new Set(expiryEvents.map((e: { approvalId?: string }) => e.approvalId))).toEqual(new Set(ids));
+    expect(simulator.invocationCount).toBe(0);
+  });
+
+  it("listing fresh approvals records no EXPIRED events", async () => {
+    const app = createApp();
+    await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    await request(app).get("/api/approvals");
+    const events = await request(app).get("/api/events");
+    expect(events.body.events.filter((e: { lifecycle?: string }) => e.lifecycle === "EXPIRED")).toHaveLength(0);
+    expect(events.body.events).toHaveLength(1);
+  });
+
+  it("EXECUTED and BLOCKED_ON_RECHECK approvals past expiry stay final in listings with no EXPIRED event", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const app = createApp({ simulator, approvalStore });
+
+    const executedRes = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const executedId = executedRes.body.pendingApproval.id as string;
+    await request(app).post(`/api/approvals/${executedId}/approve`).send({});
+    expect(simulator.invocationCount).toBe(1);
+
+    const blockedRes = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const blockedId = blockedRes.body.pendingApproval.id as string;
+    const blockedRecord = approvalStore.records.get(blockedId);
+    if (!blockedRecord) throw new Error("blocked record missing");
+    blockedRecord.intent = {
+      ...blockedRecord.intent,
+      deniedActions: [...blockedRecord.intent.deniedActions, blockedRecord.action.type],
+    };
+    await request(app).post(`/api/approvals/${blockedId}/approve`).send({});
+
+    for (const record of approvalStore.records.values()) {
+      record.expiresAt = new Date(Date.now() - 1000).toISOString();
+    }
+    const list = await request(app).get("/api/approvals");
+    const byId = new Map(list.body.approvals.map((a: { id: string; status: string }) => [a.id, a.status]));
+    expect(byId.get(executedId)).toBe("EXECUTED");
+    expect(byId.get(blockedId)).toBe("BLOCKED_ON_RECHECK");
+
+    const events = await request(app).get("/api/events");
+    expect(events.body.events.filter((e: { lifecycle?: string }) => e.lifecycle === "EXPIRED")).toHaveLength(0);
+    expect(simulator.invocationCount).toBe(1);
+  });
+
+  it("rejecting an expired approval records an EXPIRED event and never a REJECTED event", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const app = createApp({ simulator, approvalStore });
+    const res = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const id = res.body.pendingApproval.id as string;
+    const record = approvalStore.records.get(id);
+    if (!record) throw new Error("pending record missing");
+    record.expiresAt = new Date(Date.now() - 1000).toISOString();
+
+    const rejected = await request(app).post(`/api/approvals/${id}/reject`).send({});
+    expect(rejected.status).toBe(410);
+    expect(simulator.invocationCount).toBe(0);
+
+    const events = await request(app).get("/api/events");
+    const forApproval = events.body.events.filter((e: { approvalId?: string }) => e.approvalId === id);
+    expect(forApproval.filter((e: { lifecycle?: string }) => e.lifecycle === "REJECTED")).toHaveLength(0);
+    expect(forApproval.filter((e: { lifecycle?: string }) => e.lifecycle === "EXPIRED")).toHaveLength(1);
+  });
+
+  it("a failed EXPIRED event write is retried by the next operation and recorded exactly once", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const events: ActivityEvent[] = [];
+    const realPush = events.push.bind(events);
+    let failNextExpiryWrite = false;
+    events.push = ((...items: ActivityEvent[]) => {
+      if (failNextExpiryWrite && items.some((e) => e.lifecycle === "EXPIRED")) {
+        failNextExpiryWrite = false;
+        throw new Error("injected event-write failure");
+      }
+      return realPush(...items);
+    }) as typeof events.push;
+    const app = createApp({ simulator, approvalStore, events });
+
+    const res = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const id = res.body.pendingApproval.id as string;
+    const record = approvalStore.records.get(id);
+    if (!record) throw new Error("pending record missing");
+    record.expiresAt = new Date(Date.now() - 1000).toISOString();
+
+    failNextExpiryWrite = true;
+    const list = await request(app).get("/api/approvals");
+    expect(list.status).toBe(200);
+    expect(list.body.approvals[0].status).toBe("EXPIRED");
+    let current = await request(app).get("/api/events");
+    expect(current.body.events.filter((e: { lifecycle?: string }) => e.lifecycle === "EXPIRED")).toHaveLength(0);
+    expect(record.expiryEventPending).toBe(true);
+
+    const reject = await request(app).post(`/api/approvals/${id}/reject`).send({});
+    expect(reject.status).toBe(410);
+    expect(reject.body.executed).toBe(false);
+    expect(record.expiryEventPending).toBe(false);
+
+    const approve = await request(app).post(`/api/approvals/${id}/approve`).send({});
+    expect(approve.status).toBe(410);
+    await request(app).get("/api/approvals");
+
+    current = await request(app).get("/api/events");
+    const expiryEvents = current.body.events.filter(
+      (e: { lifecycle?: string; approvalId?: string }) => e.lifecycle === "EXPIRED" && e.approvalId === id,
+    );
+    expect(expiryEvents).toHaveLength(1);
+    expect(simulator.invocationCount).toBe(0);
   });
 
   it("unknown and malformed approval requests fail safely", async () => {

@@ -38,6 +38,9 @@ export default function CommandCenterView({
 
   const tally = { ALLOW: 0, CONFIRM: 0, BLOCK: 0 };
   for (const e of events) {
+    // EXPIRED events carry the original CONFIRM decision; they are lifecycle
+    // transitions, not new decisions, so they must not inflate the tally.
+    if (e.lifecycle === "EXPIRED") continue;
     if (e.decision in tally) tally[e.decision as keyof typeof tally] += 1;
   }
   const totalDecisions = tally.ALLOW + tally.CONFIRM + tally.BLOCK;

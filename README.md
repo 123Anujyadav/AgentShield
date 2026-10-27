@@ -82,6 +82,16 @@ Endpoints: `POST /api/evaluate`, `GET /api/approvals`, `POST /api/approvals/:id/
 `POST /api/approvals/:id/reject`, `GET /api/events`. Approving re-evaluates the stored action
 with current policy before the simulator runs; a BLOCK recheck, expiry, rejection, or an
 already-final record executes nothing. Duplicate approval returns `409` and never re-executes.
+Approval listings surface the TTL: a `PENDING` record past its 15-minute expiry is reported
+as `EXPIRED`. An expired approval returns `410` for both approve and reject requests, whether
+or not the listing was called first (`409` remains for other already-final states), and its
+first transition to `EXPIRED` records an `EXPIRED` lifecycle event in the timeline.
+Expiry is lazy: that event's timestamp is when expiry was detected (listing, approve, or
+reject), not the exact instant the TTL elapsed. Event delivery is retry-based: a failed write
+keeps a pending marker and is retried when a later listing, approve, or reject occurs. It is
+not guaranteed across API restarts (approvals and markers are in memory), and if a write
+succeeds in the event store but then reports an error, a retry may record a duplicate event,
+so strict exactly-once delivery is not promised.
 Client-supplied findings, scores, decisions, or replacement actions are ignored.
 
 Simulated handlers are an explicit allowlist (`create_summary`, `read_document`, `create_report`)
