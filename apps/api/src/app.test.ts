@@ -444,6 +444,39 @@ describe("approval lifecycle and guarded execution", () => {
     expect(JSON.stringify(events.body)).not.toContain(marker);
   });
 
+  it("data-leak guard: C-2 passphrase and arrow syntax BLOCK before simulation and survive recheck", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const app = createApp({ simulator, approvalStore });
+    const res = await request(app)
+      .post("/api/evaluate")
+      .send({
+        intent: { task: "Summarize", allowedActions: ["create_summary"], deniedActions: [], allowedDestinations: ["simulated-workspace"] },
+        action: { type: "create_summary", tool: "simulated.workspace.createSummary", destination: "simulated-workspace", summary: "passphrase=fake-c2-api-phrase-001" },
+      });
+    expect(res.body.evaluation.decision).toBe("BLOCK");
+    expect(res.body.executed).toBe(false);
+    expect(res.body.pendingApproval).toBeNull();
+    expect(JSON.stringify(res.body)).not.toContain("fake-c2-api-phrase-001");
+    expect(simulator.invocationCount).toBe(0);
+
+    const pending = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const id = pending.body.pendingApproval.id as string;
+    const record = approvalStore.records.get(id);
+    if (!record) throw new Error("pending record missing");
+    record.action = { ...record.action, summary: 'password => "fake-c2-api-arrow-002"' };
+    const list = await request(app).get("/api/approvals");
+    expect(JSON.stringify(list.body)).not.toContain("fake-c2-api-arrow-002");
+    const approved = await request(app).post(`/api/approvals/${id}/approve`).send({});
+    expect(approved.status).toBe(409);
+    expect(approved.body.executed).toBe(false);
+    expect(JSON.stringify(approved.body)).not.toContain("fake-c2-api-arrow-002");
+    expect(simulator.invocationCount).toBe(0);
+    const events = await request(app).get("/api/events");
+    expect(JSON.stringify(events.body)).not.toContain("fake-c2-api-arrow-002");
+    expect(JSON.stringify(events.body)).not.toContain("fake-c2-api-phrase-001");
+  });
+
   it("data-leak guard: a generic-labelled value past the 256-character cap is BLOCKed with no execution", async () => {
     const simulator = createSimulator();
     const app = createApp({ simulator });

@@ -1,0 +1,175 @@
+/**
+ * Deterministic synthetic detection benchmark (Phase C-1).
+ *
+ * Runs the built deterministic engine evaluator over a hand-authored fixture
+ * corpus stored OUTSIDE ml/datasets/sentinel/. Expected results are defined
+ * in the fixtures by the documented detection policy; they are never derived
+ * from detector output. This corpus is isolated from ML training and frozen
+ * dataset splits.
+ *
+ * Usage (from the repository root, engine built first):
+ *   npm run build -w @agentshield/engine
+ *   node benchmarks/detection/run-benchmark.mjs [output-name]
+ *
+ * Output: benchmarks/detection/results/<output-name>.json (default: latest)
+ * The report contains no timestamps, so reruns are byte-identical for the
+ * same engine build and corpus.
+ *
+ * The corpus is validated before anything runs: a malformed fixture, an
+ * unknown placeholder, a duplicate id, or a BLOCK caused by something other
+ * than the data-leak rule stops the run with exit code 1 instead of being
+ * scored silently. Self-tests: node --test benchmarks/detection/run-benchmark.test.mjs
+ */
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const DATA_LEAK_RULE = "data-leak.outbound-secret";
+const FIELDS = new Set(["summary", "payload"]);
+const PLACEHOLDERS = { __PAD_2500__: "a".repeat(2500), __PAD_9000__: "a".repeat(9000) };
+const PLACEHOLDER_TOKEN = /__[A-Z0-9_]+__/g;
+
+/** Replaces every known placeholder; an unknown placeholder is an error, never left in place. */
+export function expand(text) {
+  return text.replace(PLACEHOLDER_TOKEN, (token) => {
+    if (!Object.hasOwn(PLACEHOLDERS, token)) throw new Error(`unknown placeholder ${token}`);
+    return PLACEHOLDERS[token];
+  });
+}
+
+/** Returns every problem found in the corpus; an empty list means it is safe to score. */
+export function validateCorpus(corpus) {
+  const errors = [];
+  if (typeof corpus !== "object" || corpus === null) return ["corpus must be a JSON object"];
+  if (typeof corpus.corpus !== "string" || !corpus.corpus) errors.push("corpus.corpus must be a non-empty string");
+  if (typeof corpus.version !== "string" || !corpus.version) errors.push("corpus.version must be a non-empty string");
+  if (!Array.isArray(corpus.fixtures) || corpus.fixtures.length === 0) {
+    errors.push("corpus.fixtures must be a non-empty array");
+    return errors;
+  }
+  const seen = new Set();
+  corpus.fixtures.forEach((fixture, index) => {
+    const at = `fixtures[${index}]${fixture && typeof fixture.id === "string" ? ` (${fixture.id})` : ""}`;
+    if (typeof fixture !== "object" || fixture === null) {
+      errors.push(`${at}: must be an object`);
+      return;
+    }
+    const allowed = new Set(["id", "family", "field", "text", "expectedBlock", "payloadKey", "payloadValue"]);
+    for (const key of Object.keys(fixture)) if (!allowed.has(key)) errors.push(`${at}: unknown property "${key}"`);
+    if (typeof fixture.id !== "string" || !fixture.id) errors.push(`${at}: id must be a non-empty string`);
+    else if (seen.has(fixture.id)) errors.push(`${at}: duplicate id`);
+    else seen.add(fixture.id);
+    if (typeof fixture.family !== "string" || !fixture.family) errors.push(`${at}: family must be a non-empty string`);
+    if (!FIELDS.has(fixture.field)) errors.push(`${at}: field must be "summary" or "payload"`);
+    if (typeof fixture.expectedBlock !== "boolean") errors.push(`${at}: expectedBlock must be true or false`);
+    if (typeof fixture.text !== "string" || !fixture.text) errors.push(`${at}: text must be a non-empty string`);
+    if (fixture.field !== "payload" && (fixture.payloadKey !== undefined || fixture.payloadValue !== undefined)) {
+      errors.push(`${at}: payloadKey/payloadValue are only valid when field is "payload"`);
+    }
+    if (fixture.payloadKey !== undefined && (typeof fixture.payloadKey !== "string" || !fixture.payloadKey)) {
+      errors.push(`${at}: payloadKey must be a non-empty string`);
+    }
+    if (fixture.payloadValue !== undefined && !["string", "number", "boolean"].includes(typeof fixture.payloadValue)) {
+      errors.push(`${at}: payloadValue must be a string, number, or boolean`);
+    }
+    for (const value of [fixture.text, fixture.payloadValue]) {
+      if (typeof value !== "string") continue;
+      try {
+        expand(value);
+      } catch (error) {
+        errors.push(`${at}: ${error.message}`);
+      }
+    }
+  });
+  return errors;
+}
+
+/** Builds the action for one fixture from the benign scenario. */
+export function actionFor(baseAction, fixture) {
+  if (fixture.field === "payload") {
+    const key = fixture.payloadKey ?? "note";
+    const raw = fixture.payloadValue ?? fixture.text;
+    const value = typeof raw === "string" ? expand(raw) : raw;
+    return { ...baseAction, payload: { [key]: value } };
+  }
+  return { ...baseAction, summary: expand(fixture.text) };
+}
+
+function metrics(tp, fp, tn, fn) {
+  const precision = tp + fp === 0 ? null : +(tp / (tp + fp)).toFixed(4);
+  const recall = tp + fn === 0 ? null : +(tp / (tp + fn)).toFixed(4);
+  return { tp, fp, tn, fn, precision, recall };
+}
+
+/**
+ * Scores the corpus. `evaluate(fixture)` returns the engine result. A BLOCK
+ * only counts as a detection when the data-leak rule produced it; any other
+ * BLOCK means the fixture does not test the detector and is an error.
+ */
+export function scoreCorpus(corpus, evaluate) {
+  const perFamily = new Map();
+  const failures = [];
+  let tp = 0, fp = 0, tn = 0, fn = 0;
+  for (const fixture of corpus.fixtures) {
+    const result = evaluate(fixture);
+    const blocked = result.decision === "BLOCK";
+    if (blocked && !result.findings.some((f) => f.ruleId === DATA_LEAK_RULE)) {
+      throw new Error(`${fixture.id}: BLOCK came from a rule other than ${DATA_LEAK_RULE}`);
+    }
+    const fam = perFamily.get(fixture.family) ?? { tp: 0, fp: 0, tn: 0, fn: 0 };
+    if (fixture.expectedBlock && blocked) { tp += 1; fam.tp += 1; }
+    else if (fixture.expectedBlock && !blocked) { fn += 1; fam.fn += 1; failures.push({ id: fixture.id, family: fixture.family, kind: "false-negative" }); }
+    else if (!fixture.expectedBlock && blocked) { fp += 1; fam.fp += 1; failures.push({ id: fixture.id, family: fixture.family, kind: "false-positive" }); }
+    else { tn += 1; fam.tn += 1; }
+    perFamily.set(fixture.family, fam);
+  }
+  if (tp + fp + tn + fn !== corpus.fixtures.length) {
+    throw new Error(`scored ${tp + fp + tn + fn} of ${corpus.fixtures.length} fixtures`);
+  }
+
+  return {
+    benchmark: corpus.corpus,
+    corpusVersion: corpus.version,
+    fixtures: corpus.fixtures.length,
+    definition:
+      "expectedBlock=true means the documented policy requires a hard BLOCK; precision = TP/(TP+FP), recall = TP/(TP+FN), null when the denominator is zero.",
+    overall: metrics(tp, fp, tn, fn),
+    perFamily: Object.fromEntries(
+      [...perFamily.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, metrics(v.tp, v.fp, v.tn, v.fn)]),
+    ),
+    failures,
+    limitations: [
+      "Synthetic hand-authored fixtures only; metrics estimate performance on similar synthetic text, not real-world traffic.",
+      "known-unsupported fixtures are expected not to block under the current documented policy and count as true negatives when they do not.",
+      "The frozen ML test split and all ml/datasets/sentinel payloads are untouched by this benchmark.",
+    ],
+  };
+}
+
+async function main() {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  const corpus = JSON.parse(readFileSync(resolve(root, "benchmarks/detection/v1/fixtures.json"), "utf8"));
+  const errors = validateCorpus(corpus);
+  if (errors.length > 0) {
+    console.error(`Invalid benchmark corpus (${errors.length} problem${errors.length === 1 ? "" : "s"}):`);
+    for (const error of errors) console.error(`- ${error}`);
+    process.exit(1);
+  }
+
+  const { evaluateAction, getScenario } = await import("../../packages/engine/dist/index.js");
+  const scenario = getScenario("benign-summary");
+  if (!scenario) throw new Error("benign-summary scenario missing from built engine");
+  const report = scoreCorpus(corpus, (fixture) =>
+    evaluateAction({ intent: scenario.intent, action: actionFor(scenario.action, fixture) }),
+  );
+
+  const outName = process.argv[2] ?? "latest";
+  const outDir = resolve(root, "benchmarks/detection/results");
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(resolve(outDir, `${outName}.json`), `${JSON.stringify(report, null, 2)}\n`);
+  console.log(JSON.stringify(report, null, 2));
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
+}

@@ -106,7 +106,8 @@ Data-Leak Guard: the engine also inspects the outbound action's `summary` and `p
 before execution or confirmation. A value matching a supported secret pattern — labelled
 assignments such as `api_key=`, `access_token=`, `client_secret=`, `auth_token=`,
 `private_key=`, `refresh_token=`, `session_token=`, `secret_key=`, `db_password=`,
-`aws_secret_access_key=`, `x-api-key`, `password:`/`token:` (including JSON-style quoted
+`aws_secret_access_key=`, `x-api-key`, `passphrase=`, `password:`/`token:` with `=`, `:`,
+or `=>` separators (including JSON-style quoted
 keys), Bearer credentials, realistic `sk-` tokens (`sk-proj-...`, `sk-ant-...`, underscored
 forms), seeded `FAKE_...SECRET` values, or email addresses — is a hard `BLOCK`
 (rule `data-leak.outbound-secret`, risk 95). Every labelled occurrence is checked, so a
@@ -148,10 +149,17 @@ such as `secret: 'Tis ...` is a known false positive. Approval and policy rechec
 cannot downgrade it, and public approval responses redact any such value and rename
 secret-shaped payload keys. Detection is limited to these documented patterns; unlabelled,
 encoded, split, or otherwise unrecognized secrets are not detected, so this is not
-comprehensive secret detection. Known gaps include labels outside the list (`passphrase=`),
-the `=>` separator (`password => "..."`), and backslash-escaped JSON written as text
-(`{\"api_key\": ...}`). Malformed payloads (nested objects, arrays, null values)
-are rejected with HTTP 400 at the API boundary.
+comprehensive secret detection. Since Phase C-2, `passphrase=` and the `=>` separator
+(`password => "..."`) are supported credential syntax. Because `=>` is also JavaScript
+arrow-function syntax, an unquoted `=>` value that is a call (`hash(x)`, `a.b(x)`) or a
+member access on the label itself (`token => token.trim()`) is treated as code, not a
+credential; quoted values and literal values such as `token => abc123` still block. Known
+gaps now include labels outside the list and backslash-escaped JSON written as text
+(`{\"api_key\": ...}`). A deterministic synthetic benchmark for this detector lives in
+`benchmarks/detection/` (53 hand-authored fixtures, per-family precision/recall,
+synthetic corpus only; see its README). Malformed
+payloads (nested objects, arrays, null values) are rejected with HTTP 400 at the
+API boundary.
 
 ## Model-assisted analysis (Phase 4, mock only)
 

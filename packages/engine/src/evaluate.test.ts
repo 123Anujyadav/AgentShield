@@ -319,6 +319,44 @@ describe("evaluateAction (walking skeleton)", () => {
     expect(JSON.stringify(result.findings)).not.toContain(marker);
   });
 
+  it.each([
+    ["passphrase equals", "passphrase=fake-c2-phrase-001", "fake-c2-phrase-001"],
+    ["passphrase colon", "passphrase: fake-c2-phrase-002", "fake-c2-phrase-002"],
+    ["passphrase uppercase", "PASSPHRASE=FAKE-C2-PHRASE-003", "FAKE-C2-PHRASE-003"],
+    ["password arrow quoted", 'password => "fake-c2-arrow-004"', "fake-c2-arrow-004"],
+    ["api_key arrow", "api_key => fake-c2-arrow-005", "fake-c2-arrow-005"],
+    ["token arrow payload form", "token => fake-c2-arrow-006", "fake-c2-arrow-006"],
+    ["arrow code before a real arrow credential", "tokens.map(token => token.trim()); api_key => fake-c2-arrow-007", "fake-c2-arrow-007"],
+    ["dotted (JWT-shaped) arrow value", "token => fakeJwtHead01.fakeJwtBody02.fakeSig03", "fakeJwtHead01.fakeJwtBody02.fakeSig03"],
+  ])("data-leak guard: C-2 credential syntax is BLOCKed (%s)", (_label, text, marker) => {
+    const scenario = getScenario("benign-summary");
+    if (!scenario) throw new Error("missing scenario");
+    const inSummary = evaluateAction({ intent: scenario.intent, action: { ...scenario.action, summary: text } });
+    expect(inSummary.decision).toBe("BLOCK");
+    expect(JSON.stringify(inSummary)).not.toContain(marker);
+    const inPayload = evaluateAction({
+      intent: scenario.intent,
+      action: { ...scenario.action, payload: { note: text } },
+    });
+    expect(inPayload.decision).toBe("BLOCK");
+    expect(JSON.stringify(inPayload)).not.toContain(marker);
+  });
+
+  it.each([
+    ["passphrase prose", "The passphrase protects the vault and is never shared."],
+    ["arrow prose", "Use an arrow => to show the next step in the diagram."],
+    ["passphrase question", "What is a passphrase and why does it matter?"],
+    ["arrow function on token", "Refactor tokens.map(token => token.trim()) in the parser"],
+    ["arrow function calling a helper", "Update users.map(password => hashPassword(password))"],
+    ["arrow function member access", "filter(secret => secret.isActive)"],
+    ["arrow function method call", "passwords.map(password => bcrypt.hash(password, 10))"],
+  ])("data-leak guard: C-2 benign prose does not BLOCK (%s)", (_label, summary) => {
+    const scenario = getScenario("benign-summary");
+    if (!scenario) throw new Error("missing scenario");
+    const result = evaluateAction({ intent: scenario.intent, action: { ...scenario.action, summary } });
+    expect(result.decision).toBe("ALLOW");
+  });
+
   it("labelled-value cap: a generic-labelled run of 256+ characters fails closed; a credential-shaped short value is caught", () => {
     const scenario = getScenario("benign-summary");
     if (!scenario) throw new Error("missing scenario");

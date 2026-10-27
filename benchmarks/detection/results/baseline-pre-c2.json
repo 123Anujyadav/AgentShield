@@ -1,0 +1,122 @@
+{
+  "benchmark": "agentshield-detection-benchmark",
+  "corpusVersion": "v1",
+  "fixtures": 53,
+  "definition": "expectedBlock=true means the documented policy requires a hard BLOCK; precision = TP/(TP+FP), recall = TP/(TP+FN), null when the denominator is zero.",
+  "overall": {
+    "tp": 27,
+    "fp": 0,
+    "tn": 19,
+    "fn": 7,
+    "precision": 1,
+    "recall": 0.7941
+  },
+  "perFamily": {
+    "boundary-lengths": {
+      "tp": 3,
+      "fp": 0,
+      "tn": 1,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "c2-new-syntax": {
+      "tp": 0,
+      "fp": 0,
+      "tn": 3,
+      "fn": 7,
+      "precision": null,
+      "recall": 0
+    },
+    "decoy-and-nested": {
+      "tp": 4,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "hard-benign": {
+      "tp": 0,
+      "fp": 0,
+      "tn": 12,
+      "fn": 0,
+      "precision": null,
+      "recall": null
+    },
+    "known-unsupported": {
+      "tp": 0,
+      "fp": 0,
+      "tn": 3,
+      "fn": 0,
+      "precision": null,
+      "recall": null
+    },
+    "labelled-assignment": {
+      "tp": 8,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "quoted-credential": {
+      "tp": 6,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "token-formats": {
+      "tp": 6,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    }
+  },
+  "failures": [
+    {
+      "id": "new-01",
+      "family": "c2-new-syntax",
+      "kind": "false-negative"
+    },
+    {
+      "id": "new-02",
+      "family": "c2-new-syntax",
+      "kind": "false-negative"
+    },
+    {
+      "id": "new-03",
+      "family": "c2-new-syntax",
+      "kind": "false-negative"
+    },
+    {
+      "id": "new-04",
+      "family": "c2-new-syntax",
+      "kind": "false-negative"
+    },
+    {
+      "id": "new-05",
+      "family": "c2-new-syntax",
+      "kind": "false-negative"
+    },
+    {
+      "id": "new-06",
+      "family": "c2-new-syntax",
+      "kind": "false-negative"
+    },
+    {
+      "id": "new-07",
+      "family": "c2-new-syntax",
+      "kind": "false-negative"
+    }
+  ],
+  "limitations": [
+    "Synthetic hand-authored fixtures only; metrics estimate performance on similar synthetic text, not real-world traffic.",
+    "known-unsupported fixtures are expected not to block under the current documented policy and count as true negatives when they do not.",
+    "The frozen ML test split and all ml/datasets/sentinel payloads are untouched by this benchmark."
+  ]
+}

@@ -13,7 +13,7 @@ export const MAX_SCAN_LENGTH = 8000;
 
 /** Explicit credential labels: a plausible value after one of these is a secret. */
 const STRONG_LABEL =
-  "(?:aws[-_ ]?secret[-_ ]?access[-_ ]?key|db[-_ ]?password|client[-_ ]?secret|secret[-_ ]?key|private[-_ ]?key|api[-_ ]?key|x-api-key|access[-_ ]?token|refresh[-_ ]?token|session[-_ ]?token|auth[-_ ]?token|password|passwd)";
+  "(?:aws[-_ ]?secret[-_ ]?access[-_ ]?key|db[-_ ]?password|client[-_ ]?secret|secret[-_ ]?key|private[-_ ]?key|api[-_ ]?key|x-api-key|access[-_ ]?token|refresh[-_ ]?token|session[-_ ]?token|auth[-_ ]?token|passphrase|password|passwd)";
 /** Generic labels: the value must also look like a credential. */
 const WEAK_LABEL = "(?:secret|token)";
 
@@ -37,7 +37,7 @@ const EMAIL_SOURCE = "(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A
  */
 const SECRET_VALUE_PATTERNS: RegExp[] = [
   new RegExp(
-    `["']?(?:${STRONG_LABEL}|${WEAK_LABEL})["']?\\s*[:=]\\s*(?:"(?:\\\\.|[^"\\\\])*(?:"|$)|'(?:\\\\.|[^'\\\\])*(?:'|$)|\\S+)`,
+    `["']?(?:${STRONG_LABEL}|${WEAK_LABEL})["']?\\s*(?:=>|[:=])\\s*(?:"(?:\\\\.|[^"\\\\])*(?:"|$)|'(?:\\\\.|[^'\\\\])*(?:'|$)|\\S+)`,
     "gi",
   ),
   /\bBearer\s+\S+/gi,
@@ -100,7 +100,22 @@ function isStrongLabelValue(value: string): boolean {
   return /[A-Za-z0-9]/.test(v);
 }
 
-const LABELLED_SECRET_SOURCE = `["']?(?:(${STRONG_LABEL})|(${WEAK_LABEL}))["']?\\s*[:=]\\s*(["']?)`;
+const LABELLED_SECRET_SOURCE = `["']?(?:(${STRONG_LABEL})|(${WEAK_LABEL}))["']?\\s*(=>|[:=])\\s*(["']?)`;
+
+/** A call or method call: `name(`, `a.b.c(`. Identifier chains need a dot, so no backtracking. */
+const ARROW_CALL_BODY = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\(/;
+
+/**
+ * `=>` is also JavaScript arrow-function syntax. `token => token.trim()` or
+ * `password => hash(password)` names a parameter; it does not assign a value.
+ * An unquoted `=>` value that is a call, or a member access on the label
+ * itself, is read as code rather than a credential. A literal value such as
+ * `token => abc123` or a dotted JWT-like value is still judged normally.
+ */
+function isArrowFunctionBody(rest: string, label: string): boolean {
+  if (ARROW_CALL_BODY.test(rest)) return true;
+  return rest.slice(0, label.length).toLowerCase() === label.toLowerCase() && /^[.[]/.test(rest.slice(label.length));
+}
 const UNQUOTED_VALUE_PATTERN = new RegExp(`^[^\\s"']{1,${LABELLED_VALUE_CAPTURE_LIMIT}}`);
 /**
  * Quote-tolerant reading of the same unquoted value: a quote character inside
@@ -139,7 +154,7 @@ function hasLabelledSecret(text: string): boolean {
   const pattern = new RegExp(LABELLED_SECRET_SOURCE, "gi");
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) !== null) {
-    const [whole, strongLabel, , openingQuote = ""] = match;
+    const [whole, strongLabel, weakLabel, separator, openingQuote = ""] = match;
     const valueStart = match.index + whole.length;
     if (openingQuote) {
       const closing = findUnescapedQuote(text, openingQuote, valueStart);
@@ -152,6 +167,10 @@ function hasLabelledSecret(text: string): boolean {
       continue;
     }
     const rest = text.slice(valueStart);
+    if (separator === "=>" && isArrowFunctionBody(rest, strongLabel ?? weakLabel ?? "")) {
+      pattern.lastIndex = valueStart; // Code, not a credential; keep scanning after it.
+      continue;
+    }
     const judge = strongLabel ? isStrongLabelValue : isSecretShapedValue;
     const value = UNQUOTED_VALUE_PATTERN.exec(rest)?.[0] ?? "";
     if (judge(value)) return true;
