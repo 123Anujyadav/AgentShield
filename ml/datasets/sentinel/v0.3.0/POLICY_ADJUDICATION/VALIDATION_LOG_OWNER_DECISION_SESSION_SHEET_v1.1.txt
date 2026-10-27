@@ -1,0 +1,69 @@
+VALIDATION LOG — OWNER_DECISION_SESSION_SHEET_ROUND2_v1.1.md
+(Session sheet. Nothing decided, approved or ratified. All owner decision fields blank. No status or recommendation changed. Quality gate OPEN.)
+
+Run: 2026-10-27, by an AI assistant (Claude Code).
+Working directory: AgentShield/ (repository root). Not a git repository.
+Shell: Git Bash on Windows. Python 3.12; scratchpad scripts run with -I. Scratchpad = the session temp directory, outside the repository.
+
+Read (read-only, line-level):
+  - ROUND2_HUMAN_REVIEW_READINESS_CHECKLIST_v1.1.md (row lines)
+  - POLICY_READINESS_REVIEW_v0.9_DRAFT.md l.195–231
+  - POLICY_DECISION_REGISTER_ADDENDUM_v1.0_DRAFT.md (Question/Options/Recommended lines for AD-006, 013, 043, 044, 047, 050–053, 055–058)
+  - POLICY_DECISION_REGISTER_ADDENDUM_v1.1_DRAFT.md (ladder l.310–314; register §6)
+  - docs/phase11a-independent-review-workflow.md l.73–90
+Not opened:
+  - mapping_key.csv, review_key.csv
+  - samples.jsonl, splits/, .env
+  - the blind package CSV contents (only hash-checked in earlier steps; not touched here)
+  - AI_AUDIT/, AI_ASSISTED_REVIEW_ROUND2/
+Not modified: validators, tests, schemas, datasets, labels, the reviewer package, or any existing document.
+No model training, external API, paid service, pytest or npm run.
+
+### B0 Pre-write inspection
+$ find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -name ".env" -print0 | sort -z | xargs -0 sha256sum > <scratchpad>/pre_sheet.sha256
+  -> 271 files
+$ diff <(sort -k2 final_checklist.sha256) <(sort -k2 pre_sheet.sha256)
+  -> no changes since the checklist step; no session-sheet file existed
+
+### B1 Source lines pinned
+$ awk '<print Question/Options/Recommended lines per AD block>' POLICY_DECISION_REGISTER_ADDENDUM_v1.0_DRAFT.md
+  -> options lines: V10 l.121 (AD-006), l.193 (AD-013), l.481 (AD-043), l.546 (AD-050), l.555 (AD-051), l.563 (AD-052), l.571 (AD-053), l.590 (AD-055), l.598 (AD-056), l.607 (AD-057), l.615 (AD-058)
+  -> AD-044 and AD-047 options are taken from v1.1: V11 l.492, l.503
+$ awk 'NR>=195 && NR<=231' POLICY_READINESS_REVIEW_v0.9_DRAFT.md ; awk 'NR>=73 && NR<=90' (WF, CRLF removed)
+$ grep -nE '^\| (M-[0-9]+|H-[0-9]|PD-[0-9]) \|' ROUND2_HUMAN_REVIEW_READINESS_CHECKLIST_v1.1.md
+  -> M-1…M-10 at l.41–50; H-1…H-7 at l.58–64; PD-0…PD-6 at l.72–78
+
+### S Sheet validation
+$ python -I <scratchpad>/validate_sheet.py <scratchpad>
+  S1 recorded choices quoted verbatim:
+     quotes=14 matches=14 mismatches=[]
+     AD-016 labels (L0, L1, L2, L3, Excluded) present in V11 l.310–314: True
+  S2 citations:
+     refs extracted=121 unique=66 verified=66 mismatches=[] unverified=[]
+     sources: CK, V09, V10, V11, ER, WF, RG, IN, RD, TR, INT, LG
+  S3:
+     owner decision lines=18, all blank=True
+     dependent-row fields (AD-017–AD-019, AD-024–AD-028)=8, all blank=True
+     status/basis/recommendation stated vs v1.1 §6: mismatches=[]
+     owner-list IDs without a Section-2 record: []
+  S4:
+     real review/sample IDs: []
+     unknown AD IDs: []
+     '**OPEN.**': 1
+     approval words: 14 contexts, all conditional, descriptive of options, or negations
+       e.g. "Nothing is decided, approved or ratified", "approved-rules addendum", "if ratified"
+Corrections before the final S run:
+  (1) LG and INT added to the sheet's tag table. They were cited but not listed.
+  (2) Validation-script expectations only, the sheet unchanged:
+      - V10 l.616 expectation corrected from "Defer" to "outside this phase" (the actual line text)
+      - an expectation added for V09 l.217–218
+      - first run: verified=64, 1 expectation mismatch, 1 unverified; final run: 66/66
+
+### B2 Integrity
+$ find … | xargs -0 sha256sum > <scratchpad>/post_sheet.sha256 ; diff <(sort -k2 pre_sheet.sha256) <(sort -k2 post_sheet.sha256)
+  before=271 after=272; pre-existing files changed or removed: 0
+  new: 84f1ce58806e18ab8da562c430e813d9d464e51efaea54d72d563faf7e1fdbdb  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/OWNER_DECISION_SESSION_SHEET_ROUND2_v1.1.md (308 lines)
+
+Inconsistencies surfaced in the sheet and deliberately NOT resolved: F-1 … F-8 (sheet Section 2, end).
+
+(This log is the second new file, written last. It does not record its own hash.)

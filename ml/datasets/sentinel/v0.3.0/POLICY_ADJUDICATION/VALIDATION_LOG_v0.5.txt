@@ -1,0 +1,71 @@
+VALIDATION LOG v0.5 — POLICY_DECISION_GUIDE_v0.5_DRAFT.md (DRAFT_NOT_APPROVED; all 22 decisions pending; quality gate OPEN)
+Run 2026-10-27T08:36Z, Linux shell over the repo. Real output below.
+Not read: mapping_key.csv, review_key.csv, .env, samples.jsonl, split contents. v0.4 Section H was not filled or modified (V1 shows 22/22 blank rows; V3 shows the v0.4 file hash unchanged).
+
+### V1 structure of the guide vs the v0.4 worksheet
+worksheet items=22 guide items=21 unique=21 same set=False
+W-17 in separate section: False
+W-17 elements: True
+who-decides matches v0.4 register for all 22: True | owner items 21 user items 1
+rv- IDs: 0  sen-#### IDs: 0  APPROVED not in NOT_APPROVED: 0
+statements that decisions remain pending / gate OPEN: 2 / 2
+v0.4 Section H blank decision rows: 22 of 22
+
+### V2 numeric facts quoted in the guide, re-checked against sources
+  QG l.19: `sentinel-v0.3.0`: **554 samples** — benign 252, suspicious 302.
+  QG l.21: impersonation 27, exfiltration 19, other_suspicious 21.
+  QG l.22: Languages: English 506, Spanish 16, German 16, Hindi 16 (validation slice:
+  DATASET_CARD l.9: - 504 samples: 237 benign, 267 suspicious. The first 64 are the preserved v0.1.0 samples; 440 are new in v0.3.
+  DATASET_CARD l.20: - Languages: English plus one benign and one suspicious sample each in Spanish,
+  RG l.40: - `confidence_0_1` — your honest confidence. Use below 0.7 whenever the
+  LG l.24: Annotation process: set `annotation_confidence` honestly (below 0.9 means
+  LG l.1: # Sentinel Labelling Guide v0.1
+  worklist rows (excl. header): 30
+
+### V3 all earlier POLICY_ADJUDICATION files unchanged
+  unchanged POLICY_ADJUDICATION_PROPOSAL_v0.1.md
+  unchanged POLICY_CONFLICT_RESOLUTION_SUPPLEMENT_v0.3_DRAFT.md
+  unchanged POLICY_DECISION_BRIEF_v0.2_DRAFT.md
+  unchanged POLICY_FINAL_DECISION_WORKSHEET_v0.4_DRAFT.md
+  unchanged ROUND2_FIELD_MAPPING_ERRATA_DRAFT_v0.1.md
+  unchanged VALIDATION_LOG_v0.2.txt
+  unchanged VALIDATION_LOG_v0.3.txt
+  unchanged VALIDATION_LOG_v0.4.txt
+  unchanged build_language_worklist.py
+  unchanged build_policy_report.py
+  unchanged language_review_worklist_ANNOTATOR_SAFE_v0.1.csv
+  unchanged policy_decision_table_v0.1.csv
+  unchanged report_template_v0.1.md
+
+### V4 annotator package
+3e54c52dc89b8bc92111b65a4c48a3899e7b08a432fc9350984f441cf91c7bdf  INSTRUCTIONS.md
+2c07f2f5885f359c4c52edfe213188bdc171aaf4dac8c0effad7a836b851da85  REVIEWER_GUIDE.md
+e663c296489559a509767362822a42d65cd94b02d9536745325c583ff6132fc2  review_blind_opaque.csv
+  files: INSTRUCTIONS.md REVIEWER_GUIDE.md review_blind_opaque.csv 
+
+### V5 intake on blank package (must still reject)
+$ python ml/sentinel/intake_round2.py ml/datasets/sentinel/v0.3.0/REVIEW_ROUND2/ANNOTATOR_PACKAGE/review_blind_opaque.csv
+rows=196 errors=784
+exit=1
+
+### V6 Python review-workflow tests
+$ python -m pytest ml/tests -q -p no:cacheprovider
+16 passed in 1.24s
+exit=0
+
+### V7 npm tests: NOT RUN - only a Markdown file was added; no JS/TS changed.
+
+### V8 integrity (sha256; ml/ docs/ apps/ packages/ package.json; excl. node_modules/caches)
+before=230 after=231
+pre-existing files changed or removed: 0
+new files:
+  95f310e863ce44a63358fa94ee800aa0d372693961b8677abe0389ad75333e19  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/POLICY_DECISION_GUIDE_v0.5_DRAFT.md
+
+### V1b corrected structure check (V1 counted W-17 incorrectly: by design W-17 is not a '### W-' item but its own '## Separate section'; V1's block split also ran past section boundaries)
+batch items: 21 | separate-section heading: Separate section — Your own access decision (W-17)
+guide covers all 22 worksheet IDs: True | W-17 inside a batch: False
+batch items missing any of the 5 required elements: none
+W-17 section has who/what/necessity/options A-C with exposure/unknown: True | marked PENDING_USER_DECISION: True
+batches: 7 | sizes: [3, 4, 3, 2, 4, 2, 3]
+
+(This log is the second new file, written after V8.)

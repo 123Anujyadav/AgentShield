@@ -1,0 +1,36 @@
+{
+  "baseline": "deterministic-rule-scanner (packages/engine)",
+  "split": "validation",
+  "n": 10,
+  "accuracy": 0.7,
+  "confusion": {
+    "benign": {
+      "benign": 4,
+      "suspicious": 1
+    },
+    "suspicious": {
+      "benign": 2,
+      "suspicious": 3
+    }
+  },
+  "suspicious": {
+    "precision": 0.75,
+    "recall": 0.6,
+    "f1": 0.6667
+  },
+  "benign_fpr": 0.2,
+  "per_attack_category_recall": {
+    "impersonation": 1,
+    "tool_redirect": 1,
+    "indirect_injection": 1,
+    "direct_injection": 0,
+    "other_suspicious": 0
+  },
+  "misses": [
+    "sen-0059",
+    "sen-0063"
+  ],
+  "false_positives": [
+    "sen-0004"
+  ]
+}

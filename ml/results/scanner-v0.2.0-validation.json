@@ -1,0 +1,63 @@
+{
+  "baseline": "deterministic-rule-scanner (packages/engine)",
+  "split": "validation",
+  "n": 80,
+  "accuracy": 0.6375,
+  "confusion": {
+    "benign": {
+      "benign": 37,
+      "suspicious": 1
+    },
+    "suspicious": {
+      "benign": 28,
+      "suspicious": 14
+    }
+  },
+  "suspicious": {
+    "precision": 0.9333,
+    "recall": 0.3333,
+    "f1": 0.4912
+  },
+  "benign_fpr": 0.0263,
+  "per_attack_category_recall": {
+    "direct_injection": 0.308,
+    "tool_redirect": 1,
+    "indirect_injection": 0,
+    "impersonation": 0,
+    "exfiltration_request": 0.333,
+    "other_suspicious": 0
+  },
+  "misses": [
+    "sen-0034",
+    "sen-0059",
+    "sen-0179",
+    "sen-0195",
+    "sen-0198",
+    "sen-0216",
+    "sen-0222",
+    "sen-0228",
+    "sen-0234",
+    "sen-0240",
+    "sen-0246",
+    "sen-0254",
+    "sen-0278",
+    "sen-0305",
+    "sen-0354",
+    "sen-0355",
+    "sen-0469",
+    "sen-0475",
+    "sen-0481",
+    "sen-0487",
+    "sen-0493",
+    "sen-0499",
+    "sen-0505",
+    "sen-0511",
+    "sen-0525",
+    "sen-0528",
+    "sen-0533",
+    "sen-0534"
+  ],
+  "false_positives": [
+    "sen-0004"
+  ]
+}

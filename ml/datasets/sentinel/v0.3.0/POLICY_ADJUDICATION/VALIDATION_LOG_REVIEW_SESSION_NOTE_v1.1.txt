@@ -1,0 +1,80 @@
+VALIDATION LOG — REVIEW_SESSION_NOTE_BLOCK0_AD016_READINESS_v1.1.md
+(Review note only. No rule approved; no ratification field; register, agenda, statuses and recommendations unchanged. Quality gate OPEN.)
+
+Run: 2026-10-27, by an AI assistant (Claude Code).
+Working directory: AgentShield/ (repository root). Not a git repository.
+Shell: Git Bash on Windows. Python 3.12; scratchpad scripts run with -I. Scratchpad = the session temp directory, outside the repository.
+
+Not read:
+  - samples.jsonl, splits/ contents
+  - REVIEW_ROUND2/ADJUDICATOR_ONLY/mapping_key.csv, review_key.csv
+  - .env
+  - REVIEW_ROUND2/ANNOTATOR_PACKAGE/review_blind_opaque.csv
+  - AI_ASSISTED_REVIEW_ROUND2/ contents and AI_AUDIT/ contents
+  - language_review_worklist_ANNOTATOR_SAFE_v0.1.csv (contents)
+Not modified: any dataset, label, split, schema, validator, test, annotator package, decision register or the agenda.
+No model training, external API, paid service, pytest or npm run.
+
+### R0 Pre-write inspection
+$ find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -name ".env" -print0 | sort -z | xargs -0 sha256sum > <scratchpad>/pre_block0.sha256
+  -> 267 files
+$ diff <(sort -k2 final_agenda.sha256) <(sort -k2 pre_block0.sha256)
+  -> no differences since the agenda step. v1.1 is ffcb2fbb…; the agenda is add09637….
+$ find ml/datasets/sentinel/v0.3.0/REVIEW_ROUND2 -type f ; ls ml/datasets/sentinel/v0.3.0/AI_ASSISTED_REVIEW_ROUND2
+  -> Names only:
+     ANNOTATOR_PACKAGE = INSTRUCTIONS.md, REVIEWER_GUIDE.md, review_blind_opaque.csv
+     ADJUDICATOR_ONLY = mapping_key.csv (not opened)
+     AI_ASSISTED_REVIEW_ROUND2 = 9 files (not opened)
+  -> No AI artifact is inside ANNOTATOR_PACKAGE.
+
+### R1 Task C sources read
+$ cat -n ml/sentinel/intake_round2.py
+  -> 77 lines; the validator.
+$ cat -n ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/ROUND2_FIELD_MAPPING_ERRATA_DRAFT_v0.1.md
+  -> 46 lines; the errata draft.
+REVIEWER_GUIDE.md and INSTRUCTIONS.md were read in earlier steps. Their hashes are unchanged in R0.
+Line references were re-checked in N1.
+
+### R2 Synthetic intake probe (scratchpad only)
+Script: <scratchpad>/intake_probe.py.
+  - It calls validate_round2(completed, blind_path=<synthetic blind.csv>).
+  - Two synthetic rows: syn-1, syn-2. No package row is read.
+  - Files are in <scratchpad>/synthetic_intake/. The validator was imported, not modified.
+$ python -I <scratchpad>/intake_probe.py <repo> <scratchpad>/synthetic_intake
+  P1_valid: errors=0 []
+  P2_utf8_bom: errors=4 ["row 2: unknown review_id ''", 'row 3: duplicate review_id ']
+  P3_blank_language_quality_and_nonISO_date: errors=0 []
+  P4_no_uncertainty_note_column: errors=0 []
+  P5_extra_column: errors=0 []
+  P6_text_edited_trailing_space: errors=1 ['row 2 (syn-1): text differs from annotator package; identity is not stable']
+  P7_cp1252_encoding_nonascii: EXCEPTION UnicodeDecodeError
+
+### N1 Citation check of the note
+$ python -I <scratchpad>/validate_note.py <scratchpad>
+  refs extracted=86 unique=59 verified=59 mismatches=[] unverified=[]
+  AG section refs: ['AG OBS-1', 'AG OBS-2', 'AG §4', 'AG §6'] (each exists in the agenda)
+  Sources: RG, IN, LG, INT, RD, WF, V09, V11, ER.
+
+### N2 AD-016 definitions quoted from V11 l.308–314 (same run; asterisks stripped, quotes normalised)
+  L0, L1, L2, L3, P: all 5 quoted phrases found -> True. No new option was introduced.
+
+### N3 Block 0 statuses stated in the note vs v1.1 §6 (same run)
+  AD-022, AD-046, AD-001, AD-005, AD-043, AD-006, AD-013:
+    - note = (REC, ES) and v1.1 = (REC, ES); match=True for all 7.
+    - The note's assessments (two rows "need owner confirmation or ruling") are review advice only. No status was changed.
+
+### N4 Safety (same run)
+  decision/ratification columns: []
+  approval-word contexts (both are negations or conditionals):
+    - "No rule is approved or ratified"
+    - "… on the reconciliation, ratified together with the AD-065 reading" (inside "Needs an owner ruling")
+  rv-/sen- IDs: 0
+  '**OPEN.**' (quality gate): 1
+
+### N5 Integrity
+$ find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -name ".env" -print0 | sort -z | xargs -0 sha256sum > <scratchpad>/post_note.sha256
+$ diff <(sort -k2 pre_block0.sha256) <(sort -k2 post_note.sha256)
+  before=267 after=268; pre-existing files changed or removed: 0 (this includes ml/sentinel/ and its __pycache__)
+  new: 6ca82626ee6961fa9fb4f67863c791dc5f0ddc7294702445691de8c5eb90d93a  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/REVIEW_SESSION_NOTE_BLOCK0_AD016_READINESS_v1.1.md
+
+(This log is the second new file, written last. It does not record its own hash.)

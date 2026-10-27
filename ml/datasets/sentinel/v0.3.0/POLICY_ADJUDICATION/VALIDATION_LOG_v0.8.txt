@@ -1,0 +1,62 @@
+VALIDATION LOG v0.8 — POLICY_RESOLUTION_PROPOSAL_v0.8_DRAFT.md (DRAFT_NOT_APPROVED; nothing approved; quality gate OPEN)
+Run 2026-10-27T11:33Z, Linux shell over the repo (not a git repository: 'git status' -> fatal: not a git repository).
+Pre-existing user changes: none detected (236-file hash comparison against the post-v0.7 snapshot; only difference was the assistant's own VALIDATION_LOG_v0.7.txt, hash as recorded).
+Not read: samples.jsonl, splits/ contents, ADJUDICATOR_ONLY/mapping_key.csv, REVIEW_PACKAGE/review_key.csv, .env. AI_AUDIT/AI_ASSISTED/REVIEW folders: hash-checked only.
+v0.4 Section H not modified. Aggregate author-label analysis (R-21): NOT run.
+
+### V0 committed file integrity
+  device sha256: d7ebc1181f02d4819d82e680bfd6b042b801ee4c7419d76042418b23bed4259f (expected d7ebc1181f02d4819d82e680bfd6b042b801ee4c7419d76042418b23bed4259f)
+
+### V1 coverage, status discipline, content safety
+v0.2/v0.3 IDs=43 mapped in 3.1=43 missing=[]
+W-01..W-22 mapped=22/22 missing=[] | X1-X4 mapped=['X1', 'X2', 'X3', 'X4'] | X1-a mapped=True | doc items D1/D2=True
+R-items: 21 R-01 .. R-21
+  check R-12 status True doc True validation False
+  check R-13 status True doc True validation False
+register rows: 33 | blank decision cells: 33
+required topics present: 16 / 16 []
+rv- IDs: 0  sen-#### IDs: 0  "APPROVED" outside NOT_APPROVED: 0  claims of human review/gate pass: 0
+v0.4 Section H blank rows: 22 of 22
+examples=20 vs 196 blind texts: max char-similarity=0.64 max token-Jaccard=0.32 exact copies=0
+
+### V2 spot re-check of citations newly used in v0.8
+  SCH: ATTACK_CATEGORIES = {
+  SCH: }
+  LG: ## Second-annotator review workflow (v0.2)
+  LG: 1. A real second annotator (not the dataset author, not an LLM) opens REVIEW_QUEUE.csv.
+  LG: 5. Label corrections to preserved v0.1 samples are proposed in CHANGELOG.md with rationale, never silently edited.
+  QG: ## 7. Limitations
+  QG: dominate; `exfiltration_request` remains the thinnest suspicious category (19);
+  CL: - All new samples are unreviewed, single-author. Multilingual items are author-written and
+  INT:             errors.append(f"row {i} ({rid}): annotator_id missing")
+  RD: - Robustness slices: paraphrase, indirect-in-document, each obfuscation type,
+
+### V3 earlier files unchanged
+  POLICY_ADJUDICATION files checked: 19 (changes listed above, if any)
+  AI_AUDIT: files=4 changed=0 (hash check only; contents not read)
+  AI_ASSISTED_REVIEW_ROUND2: files=9 changed=0 (hash check only; contents not read)
+  REVIEW_PACKAGE: files=5 changed=0 (hash check only; contents not read)
+  REVIEW_ROUND2: files=4 changed=0 (hash check only; contents not read)
+
+### V4 tests actually run in this step
+  $ python ml/sentinel/intake_round2.py ml/datasets/sentinel/v0.3.0/REVIEW_ROUND2/ANNOTATOR_PACKAGE/review_blind_opaque.csv -> rows=196 errors=784 (blank package still rejected; gate open)
+  $ python -m pytest ml/tests -q -p no:cacheprovider -> 16 passed in 1.95s
+  NOT run: npm test (no JS/TS touched). Inherited result only: 72 passed (engine 28, API 44) in the AI-assisted-review step, VALIDATION_LOG in AI_ASSISTED_REVIEW_ROUND2.
+
+### V5 integrity
+  before=236 after=237; pre-existing changed/removed: 0
+  new: d7ebc1181f02d4819d82e680bfd6b042b801ee4c7419d76042418b23bed4259f  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/POLICY_RESOLUTION_PROPOSAL_v0.8_DRAFT.md
+
+### Correction note
+V1 found R-12 and R-13 without explicit validation criteria. Validation criteria were added to R-12, R-13, R-16, R-20, R-21 in the proposal only (the assistant's own new file, re-committed). Pre-correction sha256 d7ebc118... no longer exists in the repo; final sha256 is shown in V6.
+
+### V6 re-check after adding validation criteria to R-12, R-13, R-16, R-20, R-21 (V1 had flagged R-12 and R-13)
+  note: the first re-commit delivered a stale copy (device still had d7ebc118...); a second commit delivered the corrected file. Final state:
+  device sha256: 79fd4e41415992d5f67e2c1f9a06369d5ba255c1683a824d88bfe72a15f44cf5 (expected 79fd4e41415992d5f67e2c1f9a06369d5ba255c1683a824d88bfe72a15f44cf5)
+  R-items=21; missing validation criteria=[]; missing status=[]
+  "APPROVED" outside NOT_APPROVED: 0 | rv-/sen- IDs: 0 | register rows blank: 33 of 34
+  examples=20 max char-similarity=0.64 exact copies=0
+  $ python -m pytest ml/tests -q -p no:cacheprovider -> 16 passed in 1.97s
+  pre-existing files changed/removed vs start of step: 0
+
+(This log is the second new file, written last; it replaces an earlier version of itself written moments before with stale V6 output.)

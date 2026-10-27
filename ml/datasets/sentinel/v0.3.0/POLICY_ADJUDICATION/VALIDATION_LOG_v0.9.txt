@@ -1,0 +1,61 @@
+VALIDATION LOG v0.9 — POLICY_READINESS_REVIEW_v0.9_DRAFT.md (DRAFT_NOT_APPROVED; nothing ratified; quality gate OPEN)
+Run 2026-10-27T11:39Z. Repository is not a git repository ('git status' -> fatal: not a git repository). Pre-existing user changes vs post-v0.8 snapshot: none (only the assistant's own v0.8 proposal 79fd4e41... and VALIDATION_LOG_v0.8 3d329ace... as recorded).
+Not read: samples.jsonl, splits/ contents, mapping_key.csv, review_key.csv, .env. No policy file edited; no register filled.
+
+### C1 citation check: every file/line reference in v0.8 (sections table + rule bodies) re-read against the source
+  citation ranges checked=83 mismatches=0
+  regex-extracted citation ranges in v0.8=64; not covered by this check=[]
+
+### C2 structure of v0.8: category markers, statuses, register
+  per-item markers and status mentions (RFA=RECOMMENDED_FOR_ADOPTION, PPO=PENDING_PROJECT_OWNER_DECISION, PUD=PENDING_USER_DECISION, DOC=`DOCUMENTED`):
+   R-01: markers=['[DOC]', '[INT]', '[AMD]'] status={'RFA': 1, 'PPO': 2} sub-items=['R-01a', 'R-01b', 'R-01c']
+   R-02: markers=['[DOC]', '[INT]', '[AMD]'] status={'RFA': 2, 'PPO': 2} sub-items=['R-02a', 'R-02b', 'R-02c', 'R-02d']
+   R-03: markers=['[DOC]', '[INT]', '[AMD]'] status={'RFA': 3, 'PPO': 1} sub-items=['R-03a', 'R-03b', 'R-03c']
+   R-04: markers=['[DOC]', '[INT]'] status={'RFA': 1, 'PPO': 1} sub-items=[]
+   R-05: markers=['[DOC]'] status={'RFA': 2, 'PPO': 1} sub-items=['R-05a', 'R-05b', 'R-05c']
+   R-06: markers=['[DOC]'] status={'PPO': 1, 'DOC': 1} sub-items=[]
+   R-07: markers=['[DOC]', '[INT]', '[AMD]'] status={'RFA': 1} sub-items=[]
+   R-08: markers=['[DOC]'] status={'RFA': 1, 'PPO': 1} sub-items=[]
+   R-09: markers=['[DOC]'] status={'RFA': 1} sub-items=[]
+   R-10: markers=['[DOC]'] status={'RFA': 1} sub-items=[]
+   R-11: markers=['[DOC]', '[OWNER]'] status={'PPO': 1} sub-items=[]
+   R-12: markers=['[DOC]'] status={'PPO': 1} sub-items=[]
+   R-13: markers=['[DOC]', '[INT]'] status={'RFA': 1, 'PPO': 1} sub-items=['R-13a', 'R-13b']
+   R-14: markers=['[DOC]', '[AMD]'] status={'RFA': 1, 'PPO': 1} sub-items=[]
+   R-15: markers=['[DOC]'] status={'RFA': 2, 'PPO': 1} sub-items=['R-15a', 'R-15b', 'R-15c']
+   R-16: markers=none status={'PPO': 1} sub-items=[]
+   R-17: markers=['[DOC]', '[AMD]'] status={'RFA': 1, 'PPO': 1} sub-items=[]
+   R-18: markers=['[DOC]'] status={'RFA': 1, 'PPO': 2, 'DOC': 1} sub-items=[]
+   R-19: markers=['[DOC]'] status={'RFA': 1, 'PPO': 2} sub-items=[]
+   R-20: markers=none status={'PPO': 1} sub-items=[]
+   R-21: markers=none status={'PUD': 1} sub-items=[]
+  register data rows=33 unique ids=33 duplicates=[]
+  rows combining two statuses in one cell=['R-08', 'R-17', 'R-18', 'R-19']
+  rows with blank decision/by/date cells=33
+  rows naming a conflict ID (X1-X4)=['R-05b']
+  register ids: ['R-01a', 'R-01b', 'R-01c', 'R-02a', 'R-02b', 'R-02c', 'R-02d', 'R-03a', 'R-03b', 'R-03c', 'R-04', 'R-05a', 'R-05b', 'R-05c', 'R-06 (inclusions 1–5)', 'R-07', 'R-08', 'R-09', 'R-10', 'R-11', 'R-12', 'R-13a', 'R-13b', 'R-14', 'R-15a', 'R-15b', 'R-15c', 'R-16', 'R-17', 'R-18', 'R-19', 'R-20', 'R-21']
+
+### C0 committed report
+  device sha256: a36a18f06e67870135c444619361bb87d4dc52d1bc69c3bd727c86dc03812734 (expected a36a18f06e67870135c444619361bb87d4dc52d1bc69c3bd727c86dc03812734)
+  report: rv-/sen- IDs: 0 | "APPROVED" outside NOT_APPROVED: 0 | checklist boxes checked: 0 unchecked: 16 | sections: 8
+  v0.8 register still blank: 33 of 33
+  v0.4 Section H still blank: 22 of 22
+
+### C3 intake on blank package
+  $ python ml/sentinel/intake_round2.py ml/datasets/sentinel/v0.3.0/REVIEW_ROUND2/ANNOTATOR_PACKAGE/review_blind_opaque.csv -> rows=196 errors=784; exit=1
+
+### C4 Python tests (run in this step)
+  $ python -m pytest ml/tests -q -p no:cacheprovider -> 16 passed in 2.57s
+  NOT run: npm test (no JS/TS touched). Prior reported result only: 72 passed (engine 28, API 44).
+
+### C5 integrity
+  AI_AUDIT: files=4 changed=0 (hash only; contents not read)
+  AI_ASSISTED_REVIEW_ROUND2: files=9 changed=0 (hash only; contents not read)
+  REVIEW_PACKAGE: files=5 changed=0 (hash only; contents not read)
+  REVIEW_ROUND2: files=4 changed=0 (hash only; contents not read)
+  splits: files=4 changed=0 (hash only; contents not read)
+  samples.jsonl: changed=0 (hash only; not read)
+  before=238 after=239; pre-existing changed/removed: 0
+  new: a36a18f06e67870135c444619361bb87d4dc52d1bc69c3bd727c86dc03812734  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/POLICY_READINESS_REVIEW_v0.9_DRAFT.md
+
+(This log is the second new file, written last.)

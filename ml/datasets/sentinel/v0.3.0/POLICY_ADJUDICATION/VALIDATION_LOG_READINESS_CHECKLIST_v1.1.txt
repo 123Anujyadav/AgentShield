@@ -1,0 +1,91 @@
+VALIDATION LOG — ROUND2_HUMAN_REVIEW_READINESS_CHECKLIST_v1.1.md
+(Checklist only. Not ready for human review. No rule approved; no ratification field; no status or recommendation changed. Quality gate OPEN.)
+
+Run: 2026-10-27, by an AI assistant (Claude Code).
+Working directory: AgentShield/ (repository root). Not a git repository.
+Shell: Git Bash on Windows. Python 3.12; scratchpad scripts run with -I. Scratchpad = the session temp directory, outside the repository.
+
+Inspected (scope given by the task):
+  - REVIEW_ROUND2/ANNOTATOR_PACKAGE/INSTRUCTIONS.md and REVIEWER_GUIDE.md (line references only; read earlier; hashes unchanged)
+  - ROUND2_FIELD_MAPPING_ERRATA_DRAFT_v0.1.md
+  - ml/sentinel/intake_round2.py
+  - ml/tests/test_round2.py (code read, NOT run: it opens mapping_key.csv)
+  - ml/tests/test_intake.py lines 1–25 (to confirm it targets the Round-1 validator; out of scope)
+  - language_review_worklist_ANNOTATOR_SAFE_v0.1.csv (structure and categorical values only; review IDs not printed)
+  - VALIDATION_LOG_v0.2.txt l.1–34 (the worklist's build record and the recorded package hashes)
+Not opened:
+  - review_blind_opaque.csv (byte-hashed only, in A2), mapping_key.csv, review_key.csv
+  - samples.jsonl, splits/, .env
+  - AI_AUDIT/, AI_ASSISTED_REVIEW_ROUND2/ (one file name listed: proposed_review_AI_ASSISTED_NOT_HUMAN_ANNOTATION.csv)
+  - build_language_worklist.py
+Not modified: the validator, tests, schema, dataset, labels, reviewer package, worklist, any policy document or register.
+No model training, external API, paid service, pytest or npm run.
+
+### A0 Pre-write inspection
+$ find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -name ".env" -print0 | sort -z | xargs -0 sha256sum > <scratchpad>/pre_checklist.sha256
+  -> 269 files
+$ diff <(sort -k2 final_note.sha256) <(sort -k2 pre_checklist.sha256)
+  -> no differences since the note step
+  -> no *checklist* file existed in POLICY_ADJUDICATION/
+
+### A1 Language worklist handoff check (read-only)
+$ file language_review_worklist_ANNOTATOR_SAFE_v0.1.csv; head -c 3 … | od -An -tx1; head -1 …
+  -> CSV ASCII text; first bytes 72 65 76 (no BOM)
+  -> header: review_order, review_id, script_language_guess, fluent_reviewer_language_confirmed, meaning_clear_yes_no, natural_wording_yes_no, fluent_reviewer_language_quality, fluent_reviewer_note, worklist_status
+$ python -I -c "<structure summary>" language_review_worklist_ANNOTATOR_SAFE_v0.1.csv
+  -> rows=30
+  -> review_id: 30 distinct, all matching rv-[a-z0-9]{10}
+  -> all 5 fluent_reviewer_* / yes_no fields blank
+  -> 'sen-' IDs: 0; author/label/split/proposed/claude/AI/suspicious/benign terms: 0
+$ python -I -c "<categorical counts>" …
+  -> script_language_guess = {'hi (Devanagari)': 10, 'es': 10, 'de': 10}
+  -> worklist_status = {'NEEDS_FLUENT_HUMAN_REVIEW_NOT_APPROVED'}
+  -> review_order: 30 unique values, ascending, min 4, max 195. This matches row positions in the 196-row package (L02 l.7: blind_rows=196 non_english_rows=30).
+NOT verified: whether the worklist IDs are a subset of the package IDs. That needs the package CSV, which this task did not open. It is listed as an owner-run test (checklist H-7).
+
+### A2 Annotator package unchanged since it was built
+$ grep -E '^[0-9a-f]{64}  …/ANNOTATOR_PACKAGE/' VALIDATION_LOG_v0.2.txt > <scratchpad>/pkg_v02.sha256 ; sha256sum -c <scratchpad>/pkg_v02.sha256
+  -> INSTRUCTIONS.md: OK
+  -> REVIEWER_GUIDE.md: OK
+  -> review_blind_opaque.csv: OK
+$ ls …/ANNOTATOR_PACKAGE | wc -l
+  -> 3
+
+### A3 Intake behaviour evidence
+Reused from VALIDATION_LOG_REVIEW_SESSION_NOTE_v1.1.txt R2 (synthetic probes P1–P7; not re-run in this step):
+  - BOM: fails on all rows
+  - cp1252 encoding: UnicodeDecodeError
+  - trailing space in text: rejected
+  - blank language_quality, non-ISO date, missing uncertainty_note column, extra column: all accepted
+Test coverage read from ml/tests/test_round2.py:
+  - l.61–74 covers incomplete, unknown ID, bad label, edited text
+  - l.14–23 leak check covers only sen-NNNN IDs and "author_label"
+
+### K Checklist validation
+$ python -I <scratchpad>/validate_checklist.py <scratchpad>
+  K1 citations: refs extracted=47 unique=37 verified=37 mismatches=[] unverified=[]
+     sources: IN, RG, INT, TR, ER, L02, WF, LG, V09, RD
+  K2 §D package hashes:
+     INSTRUCTIONS.md 3e54c52dc89b8bc9, REVIEWER_GUIDE.md 2c07f2f5885f359c, review_blind_opaque.csv e663c296489559a5
+     -> all match=True
+  K3 blocker rows: M=10, H=7; rows without all five fields: []
+     PD rows: PD-0 … PD-6
+  K4:
+     AD IDs=28; unknown in v1.1 register: []
+     real review/sample IDs in the checklist: []
+     decision/ratification columns: []
+     '**OPEN.**': 1
+     approval words: 8 contexts, all conditions or negations
+       e.g. "only once ratified", "owner-approved handoff", "No rule is approved"
+Corrections made to the new checklist before the final K run:
+  (1) Policy IDs P-0…P-6 renamed PD-0…PD-6, to avoid confusion with probe IDs P1–P7.
+  (2) "`RD` l.165" changed to "RD l.165", and an RD row added to the tag table.
+  (3) The §C header "Decision" renamed "Decision topic". It names the decision and is not a field to fill.
+  Earlier K3 run: it reported M-1 short of five fields. Cause: an escaped pipe in its shell command. Re-run with escaped-pipe handling -> [].
+
+### A4 Integrity
+$ find … | xargs -0 sha256sum > <scratchpad>/post_checklist.sha256 ; diff <(sort -k2 pre_checklist.sha256) <(sort -k2 post_checklist.sha256)
+  before=269 after=270; pre-existing files changed or removed: 0
+  new: 2960788130fa2207d712eee4798bccdf717f13ce37858d67c35b6d9904e4f6ad  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/ROUND2_HUMAN_REVIEW_READINESS_CHECKLIST_v1.1.md (133 lines)
+
+(This log is the second new file, written last. It does not record its own hash.)

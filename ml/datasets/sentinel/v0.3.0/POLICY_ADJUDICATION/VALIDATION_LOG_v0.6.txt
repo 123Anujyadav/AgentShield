@@ -1,0 +1,40 @@
+VALIDATION LOG v0.6 — BATCH_1_4_REVIEW_MEMO_v0.6_DRAFT.md (DRAFT_NOT_APPROVED; W-01/02/03/11/12 pending; quality gate OPEN)
+Run 2026-10-27T08:40Z. Not read: samples.jsonl, mapping_key.csv, review_key.csv, .env, split contents. v0.4 Section H not modified.
+
+### V1 memo content checks
+items reviewed: ['W-01', 'W-02', 'W-03', 'W-11', 'W-12']
+  W-01: question=True evidence_table=True INT=True OPEN=True recommendation=True conflicts=True
+  W-02: question=True evidence_table=True INT=True OPEN=True recommendation=True conflicts=True
+  W-03: question=True evidence_table=True INT=True OPEN=True recommendation=True conflicts=True
+  W-11: question=True evidence_table=True INT=True OPEN=True recommendation=True conflicts=True
+  W-12: question=True evidence_table=True INT=True OPEN=True recommendation=True conflicts=True
+  verbatim question found in v0.4: When content relays an instruction for AI readers in the thi… True
+  verbatim question found in v0.4: How should annotators treat rows that read like a user"s own… True
+  verbatim sub-question found in v0.4: Confirm that the content label reflects what untru… True
+  verbatim sub-question found in v0.4: Confirm that internal forwarding of non-secret mat… True
+  verbatim sub-question found in v0.4: Does a destination designated by the content itsel… True
+rv- IDs: 0  sen-#### IDs: 0  APPROVED not in NOT_APPROVED: 0
+Section H of v0.4 still blank rows: 22 of 22
+
+### V2 key cited lines re-read (spot check)
+  RG: - Perform a sensitive tool action the user did not request — payments,
+  RG: - A user's own scoped instruction in chat (for example deleting their own
+  LG: - Text that *discusses, quotes, reports, or teaches defence against* such
+  LG: - Instructions consistent with an ordinary user task (summarize, translate,
+  v0.2: 66:| R6 "principal test" / `OUT-OF-SCOPE-MISUSE` | **ASSUMPTION** | No "principal" or scope concept 
+  v0.4: 123:| C. Criterion-based: suspicious only when the text directs the agent to hide something from, or mislead, 
+
+### V3 earlier files, annotator package, intake, tests
+  earlier POLICY_ADJUDICATION files checked: 15 (any change listed above)
+  3e54c52dc89b8bc92111b65a4c48a3899e7b08a432fc9350984f441cf91c7bdf  INSTRUCTIONS.md
+  2c07f2f5885f359c4c52edfe213188bdc171aaf4dac8c0effad7a836b851da85  REVIEWER_GUIDE.md
+  e663c296489559a509767362822a42d65cd94b02d9536745325c583ff6132fc2  review_blind_opaque.csv
+  $ python ml/sentinel/intake_round2.py <blank package>: rows=196 errors=784
+  $ python -m pytest ml/tests -q -p no:cacheprovider: 16 passed in 1.25s
+  npm test: not run (Markdown only)
+
+### V4 integrity
+  before=232 after=233; pre-existing changed/removed: 0
+  new: e292fe8f82521fd263da06f92053e602af0c7f42ee695eda64b593619bc9c54f  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/BATCH_1_4_REVIEW_MEMO_v0.6_DRAFT.md
+
+(This log is the second new file, written after V4.)

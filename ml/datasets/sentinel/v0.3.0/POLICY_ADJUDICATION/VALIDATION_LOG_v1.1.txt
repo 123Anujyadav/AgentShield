@@ -1,0 +1,99 @@
+VALIDATION LOG v1.1 — POLICY_DECISION_REGISTER_ADDENDUM_v1.1_DRAFT.md (DRAFT_NOT_APPROVED; 65 decision rows, none ratified; quality gate OPEN)
+Run 2026-10-27 by an AI assistant (Claude Code). Working directory: AgentShield/ (repository root). Not a git repository.
+Shell: Git Bash on Windows. Python: 3.12, run with -I for the scratchpad scripts. Scratchpad = the session temp directory, outside the repository.
+Not read: samples.jsonl, splits/ contents, mapping_key.csv, review_key.csv, .env.
+Not modified: v1.0 or any earlier policy file, samples, labels, splits, schemas, validators, tests, annotator package.
+No model training, external API or paid service was used.
+
+### V0 Pre-write inspection
+$ ls -la ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION
+  -> 25 files, including POLICY_DECISION_REGISTER_ADDENDUM_v1.0_DRAFT.md (56319 bytes) and VALIDATION_LOG_v1.0.txt
+$ ls ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/*v1.1*
+  -> "No such file or directory" (no v1.1 existed; nothing could be overwritten)
+$ find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -name ".env" -print0 | sort -z | xargs -0 sha256sum > <scratchpad>/pre_v11.sha256
+  -> 263 files hashed (hash only; samples.jsonl and splits/ are byte-hashed, not read or displayed)
+$ sha256sum POLICY_DECISION_REGISTER_ADDENDUM_v1.0_DRAFT.md
+  -> 0aedbb5af135c5efbab64ed2ed7d77202e0f34f5aad9aabf189008f88a7e8fb1 (matches VALIDATION_LOG_v1.0.txt V0b)
+
+### V1 Wording check for task item 1 ("scope-supported")
+$ grep -rn 'scope-supported' ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION
+  -> no matches. Correction 1 was applied to the v1.0 convention `scope-note:` (AD-021); the addendum flags this for the owner (§0).
+
+### V2 Source search for "private data" / "internal" definitions
+$ grep -rniE 'private data|personal data|\bPII\b|confidential|recovery code|internal (destination|address|team)' docs ml/datasets/sentinel/v0.3.0/*.md ml/datasets/sentinel/v0.3.0/REVIEW_ROUND2/ANNOTATOR_PACKAGE/*.md ml/sentinel/*.py packages/engine/src/scanner/rules.ts
+  -> "private data": REVIEWER_GUIDE.md l.28 only (undefined).
+  -> "personal data": LABELLING_GUIDE.md l.30, docs/phase11-sentinel-research.md l.167, DATASET_CARD.md l.11 (dataset-content rules only), docs/live-readiness.md l.92 (unrelated).
+  -> No definition of "private data" or "internal" in any official source.
+  -> Disclosure: the pattern also matched one line each in ml/sentinel/curated_v03.py and ml/sentinel/generate_expansion.py.
+     These are sample-generation scripts. The matched lines were not used, cited, or copied into any output.
+
+### V3 Citation check (every "TAG l.x" reference in v1.1, resolved against its source)
+Scripts: <scratchpad>/cites.py (extractor) and <scratchpad>/validate_v11.py (checks).
+Source normalisation: CRLF removed, whitespace collapsed.
+Every unique range has an expected substring.
+$ python -I <scratchpad>/validate_v11.py <scratchpad>
+  refs extracted=184 unique=56 verified=56 mismatches=[] unverified=[]
+  Sources covered: RG, IN, LG, DC, SCH, INT, RD, WF, and the drafts V01, V08, V09, V10.
+  Spot-check examples:
+    RG l.51-53 "not automatically an injection"
+    RG l.29-30 "the user did not request"
+    V01 l.29 "confidence ≤ 0.5"
+    V08 l.277 "origin of its output"
+    V10 l.679 "scoped to tool actions"
+    WF l.80-84 "reviews each disagreement"
+
+### V4 Register structure and recommendation history (same run)
+  v1.1 rows=65 unique=65 complete AD-001..AD-065=True
+  non-blank decision/by/date cells: []
+  v1.1 status: {'REC': 23, 'PPOD': 41, 'PUD': 1} | basis: {'ES': 23, 'OJ': 42} | DEFERRED: 8
+  v1.0 history preserved (status/basis/rec before →) for all 63: True []
+    (each v1.1 row's pre-arrow value equals the v1.0 §4 register value)
+  rows whose status/basis/rec changed but Change='—': []
+  changed rows (27): AD-001 AD-002 AD-003 AD-005 AD-008 AD-010 AD-011 AD-016 AD-017 AD-018 AD-019 AD-021 AD-024 AD-025 AD-027 AD-028 AD-030 AD-038 AD-039 AD-040 AD-041 AD-042 AD-043 AD-044 AD-047 AD-064 AD-065
+  changed rows lacking a §2 discussion: []
+Note: the first two runs of the script failed for script reasons only, and the addendum was not changed in between.
+  Run 1: the register parser also matched the §2.1 and §2.5.4 tables. Fixed by limiting parsing to §6 (v1.1) and §4 (v1.0).
+  Run 2: a Windows console encoding error. Fixed with stdout.reconfigure(encoding="utf-8").
+
+### V5 Required fields per corrected row (same run)
+  full blocks missing fields: none
+    required: Question, Evidence ([DOC] or **Evidence), Options, [REC], Basis, Validation
+  short clarification notes (fields remain in v1.0): AD-001, AD-005, AD-011
+  AD-024..028 consistency-table rows present: AD-024 AD-025 AD-026 AD-027 AD-028
+Note: before V3–V5 were run, Question/Evidence/Validation lines were added to AD-016, AD-017, AD-018, AD-019, AD-039, AD-040, AD-041, AD-042 and AD-044.
+  Those blocks had relied on their section introduction for these fields.
+  These edits were made to the new v1.1 file only, before its hash was taken.
+
+### V6 Content and safety checks (same run)
+  terms present:
+    L0 22; L1 27; L2 18; L3 21
+    X2-alt 1
+    O1 12; O2 6; O3 10
+    'step 6' 2
+    'WF l.80–84' 3
+    'V01 l.29' 4
+    'scope-note:' 9
+    '**OPEN.**' 1 (quality gate)
+  rv-/sen- IDs in the addendum: 0
+  approval-word contexts (both are negations or conditions):
+    'No decision is ratified, approved or made.'
+    "owner-approved one-sentence definition" (in a validation criterion)
+
+### V7 Gate and tests
+$ python ml/sentinel/intake_round2.py ml/datasets/sentinel/v0.3.0/REVIEW_ROUND2/ANNOTATOR_PACKAGE/review_blind_opaque.csv
+  -> rows=196 errors=784, exit code 1. The blank package is still rejected, so the quality gate stays OPEN.
+  -> Per-row error lines contain opaque review IDs and are deliberately not reproduced here.
+NOT run: python -m pytest ml/tests.
+  Reason: ml/tests/test_dataset.py and ml/tests/test_round2.py read samples.jsonl, the mapping key and splits, which this task excludes.
+  No code, data, schema, validator or test was changed, so a run would not test anything this step changed.
+  Prior reported result only: 16 passed (VALIDATION_LOG_v1.0.txt V3).
+NOT run: npm test (no JS/TS touched). Prior reported result only: 72 passed.
+
+### V8 Preservation and integrity
+$ find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -name ".env" -print0 | sort -z | xargs -0 sha256sum > <scratchpad>/post_v11.sha256
+$ diff <(sort -k2 pre_v11.sha256) <(sort -k2 post_v11.sha256)
+  before=263 after=264; pre-existing files changed or removed: 0
+  new: ffcb2fbbe3b46d44442ab2c466550bc308c0aaf58a8601a218624faa4c5104ea  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/POLICY_DECISION_REGISTER_ADDENDUM_v1.1_DRAFT.md
+  v1.0 addendum hash unchanged: 0aedbb5af135c5efbab64ed2ed7d77202e0f34f5aad9aabf189008f88a7e8fb1
+
+(This log is the second new file, written last. Its own hash is necessarily not recorded in itself.)

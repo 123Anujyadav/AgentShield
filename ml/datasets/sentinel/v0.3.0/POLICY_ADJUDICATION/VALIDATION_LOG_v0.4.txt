@@ -1,0 +1,68 @@
+VALIDATION LOG v0.4 — POLICY_FINAL_DECISION_WORKSHEET_v0.4_DRAFT.md (DRAFT_NOT_APPROVED; quality gate OPEN)
+Run 2026-10-27T08:31Z, Linux shell over the repo. Real output below.
+Not read: mapping_key.csv, review_key.csv, .env, splits/ contents, samples.jsonl (not opened in this step).
+
+### V1 citation check: 100 (file, line, expected substring) pairs cited in the worksheet
+$ python <scratch>/citecheck_v04.py   (temporary, outside repo; sha256 070a5008ef0e6ff1c9043004e6ed18f7a5d212d0e458b3342d365d9c79815153)
+citations checked=100 mismatches=0
+extra: QG exfiltration count lines: 21:impersonation 27, exfiltration 19, other_suspicious 21. 113:dominate; `exfiltration_request` remains the thinnest suspicious category (1 
+
+### V2 coverage: every unresolved ID in v0.2 brief and v0.3 supplement appears in the worksheet
+source IDs=43 present in worksheet=43 missing=[]
+v0.2 doc items D1/D2 referenced: True
+W items=22 unique=22 headings_with_status=22
+register rows=22 with_pending=22 owner=21 user=1
+topic 'relayed instructions': present
+topic 'threshold + insufficient evidence': present
+topic 'insufficient evidence': present
+topic 'chat-like rows': present
+topic 'system-prompt disclosure': present
+topic 'payment tool_redirect': present
+topic 'reviews/tracking/summaries': present
+topic 'other_suspicious rules': present
+topic 'dataset card + language counts': present
+topic 'aggregate author-label analysis': present
+rv- IDs: 0  sen-#### IDs: 0
+APPROVED occurrences not part of NOT_APPROVED: 0
+lines stating gate OPEN: 2
+
+### V3 earlier policy files unchanged (sha256 before vs now)
+  unchanged POLICY_ADJUDICATION_PROPOSAL_v0.1.md
+  unchanged policy_decision_table_v0.1.csv
+  unchanged POLICY_DECISION_BRIEF_v0.2_DRAFT.md
+  unchanged POLICY_CONFLICT_RESOLUTION_SUPPLEMENT_v0.3_DRAFT.md
+  unchanged ROUND2_FIELD_MAPPING_ERRATA_DRAFT_v0.1.md
+  unchanged language_review_worklist_ANNOTATOR_SAFE_v0.1.csv
+  unchanged VALIDATION_LOG_v0.2.txt
+  unchanged VALIDATION_LOG_v0.3.txt
+
+### V4 annotator package
+3e54c52dc89b8bc92111b65a4c48a3899e7b08a432fc9350984f441cf91c7bdf  INSTRUCTIONS.md
+2c07f2f5885f359c4c52edfe213188bdc171aaf4dac8c0effad7a836b851da85  REVIEWER_GUIDE.md
+e663c296489559a509767362822a42d65cd94b02d9536745325c583ff6132fc2  review_blind_opaque.csv
+  files: INSTRUCTIONS.md REVIEWER_GUIDE.md review_blind_opaque.csv 
+
+### V5 intake on blank package (must still reject)
+$ python ml/sentinel/intake_round2.py ml/datasets/sentinel/v0.3.0/REVIEW_ROUND2/ANNOTATOR_PACKAGE/review_blind_opaque.csv
+rows=196 errors=784
+exit=1
+
+### V6 Python review-workflow tests
+$ python -m pytest ml/tests -q -p no:cacheprovider
+16 passed in 1.16s
+exit=0
+
+### V7 npm tests: NOT RUN - only a Markdown file was added; no JS/TS changed (last run v0.2: 72 passed).
+
+### V8 integrity (sha256; ml/ docs/ apps/ packages/ package.json; excl. node_modules/caches)
+before=228 after=229
+pre-existing files changed or removed: 0
+new files:
+  2fecde2ab94a54a806dc68602e40d95bf036e9bef11b45e405b87a0d3425aabe  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/POLICY_FINAL_DECISION_WORKSHEET_v0.4_DRAFT.md
+
+### V9 post-check correction (worksheet only)
+V1 'extra' showed the exfiltration count (19) is in QG §1 l.21 and §7 l.113, not §4. The worksheet's W-07 text 'QG §4/§7: 19 samples' was corrected in place to 'QG §1 l.21 and §7 l.113: 19 samples' (sed). No other change.
+QG l.113: dominate; `exfiltration_request` remains the thinnest suspicious category (19);
+final worksheet sha256: 6964a83f7aaa85273846519ce123074b3f81b7cdb028d0591ee59ffab633face  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/POLICY_FINAL_DECISION_WORKSHEET_v0.4_DRAFT.md
+pre-existing files still unchanged: 0 changed/removed
+(This log is the second new file, written last.)

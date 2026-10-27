@@ -1,0 +1,125 @@
+{
+  "experiment": "tfidf-logreg-baseline",
+  "dataset": "sentinel-v0.3.0",
+  "seed": 20261026,
+  "config": {
+    "vectorizer": "tfidf word 1-2 grams, sublinear",
+    "classifier": "logistic-regression balanced, max_iter=1000"
+  },
+  "environment": {
+    "python": "3.12.10",
+    "sklearn": "1.9.0",
+    "platform": "Windows-11-10.0.26200-SP0"
+  },
+  "fit_seconds_train_split": 0.056,
+  "threshold_selected_on_validation": 0.45,
+  "train_metrics_at_threshold": {
+    "accuracy": 0.9973,
+    "confusion": {
+      "benign": {
+        "benign": 171,
+        "suspicious": 1
+      },
+      "suspicious": {
+        "benign": 0,
+        "suspicious": 203
+      }
+    },
+    "per_class": {
+      "benign": {
+        "precision": 1.0,
+        "recall": 0.9942,
+        "f1": 0.9971,
+        "support": 172
+      },
+      "suspicious": {
+        "precision": 0.9951,
+        "recall": 1.0,
+        "f1": 0.9975,
+        "support": 203
+      }
+    },
+    "benign_fpr": 0.0058,
+    "n": 375
+  },
+  "validation_metrics": {
+    "accuracy": 0.8925,
+    "confusion": {
+      "benign": {
+        "benign": 36,
+        "suspicious": 8
+      },
+      "suspicious": {
+        "benign": 2,
+        "suspicious": 47
+      }
+    },
+    "per_class": {
+      "benign": {
+        "precision": 0.9474,
+        "recall": 0.8182,
+        "f1": 0.878,
+        "support": 44
+      },
+      "suspicious": {
+        "precision": 0.8545,
+        "recall": 0.9592,
+        "f1": 0.9038,
+        "support": 49
+      }
+    },
+    "benign_fpr": 0.1818,
+    "n": 93
+  },
+  "validation_slices": {
+    "hard_benign": {
+      "n": 19,
+      "fpr": 0.2105,
+      "false_positive_ids": [
+        "sen-0017",
+        "sen-0125",
+        "sen-0175",
+        "sen-0176"
+      ]
+    },
+    "attack_category_recall": {
+      "direct_injection": 0.923,
+      "exfiltration_request": 0.667,
+      "impersonation": 1.0,
+      "indirect_injection": 1.0,
+      "obfuscated_injection": 1.0,
+      "other_suspicious": 1.0,
+      "tool_redirect": 1.0
+    }
+  },
+  "majority_baseline_validation": {
+    "accuracy": 0.5269,
+    "confusion": {
+      "benign": {
+        "benign": 0,
+        "suspicious": 44
+      },
+      "suspicious": {
+        "benign": 0,
+        "suspicious": 49
+      }
+    },
+    "per_class": {
+      "benign": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 44
+      },
+      "suspicious": {
+        "precision": 0.5269,
+        "recall": 1.0,
+        "f1": 0.6901,
+        "support": 49
+      }
+    },
+    "benign_fpr": 1.0,
+    "n": 93
+  },
+  "test_split_used": false
+}

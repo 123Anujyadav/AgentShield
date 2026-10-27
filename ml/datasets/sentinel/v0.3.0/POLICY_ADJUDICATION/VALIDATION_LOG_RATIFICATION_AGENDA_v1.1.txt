@@ -1,0 +1,62 @@
+VALIDATION LOG — POLICY_RATIFICATION_AGENDA_v1.1.md
+(Agenda only; no decisions; no ratification fields; recommendations copied from v1.1 unchanged; quality gate OPEN)
+
+Run: 2026-10-27, by an AI assistant (Claude Code).
+Working directory: AgentShield/ (repository root). Not a git repository.
+Shell: Git Bash on Windows. Python 3.12; scratchpad scripts run with -I. Scratchpad = the session temp directory, outside the repository.
+
+Only document-integrity checks were run:
+  - No intake, pytest or npm run.
+  - No model training, external API or paid service.
+Not read: samples.jsonl, splits/ contents, mapping_key.csv, review_key.csv, .env.
+Not modified: v1.1, v1.0, any earlier policy file, dataset, label, schema, validator, test or annotator package.
+
+### G0 Read-only inspection before writing
+$ ls -la ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION
+  -> 27 files. No *AGENDA* file existed.
+$ sha256sum POLICY_DECISION_REGISTER_ADDENDUM_v1.1_DRAFT.md VALIDATION_LOG_v1.1.txt POLICY_DECISION_REGISTER_ADDENDUM_v1.0_DRAFT.md
+  -> ffcb2fbbe3b46d44442ab2c466550bc308c0aaf58a8601a218624faa4c5104ea  (v1.1; as recorded in VALIDATION_LOG_v1.1.txt)
+  -> c30c68bdcd56ebbc56aea0c68d13029706aa33830a3009e4e84c23102369cb45  (v1.1 log; as recorded at the end of the v1.1 step)
+  -> 0aedbb5af135c5efbab64ed2ed7d77202e0f34f5aad9aabf189008f88a7e8fb1  (v1.0; unchanged)
+Read-only reads:
+  - v1.1 lines 60–619, via the Read tool.
+  - v1.1 l.1–58 and its last 5 lines, via grep/tail.
+  - v1.1 and v1.0 question lines, via grep -nE '^- \*\*Question'.
+Defect review result:
+  - No defect requires a new versioned policy document. None was created.
+  - Agenda §8 records OBS-1 to OBS-5 (option gaps conditional on AD-016 = L0 or L2; one inconsistent option pairing; one wording issue; one open confirmation).
+
+### A1 Verbatim questions
+$ python -I <scratchpad>/validate_agenda.py <scratchpad>
+  questions quoted=25 verbatim matches=25 mismatches=[]
+  (Each "**Q** (V1x l.N)" quote was checked against line N of v1.1 or v1.0. AD-024 to AD-028 share V10 l.314.)
+
+### A2 Citation check (same run; RG/IN/LG/INT/RD/WF/V01/V10/V11 resolved against their files, CRLF removed)
+  refs extracted=90 unique=59 verified=59 mismatches=[] unverified=[]
+
+### A3 Index vs the v1.1 §6 register (same run)
+  index rows=29 mismatches vs v1.1=[]   (status, basis and recommendation copied unchanged)
+  positions={'E': 7, 'O': 19, 'EL': 3} | position E <-> basis ES inconsistencies=[]
+  AD IDs mentioned=33 not in v1.1 register=[]
+  index rows without a quoted question: ['AD-016', 'AD-021']
+    -> Parser artifact. AD-016 sits under a '###' heading and AD-021 under a "Related, optional" line, not under a bold row header.
+    -> Both questions are present and verbatim-verified in A1:
+       $ grep -nE '\*\*Q\*\* \(V11 l\.(303|97)\)' POLICY_RATIFICATION_AGENDA_v1.1.md -> agenda l.92 and l.153
+Correction before A1–A3: agenda §9 said "The other 29 v1.1 rows". Corrected to 36 (65 − 29). This edit was made to the new agenda file only.
+
+### A4 Safety checks on the agenda (same run)
+  decision/ratification columns (Decision|By|Date|Ratified|Outcome): []
+  approval-word contexts: ['Nothing here is decided, ratified or approved.'] (a negation)
+  rv-/sen- IDs: 0
+  '**OPEN.**' (quality gate): 1
+
+### A5 Integrity
+Baseline: the full-repository snapshot taken at the end of the v1.1 step (265 files). No fresh snapshot was taken before this step's write.
+Before writing, the v1.1 file and v1.1 log hashes were re-confirmed equal to that snapshot (G0).
+$ find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -name ".env" -print0 | sort -z | xargs -0 sha256sum > <scratchpad>/post_agenda.sha256
+$ diff <(sort -k2 final_v11.sha256) <(sort -k2 post_agenda.sha256)
+  baseline=265 now=266; pre-existing files changed or removed: 0
+  new: add09637bdba88b25f25ab22b60aa6c5443d15889c723f66611af0b4d18d0a45  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/POLICY_RATIFICATION_AGENDA_v1.1.md (395 lines)
+  v1.1 still ffcb2fbb…; v1.1 log still c30c68bd…
+
+(This log is the second new file, written last. It does not record its own hash.)

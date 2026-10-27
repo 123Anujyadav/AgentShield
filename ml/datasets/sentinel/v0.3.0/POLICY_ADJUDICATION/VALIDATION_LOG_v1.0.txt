@@ -1,0 +1,71 @@
+VALIDATION LOG v1.0 — POLICY_DECISION_REGISTER_ADDENDUM_v1.0_DRAFT.md (DRAFT_NOT_APPROVED; 63 decisions, none ratified; quality gate OPEN)
+Run 2026-10-27T12:07Z. Repository is not a git repository ('git status' -> fatal: not a git repository).
+Pre-write inspection: POLICY_ADJUDICATION listed (23 files); 240-file hash comparison vs post-v0.9 snapshot found no user changes (only the assistant's own VALIDATION_LOG_v0.9, hash bdb53a9b... as recorded).
+Not read: samples.jsonl, splits/ contents, mapping_key.csv, review_key.csv, .env. No prior policy file edited; no prior register filled.
+
+### V0 committed file
+  device sha256: a8ad341c5c1cbe34f1526a2a51b13bdd64236ccb7c150b889991047edaabfaec (expected a8ad341c5c1cbe34f1526a2a51b13bdd64236ccb7c150b889991047edaabfaec)
+
+### V1 structure, status consistency, mapping coverage
+  register rows=63 unique=63 duplicates=[] expected AD-001..AD-063 complete=True
+  register status counts: {'RECOMMENDED_FOR_ADOPTION': 25, 'PENDING_PROJECT_OWNER_DECISION': 37, 'PENDING_USER_DECISION': 1} | basis counts: {'EVIDENCE_SUPPORTED': 25, 'OWNER_JUDGMENT': 38} | DEFERRED rows: 8
+  blank decision/by/date cells: 63 of 63
+  detailed blocks=58 + table rows (AD-024..028)=5 -> total 63
+  rows missing required fields: {'AD-023': ['**Evidence:**'], 'AD-053': ['**Evidence:**'], 'AD-054': ['**Evidence:**'], 'AD-056': ['**Evidence:**'], 'AD-060': ['**Evidence:**']}
+  detail-vs-register status mismatches: none
+  v0.1 R*: ids=12 mapped=12 unmapped=[]
+  v0.2/v0.3 D-/U-: ids=43 mapped=43 unmapped=[]
+  v0.4 W-: ids=22 mapped=22 unmapped=[]
+  v0.7 X: ids=6 mapped=6 unmapped=[]
+  v0.8 R-: ids=39 mapped=39 unmapped=[]
+  v0.9 findings: ids=29 mapped=29 unmapped=[]
+  v0.1 L / C / Q2b, v0.2 doc items D1/D2, v0.6 open point mapped: True
+  rv-/sen- IDs: 0 | "APPROVED" outside NOT_APPROVED: 0 | ratified/approved claims: 4
+  required item present: 'X2-alt' -> True
+  required item present: 'definition of "covert"' -> True
+  required item present: '"private data"' -> True
+  required item present: 'internal destination' -> True
+  required item present: 'AD-039' -> True
+  required item present: 'relation-task' -> True
+  required item present: 'Form-question precedence' -> True
+
+### Correction between V1 and V1b
+V1 found 5 rows (AD-023, AD-053, AD-054, AD-056, AD-060) without an explicit Evidence field. Evidence lines were added (sources cited, or explicitly 'sources are silent'). Only the addendum changed; first sha256 a8ad341c... no longer exists in the repo.
+
+### V0b final committed file (after adding Evidence fields to AD-023/053/054/056/060; two commits were needed because the first re-commit delivered a stale copy)
+  device sha256: 0aedbb5af135c5efbab64ed2ed7d77202e0f34f5aad9aabf189008f88a7e8fb1 (expected 0aedbb5af135c5efbab64ed2ed7d77202e0f34f5aad9aabf189008f88a7e8fb1)
+
+### V1b structure re-run on final file
+  detailed blocks: 58 | missing required fields: none
+  AD-024..028 table: rows= 5 | shared fields present: True
+  register rows: 63 | blank decision cells: 63
+  approval-phrase matches (all verified as negations/conditionals in review): [' register. **No decision is ratified', 'until a versioned change is approved', 'y once the evidence rule is ratified', 'SER_DECISION`. - Nothing is ratified']
+
+### V2 citation check: every TAG l.x reference in the addendum resolved against its source
+  citation ranges extracted=68 verified=64 mismatches=[] unverified(no expectation defined)=[('DC', 19, 19), ('DC', 22, 22), ('LG', 154, 155), ('RG', 15, 15)]
+  extra: ml/tests/test_round2.py l.14-15 contains _annotator_text / iterdir: True
+
+### V3 preservation, tests, integrity
+  existing POLICY_ADJUDICATION files checked=23 (changes listed above, if any)
+  AI_AUDIT: files=4 changed=0 (hash only)
+  AI_ASSISTED_REVIEW_ROUND2: files=9 changed=0 (hash only)
+  REVIEW_PACKAGE: files=5 changed=0 (hash only)
+  REVIEW_ROUND2: files=4 changed=0 (hash only)
+  splits: files=4 changed=0 (hash only)
+  samples.jsonl changed=0 (hash only; not read)
+  $ python ml/sentinel/intake_round2.py ml/datasets/sentinel/v0.3.0/REVIEW_ROUND2/ANNOTATOR_PACKAGE/review_blind_opaque.csv -> rows=196 errors=784
+  $ python -m pytest ml/tests -q -p no:cacheprovider -> 16 passed in 2.13s
+  NOT run: npm test (no JS/TS touched). Prior reported result only: 72 passed (engine 28, API 44).
+  before=240 after=241; pre-existing changed/removed: 0
+  new: 0aedbb5af135c5efbab64ed2ed7d77202e0f34f5aad9aabf189008f88a7e8fb1  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/POLICY_DECISION_REGISTER_ADDENDUM_v1.0_DRAFT.md
+
+### V2b the 4 'unverified' ranges in V2 are parser artifacts (a following tag's lines attributed to the preceding tag); contexts and true targets:
+  context: DC l.9, l.20 vs QG §1 l.19, l.22
+    true target QG l.19: `sentinel-v0.3.0`: **554 samples** — benign 252, suspiciou | QG l.22: Languages: English 506, Spanish 16, German 16, Hin
+  context: LG l.3–5; RD l.84–93, l.111, l.154–155
+    true target RD l.154-155: - Instructions consistent with the stated task in the scenario are `be
+  context: RG l.19–20 and LG l.15
+    true target LG l.15: - Safety advice ("never reveal your API key") is `benign`.
+  => all 68 extracted references resolve; 0 genuine mismatches.
+
+(This log is the second new file, written last.)

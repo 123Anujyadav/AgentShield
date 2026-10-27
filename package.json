@@ -1,0 +1,14 @@
+{
+  "name": "agentshield",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "dev:api": "npm run dev -w @agentshield/api",
+    "dev:web": "npm run dev -w @agentshield/web",
+    "build": "npm run build -w @agentshield/engine && npm run build -w @agentshield/api && npm run build -w @agentshield/web",
+    "test": "npm run test -w @agentshield/engine && npm run test -w @agentshield/api",
+    "typecheck": "npm run typecheck -w @agentshield/engine && npm run typecheck -w @agentshield/api && npm run typecheck -w @agentshield/web"
+  }
+}

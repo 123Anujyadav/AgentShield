@@ -1,0 +1,61 @@
+VALIDATION LOG v0.3 — POLICY_CONFLICT_RESOLUTION_SUPPLEMENT_v0.3_DRAFT.md (DRAFT_NOT_APPROVED; quality gate OPEN)
+Run 2026-10-27T08:24Z in a Linux shell over the repo. Real output below.
+Not read: mapping_key.csv, review_key.csv, .env, splits/, curated_v03.py. samples.jsonl: newline count only (V2). Incidental: a grep printed a few lines of ml/sentinel/generate_expansion.py; not used for any finding (supplement §0).
+
+### V1 citation check: 64 (file, line, expected substring) pairs cited in the supplement
+$ python <scratch>/citecheck.py   (temporary script outside the repo, sha256 a5ab6f94af51df7fe4429a2d6049a61981c0c78db9e8380591b4cb8dfbf0cde2)
+MISS docs/phase11a-dataset-expansion.md:92 expected '8 each' got '  template samples may contain systematic author bias, and the Spanish/German/'
+citations checked=64 mismatches=1
+note: the single MISS is a checker off-by-one; the supplement cites the range l.91-93 and line 93 reads: Hindi slices (8 each) were written by the author, not native-speaker reviewed.
+
+### V2 documentary facts re-verified
+v0.3.0 DATASET_CARD == v0.2.0 card with 'v0.2.0'->'v0.3.0': yes
+v0.3.0 LABELLING_GUIDE == v0.2.0 copy: yes
+samples.jsonl newline count (count only, no content): 554
+precedence-term search hits (authoritative|source of truth|supersede|takes precedence|prevail):
+  docs/phase11-sentinel-research.md:54
+  docs/phase11-sentinel-research.md:182
+  docs/phase11a-baseline-results.md:15
+  ml/datasets/sentinel/v0.3.0/DATASET_CARD.md:3
+
+### V3 supplement content checks
+rv- review IDs in supplement: 0; sen-#### IDs: 0; 'APPROVED' without NOT_: 1 total vs NOT_APPROVED: 1
+gate statements: 2 lines mention OPEN
+
+### V4 annotator package unchanged
+3e54c52dc89b8bc92111b65a4c48a3899e7b08a432fc9350984f441cf91c7bdf  INSTRUCTIONS.md
+2c07f2f5885f359c4c52edfe213188bdc171aaf4dac8c0effad7a836b851da85  REVIEWER_GUIDE.md
+e663c296489559a509767362822a42d65cd94b02d9536745325c583ff6132fc2  review_blind_opaque.csv
+INSTRUCTIONS.md REVIEWER_GUIDE.md review_blind_opaque.csv 
+
+### V5 intake on blank package (must still reject)
+$ python ml/sentinel/intake_round2.py ml/datasets/sentinel/v0.3.0/REVIEW_ROUND2/ANNOTATOR_PACKAGE/review_blind_opaque.csv
+rows=196 errors=784
+exit=1
+
+### V6 Python review-workflow tests
+$ python -m pytest ml/tests -q -p no:cacheprovider
+16 passed in 1.28s
+exit=0
+
+### V7 npm tests: NOT RUN - no TypeScript/JS file was touched in this step, so they are not relevant (last run in v0.2: 72 passed).
+
+### V8 integrity (sha256, ml/ docs/ apps/ packages/ package.json; excl. node_modules/caches)
+before=226 after=227
+pre-existing files changed or removed: 0
+new files:
+  34dffb76eafa8f1664a1a8cf3eccece9245c3afe98d24b0a45439b9e809c4bff  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/POLICY_CONFLICT_RESOLUTION_SUPPLEMENT_v0.3_DRAFT.md
+hashes of cited official sources at time of check:
+  ec5768477b8a818960eb8b6b2e3e30cc8efe1c5daa6870ba6989a8599851dbf7  ml/datasets/sentinel/v0.3.0/LABELLING_GUIDE.md
+  2c07f2f5885f359c4c52edfe213188bdc171aaf4dac8c0effad7a836b851da85  ml/datasets/sentinel/v0.3.0/REVIEW_ROUND2/ANNOTATOR_PACKAGE/REVIEWER_GUIDE.md
+  3e54c52dc89b8bc92111b65a4c48a3899e7b08a432fc9350984f441cf91c7bdf  ml/datasets/sentinel/v0.3.0/REVIEW_ROUND2/ANNOTATOR_PACKAGE/INSTRUCTIONS.md
+  559129b67194c1fa7f0acf5a9ffb11cad724e37d631b013a8c8b720c29a76803  docs/phase11-sentinel-research.md
+  bba49ad3c290443aaa20650db829a0c197a2707433a069d08ee2798ffee68919  docs/phase11a-independent-review-workflow.md
+  63e8af63d2920730efc80ef4c155497dec3b4aed0fbdbc37ef4c32dc31f6cf5c  docs/phase11a-dataset-expansion.md
+  a6301bdd23ff8717b0a7e36376db8577a2cdc66d0bd7d02597a224c300029ba5  docs/phase11a-dataset-quality-gate.md
+  6941d3e037907a5e6f27e47c04510df4d55500000d3381aa9b90f3f3572afba4  packages/engine/src/scanner/rules.ts
+  636f8d07d1312f85410fef96302502b8ea6cec1c342d9d12b50147c66288b8bd  ml/sentinel/build_v03.py
+  7fd266d4ae01c2b3b56b4071163e2a550e92798b006f41891279b8ee0c33d89f  ml/datasets/sentinel/v0.3.0/CHANGELOG.md
+  4fba598de8c2038df310a7d46f0a88f735eef1db10551bd4404f70326d49bff7  ml/datasets/sentinel/v0.3.0/DATASET_CARD.md
+
+(This log was written after V8; it is the second new file.)

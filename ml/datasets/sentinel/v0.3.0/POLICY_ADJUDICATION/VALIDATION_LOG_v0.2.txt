@@ -1,0 +1,60 @@
+VALIDATION LOG v0.2 — POLICY_ADJUDICATION drafts (status DRAFT_NOT_APPROVED; quality gate OPEN)
+Run 2026-10-27T08:17Z, Linux shell over the repo. Real output; ANSI colour codes removed. Not opened: mapping_key.csv, review_key.csv, samples.jsonl, splits/, .env (pytest's test_round2 reads mapping_key.csv in-process; only pass/fail observed).
+Not run: owner-only cross-tab of obfuscation_type x attack_category over samples.jsonl (D-Q3b) - deliberately left to the owner to avoid reading author labels.
+
+### C1 build annotator-safe language worklist
+$ python ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/build_language_worklist.py
+blind_rows=196 non_english_rows=30 by_guess={'de': 10, 'es': 10, 'hi (Devanagari)': 10}
+exit=0
+
+### C2 cross-check brief ID lists and worklist against v0.1 decision table
+brief rv IDs 59 all in blind package: True
+Q1 brief 9 table 9 match True
+Q2 brief 10 table 10 match True
+Q5 brief 19 table 19 match True
+Q6 brief 4 table 4 match True
+worklist 30 == v0.1 LANG rows: True
+brief worklist list == worklist file: True
+
+### C3 leak checks on annotator-safe files (same regexes as ml/tests/test_round2.py plus label/split words)
+ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/language_review_worklist_ANNOTATOR_SAFE_v0.1.csv: sen-####=0 author_label=0 rv-ids=30
+ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/ROUND2_FIELD_MAPPING_ERRATA_DRAFT_v0.1.md: sen-####=0 author_label=0 rv-ids=0
+worklist header: review_order,review_id,script_language_guess,fluent_reviewer_language_confirmed,meaning_clear_yes_no,natural_wording_yes_no,fluent_reviewer_language_quality,fluent_reviewer_note,worklist_status
+worklist label/split words: 0
+
+### C4 annotator package contains only its 3 original files (no AI/policy files)
+INSTRUCTIONS.md
+REVIEWER_GUIDE.md
+review_blind_opaque.csv
+3e54c52dc89b8bc92111b65a4c48a3899e7b08a432fc9350984f441cf91c7bdf  ml/datasets/sentinel/v0.3.0/REVIEW_ROUND2/ANNOTATOR_PACKAGE/INSTRUCTIONS.md
+2c07f2f5885f359c4c52edfe213188bdc171aaf4dac8c0effad7a836b851da85  ml/datasets/sentinel/v0.3.0/REVIEW_ROUND2/ANNOTATOR_PACKAGE/REVIEWER_GUIDE.md
+e663c296489559a509767362822a42d65cd94b02d9536745325c583ff6132fc2  ml/datasets/sentinel/v0.3.0/REVIEW_ROUND2/ANNOTATOR_PACKAGE/review_blind_opaque.csv
+
+### C5 official intake on the blank package (must still reject; gate open)
+$ python ml/sentinel/intake_round2.py ml/datasets/sentinel/v0.3.0/REVIEW_ROUND2/ANNOTATOR_PACKAGE/review_blind_opaque.csv
+rows=196 errors=784
+exit=1
+
+### C6 Python tests
+$ python -m pytest ml/tests -q -p no:cacheprovider
+16 passed in 1.24s
+exit=0
+
+### C7 npm tests (scratch copy with Linux-native deps; repo node_modules is Windows-installed and lacks @rollup/rollup-linux-x64-gnu; repo untouched)
+$ npm test
+ Test Files  3 passed (3)
+      Tests  28 passed (28)
+ Test Files  6 passed (6)
+      Tests  44 passed (44)
+exit=0
+
+### C8 integrity: sha256 of all files under ml/ docs/ apps/ packages/ package.json (excl. node_modules, caches)
+before=221 after=225
+pre-existing files changed or removed: 0
+v0.1 proposal files unchanged: yes
+new files:
+  4782fff1943721334285b3bcc97ddd681750e4141f0443932923b8e6b2d9a53e  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/POLICY_DECISION_BRIEF_v0.2_DRAFT.md
+  fa0c9214364d919ffdc921c90efc75dcd19034a2d78757bdfb011b99f21dce66  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/ROUND2_FIELD_MAPPING_ERRATA_DRAFT_v0.1.md
+  edc2356864722610eb738481dc4e4e7aa4d2cabc1d2dfed9c09712c5089dd1fa  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/build_language_worklist.py
+  527b259ed144e355680aca74cd2de9030ef0c4e6e85d4bc6ae915740cd00e850  ml/datasets/sentinel/v0.3.0/POLICY_ADJUDICATION/language_review_worklist_ANNOTATOR_SAFE_v0.1.csv
+(This log file itself was written after C8.)
