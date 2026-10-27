@@ -70,10 +70,10 @@ export default function ActivityAuditView({
           </div>
           <div>
             <h2 className="text-base font-bold" style={{ color: "var(--text-bright)" }}>
-              Activity & Audit · Immutable Event Timeline
+              Activity & Audit · Session Event Timeline (In-Memory)
             </h2>
             <p className="text-xs" style={{ color: "var(--muted)" }}>
-              Replayable record of every agent action proposal, scanner check, human authorization, and engine decision
+              Session record of agent action proposals, scanner checks, human authorizations, and engine decisions. Events are held in memory and reset when the API restarts.
             </p>
           </div>
         </div>
@@ -188,7 +188,7 @@ export default function ActivityAuditView({
             </h4>
             <p className="text-xs text-muted max-w-md mx-auto">
               {events.length === 0
-                ? "Actions evaluated in the Scenario Lab or Command Center will automatically be cataloged into this immutable session timeline."
+                ? "Actions evaluated in the Scenario Lab or Command Center will automatically be cataloged into this in-memory session timeline."
                 : "Try resetting your decision filter or search keyword to view all recorded timeline events."}
             </p>
             {events.length === 0 && (

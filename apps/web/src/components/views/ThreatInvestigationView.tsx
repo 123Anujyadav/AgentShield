@@ -31,37 +31,37 @@ const THREAT_MATRIX = [
     category: "Data Exfiltration",
     severity: "HIGH",
     example: "Agent pastes one-time authentication code or contacts into an external form or image URL",
-    defense: "Taint Tracking & Destination Allowlist. Untrusted content cannot choose egress destinations.",
+    defense: "Partially implemented: destination allowlist applies when the intent declares allowed destinations, plus the outbound secret guard. Taint tracking is not implemented.",
   },
   {
     category: "Unauthorized Transactions",
     severity: "CRITICAL",
     example: "Untrusted product page instructs agent to purchase gift cards or transfer cryptocurrency",
-    defense: "Action Gate with mandatory biometric/human confirmation. Zero automated execution.",
+    defense: "Implemented: Action Gate with human confirmation for CONFIRM and hard-deny for forbidden payment actions. Biometric confirmation is not implemented; execution is simulated only.",
   },
   {
     category: "Tool / Connector Poisoning",
     severity: "HIGH",
     example: "Third-party MCP tool description changes post-authorization to inject hidden prompts",
-    defense: "Tool Trust: Signed manifests, description drift detection, permission bounds.",
+    defense: "Not implemented: signed manifests and description drift detection are a labelled preview only (see Tool Trust). Only the simulator handler allowlist is enforced.",
   },
   {
     category: "Memory Poisoning",
     severity: "HIGH",
     example: "Attacker injects instruction designed to be stored in long-term memory for future execution",
-    defense: "Memory Write Scanning: Every persistent memory write is inspected before commit.",
+    defense: "Not implemented: AgentShield has no persistent agent memory or memory-write scanning in this prototype.",
   },
   {
     category: "Phishing Through Agent",
     severity: "MEDIUM",
     example: "Agent repeats a spoofed domain or malicious credential prompt to user as if trusted",
-    defense: "Output Link Verification & Reputation Scoring before displaying agent recommendations.",
+    defense: "Not implemented: no output link verification or reputation scoring exists in this prototype.",
   },
   {
     category: "Over-privileged Agent Apps",
     severity: "MEDIUM",
     example: "Agent application requests full file-system read/write permissions for a read-only task",
-    defense: "Least-privilege permission audit and behavioral profiling.",
+    defense: "Partially implemented: explicit intent allowlists enforce least-privilege action types. Permission audits and behavioral profiling are not implemented.",
   },
 ];
 
@@ -230,7 +230,7 @@ export default function ThreatInvestigationView({
                     <ScaleIcon className="h-4 w-4 text-accent" />
                     Intent Firewall & Policy Findings
                   </h3>
-                  <span className="badge text-[10px] text-cyan-400">CEDAR POLICIES</span>
+                  <span className="badge text-[10px] text-cyan-400">DETERMINISTIC LOCAL RULES</span>
                 </div>
 
                 {result.evaluation.findings.filter((f) => f.category !== "injection").length === 0 ? (
@@ -349,6 +349,9 @@ export default function ThreatInvestigationView({
           <ShieldIcon className="h-4 w-4 text-accent" />
           AgentShield Threat Model & Defense Matrix (7 Attack Classes)
         </h3>
+        <p className="text-[11px] mb-3" style={{ color: "var(--muted)" }}>
+          Reference threat model. Each defense states its actual implementation status; proposal-stage defenses are labelled not implemented and are not active protections.
+        </p>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
             <thead>
@@ -356,7 +359,7 @@ export default function ThreatInvestigationView({
                 <th className="py-2 pr-3">Attack Class</th>
                 <th className="py-2 pr-3">Severity</th>
                 <th className="py-2 pr-3">Realistic Attack Scenario</th>
-                <th className="py-2">AgentShield Architectural Defense</th>
+                <th className="py-2">Defense & Implementation Status</th>
               </tr>
             </thead>
             <tbody className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>

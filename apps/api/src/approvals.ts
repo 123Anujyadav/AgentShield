@@ -6,6 +6,7 @@ import type {
   UntrustedContent,
   UserIntent,
 } from "@agentshield/engine";
+import { detectOutboundSecret, payloadAssignment } from "@agentshield/engine";
 import type { Simulator } from "./simulator.js";
 
 export const APPROVAL_TTL_MS = 15 * 60 * 1000;
@@ -116,7 +117,28 @@ export function markExpiryEventRecorded(store: ApprovalStore, id: string): boole
 /** Public view never echoes the raw untrusted content or internal bookkeeping back. */
 export function toPublicApproval(record: ApprovalRecord): PendingApproval {
   const { untrustedContent: _ignored, expiryEventPending: _pending, ...rest } = record;
-  return clone(rest);
+  const pub = clone(rest);
+  // Defense in depth: never echo a secret-shaped outbound value back to a
+  // client. The stored record is untouched and still governs policy recheck.
+  if (detectOutboundSecret("action.summary", pub.action.summary)) {
+    pub.action.summary = "[REDACTED]";
+  }
+  if (pub.action.payload) {
+    const sanitized: NonNullable<typeof pub.action.payload> = {};
+    const entries = Object.entries(pub.action.payload);
+    for (let index = 0; index < entries.length; index += 1) {
+      const [key, value] = entries[index] as [string, string | number | boolean];
+      const field = `action.payload.value[${index}]`;
+      // A secret-shaped key is renamed to a fixed safe label; a secret-shaped
+      // value is replaced. Raw attacker-controlled keys never reach clients.
+      const safeKey = detectOutboundSecret(field, key) ? `[REDACTED] field-${index}` : key;
+      const secretValue =
+        detectOutboundSecret(field, payloadAssignment(key, String(value))) ?? detectOutboundSecret(field, String(value));
+      sanitized[safeKey] = secretValue ? "[REDACTED]" : value;
+    }
+    pub.action.payload = sanitized;
+  }
+  return pub;
 }
 
 export type ApproveOutcome =

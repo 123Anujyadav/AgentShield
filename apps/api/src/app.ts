@@ -43,16 +43,32 @@ function parseIntent(value: unknown): UserIntent | null {
   };
 }
 
+function parsePayload(value: unknown): ProposedAction["payload"] | null {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || Array.isArray(value)) return null;
+  // Flat contract only: string, number, or boolean values. Nested objects,
+  // arrays, null, and other types are rejected before evaluation so they can
+  // never be stringified into a guard bypass or crash downstream code.
+  for (const entry of Object.values(value)) {
+    if (typeof entry !== "string" && typeof entry !== "number" && typeof entry !== "boolean") {
+      return null;
+    }
+  }
+  return value as ProposedAction["payload"];
+}
+
 function parseAction(value: unknown): ProposedAction | null {
   if (!isRecord(value)) return null;
   if (typeof value.type !== "string" || typeof value.tool !== "string") return null;
   if (typeof value.destination !== "string" || typeof value.summary !== "string") return null;
+  const payload = parsePayload(value.payload);
+  if (payload === null) return null;
   return {
     type: value.type,
     tool: value.tool,
     destination: value.destination,
     summary: value.summary,
-    payload: isRecord(value.payload) ? (value.payload as ProposedAction["payload"]) : undefined,
+    payload,
   };
 }
 
@@ -132,7 +148,8 @@ export function createApp(deps: AppDeps = {}) {
     res.json({ events: [...events].reverse() });
   });
 
-  app.post("/api/evaluate", async (req, res) => {
+  app.post("/api/evaluate", async (req, res, next) => {
+    try {
     const body: unknown = req.body;
     if (!isRecord(body)) {
       res.status(400).json({ error: "JSON object body required." });
@@ -216,6 +233,9 @@ export function createApp(deps: AppDeps = {}) {
       : failedAnalysis("mock", "mock (deterministic, offline)", "not-scanned", "unavailable");
 
     res.json({ evaluation, event, executed: execution.executed, execution, pendingApproval, modelAnalysis });
+    } catch (error) {
+      next(error);
+    }
   });
 
   /**
@@ -366,6 +386,25 @@ export function createApp(deps: AppDeps = {}) {
       lifecycle: "REJECTED",
     });
     res.json({ approval: outcome.approval, executed: false });
+  });
+
+  // Controlled error surface: no stack traces, request bodies, or secret
+  // values. Only a sanitized category is logged.
+  app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (res.headersSent) {
+      next(error);
+      return;
+    }
+    const isParseError =
+      error instanceof SyntaxError ||
+      (isRecord(error) && (error.type === "entity.parse.failed" || error.type === "entity.too.large"));
+    if (isParseError) {
+      console.warn("api-request status=bad-request category=malformed-json");
+      res.status(400).json({ error: "Malformed JSON body." });
+      return;
+    }
+    console.warn("api-request status=internal-error category=unhandled");
+    res.status(500).json({ error: "Internal error." });
   });
 
   return app;

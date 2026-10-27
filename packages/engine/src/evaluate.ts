@@ -1,4 +1,4 @@
-import { scanUntrustedContent } from "./scanner/scan.js";
+import { detectOutboundSecret, payloadAssignment, scanUntrustedContent, type OutboundSecretMatch } from "./scanner/scan.js";
 import type { EvaluationInput, EvaluationResult, Finding } from "./types.js";
 
 export const POLICY_VERSION = "agentshield-policy-v1";
@@ -12,6 +12,32 @@ export const HARD_DENY_ACTIONS = new Set(["send_payment", "delete_data", "send_e
  * CONFIRM. It never turns a BLOCK into an allow, and hard deny stays first.
  */
 export const SCANNER_CONFIRM_RULE_ID = "policy.suspicious-content-requires-confirmation";
+
+/**
+ * Outbound fields inspected by the Data-Leak Guard, in deterministic order.
+ * Field labels are fixed and positional (action.payload.value[N]); raw
+ * attacker-controlled payload keys are never copied into findings. Only
+ * flat string/number/boolean values are inspected; unsupported values are
+ * skipped without coercion (the API rejects them with 400 before this runs).
+ */
+function findOutboundSecret(action: EvaluationInput["action"]): OutboundSecretMatch | null {
+  const summaryMatch = detectOutboundSecret("action.summary", action.summary);
+  if (summaryMatch) return summaryMatch;
+  if (action.payload && typeof action.payload === "object") {
+    const entries = Object.entries(action.payload);
+    for (let index = 0; index < entries.length; index += 1) {
+      const [key, value] = entries[index] as [string, unknown];
+      if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") continue;
+      const field = `action.payload.value[${index}]`;
+      const text = typeof value === "string" ? value : String(value);
+      // Test the "key=value" form so labelled assignments inside payload
+      // entries are recognized, and the bare value for token-shaped formats.
+      const match = detectOutboundSecret(field, payloadAssignment(key, text)) ?? detectOutboundSecret(field, text);
+      if (match) return match;
+    }
+  }
+  return null;
+}
 
 export function evaluateAction(input: EvaluationInput): EvaluationResult {
   const { intent, action } = input;
@@ -59,6 +85,26 @@ export function evaluateAction(input: EvaluationInput): EvaluationResult {
       explanation: `Blocked: "${action.type}" is explicitly forbidden for this task. Approval does not override a hard deny.`,
       actionType: action.type,
     };
+  }
+
+  // Data-Leak Guard: a recognized secret-shaped value in the outbound action
+  // is a hard BLOCK. It runs before permissions, destination, and the scanner
+  // CONFIRM escalation, so it can never be downgraded to CONFIRM or ALLOW,
+  // and approval/policy recheck (which re-run this evaluator) cannot execute
+  // it. Evidence names only the field and pattern kind, never the value.
+  const outboundSecret = findOutboundSecret(action);
+  if (outboundSecret) {
+    return blocked(95, {
+      ruleId: "data-leak.outbound-secret",
+      category: "hard-deny",
+      severity: "critical",
+      title: "Outbound action contains a secret-shaped value",
+      explanation:
+        outboundSecret.kind === "field-too-long-to-inspect"
+          ? "The proposed action has a summary or payload field too long to fully inspect for secret-shaped values, so it cannot be allowed or confirmed. Only the field position is reported."
+          : "The proposed action's summary or payload contains a value matching a supported secret pattern. Outbound actions must not carry secrets. Only the matching pattern family is reported; detection is limited to the documented patterns and is not comprehensive secret detection.",
+      evidence: `field=${outboundSecret.field}; pattern=${outboundSecret.kind}; value=[REDACTED]`,
+    }, `Blocked: "${action.type}" would send a secret-shaped value (${outboundSecret.kind} in ${outboundSecret.field}). This is a hard block; approval cannot override it and nothing was executed.`);
   }
 
   // Intent Firewall: missing/ambiguous permissions are treated conservatively.

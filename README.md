@@ -102,6 +102,57 @@ Intent Firewall: action types must be explicitly allowed, destinations must matc
 `allowedDestinations` when present, and missing/empty permissions block conservatively.
 Conflicting allow+deny resolves to deny. Scanner findings stay separate from intent findings.
 
+Data-Leak Guard: the engine also inspects the outbound action's `summary` and `payload`
+before execution or confirmation. A value matching a supported secret pattern — labelled
+assignments such as `api_key=`, `access_token=`, `client_secret=`, `auth_token=`,
+`private_key=`, `refresh_token=`, `session_token=`, `secret_key=`, `db_password=`,
+`aws_secret_access_key=`, `x-api-key`, `password:`/`token:` (including JSON-style quoted
+keys), Bearer credentials, realistic `sk-` tokens (`sk-proj-...`, `sk-ant-...`, underscored
+forms), seeded `FAKE_...SECRET` values, or email addresses — is a hard `BLOCK`
+(rule `data-leak.outbound-secret`, risk 95). Every labelled occurrence is checked, so a
+benign first label cannot hide a later secret, including a label swallowed into a previous
+value such as `token:password=...` or `secret=api-key:...`.
+
+Matching rules, as implemented:
+- Explicit credential labels (password, passwd, api_key, client_secret, private_key, and the
+  other names above) block values of 6 or more characters, including purely numeric ones such
+  as `password=12345678`. Shorter values such as `password=abc12` do not block.
+- Generic labels (`token`, `secret`) block a value of 8 or more characters that contains a
+  letter and at least one digit, underscore, or dot. So `token: 42`, `secret: false`, and
+  `token: unlimited-tier` do not block, and neither does a letters-only value under 256
+  characters. A generic-labelled value of 256 or more characters (an unbroken run, or the
+  contents of a quoted value) is treated as credential-shaped and blocks (fail closed); text
+  inside a shorter value is still rescanned for later labels.
+- Value boundaries: a flat payload value is judged as a whole field, so `{password: "ab cdefgh"}`
+  or a value containing a quote character blocks like any other 6+ character credential. In free
+  text (summary), a quoted value is judged through its closing quote; an unquoted value ends at
+  whitespace, and a quote character inside it does not cut it short (`password=O'Brien...`).
+  An unquoted multi-word value in free text (`password: my secret words`) is judged on its first
+  word only.
+- `sk-` tokens block when the suffix after `sk-` is at least 12 characters of letters, digits,
+  `-`, or `_` and contains both a letter and a digit (any case), e.g. `sk-proj-...`,
+  `sk-ant-api03-...`. A letters-only suffix (`sk-learn-pipeline`) and an `sk-` preceded by a
+  letter, digit, or underscore (`key_sk-...`) are not detected.
+- `Bearer` followed by a run of 8 or more letters, digits, `.`, `_`, or `-` blocks when that run
+  contains a digit, underscore, or dot, or is at least 16 characters long. This means prose such
+  as "bearer instrumentalities" (16+ letters) is a known false positive; "bearer bond" is not.
+
+Fields are scanned in full up to 8,000 characters; a longer field is hard-BLOCKed as
+uninspectable rather than silently truncated. Email matching is anchored so its cost grows
+linearly with input length. Scanner evidence from untrusted content is redacted with the same
+label family; a quoted value is redacted through its closing quote, or to the end of the text
+if the quote is never closed, and a backslash-escaped quote does not terminate it. The
+detector judges quoted values on their complete contents through the matching unescaped
+closing quote, and an unclosed quoted credential value fails closed (hard BLOCK), so prose
+such as `secret: 'Tis ...` is a known false positive. Approval and policy recheck
+cannot downgrade it, and public approval responses redact any such value and rename
+secret-shaped payload keys. Detection is limited to these documented patterns; unlabelled,
+encoded, split, or otherwise unrecognized secrets are not detected, so this is not
+comprehensive secret detection. Known gaps include labels outside the list (`passphrase=`),
+the `=>` separator (`password => "..."`), and backslash-escaped JSON written as text
+(`{\"api_key\": ...}`). Malformed payloads (nested objects, arrays, null values)
+are rejected with HTTP 400 at the API boundary.
+
 ## Model-assisted analysis (Phase 4, mock only)
 
 Advisory layer only. Deterministic policy remains authoritative.
