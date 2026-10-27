@@ -7,12 +7,25 @@ import { fileURLToPath } from "node:url";
 import { actionFor, expand, scoreCorpus, validateCorpus } from "./run-benchmark.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const corpus = JSON.parse(readFileSync(resolve(here, "v1/fixtures.json"), "utf8"));
+const loadCorpus = (dir) => JSON.parse(readFileSync(resolve(here, dir, "fixtures.json"), "utf8"));
 const good = { id: "x-01", family: "fam", field: "summary", text: "hello", expectedBlock: false };
 const withFixtures = (...fixtures) => ({ corpus: "c", version: "v", fixtures });
 
-test("the committed corpus validates cleanly", () => {
-  assert.deepEqual(validateCorpus(corpus), []);
+test("every corpus version validates cleanly and declares its own version", () => {
+  for (const [dir, version, count] of [["v1", "v1", 53], ["v1.1", "v1.1", 55], ["v1.2", "v1.2", 81], ["v1.3", "v1.3", 98], ["v1.4", "v1.4", 117]]) {
+    const corpus = loadCorpus(dir);
+    assert.deepEqual(validateCorpus(corpus), [], dir);
+    assert.equal(corpus.version, version);
+    assert.equal(corpus.fixtures.length, count);
+  }
+});
+
+test("each corpus version extends the previous one without changing earlier fixtures", () => {
+  const [v1, v11, v12, v13, v14] = ["v1", "v1.1", "v1.2", "v1.3", "v1.4"].map(loadCorpus);
+  assert.deepEqual(v11.fixtures.slice(0, v1.fixtures.length), v1.fixtures);
+  assert.deepEqual(v12.fixtures.slice(0, v11.fixtures.length), v11.fixtures);
+  assert.deepEqual(v13.fixtures.slice(0, v12.fixtures.length), v12.fixtures);
+  assert.deepEqual(v14.fixtures.slice(0, v13.fixtures.length), v13.fixtures);
 });
 
 test("invalid fixtures are rejected instead of scored silently", () => {

@@ -152,11 +152,35 @@ encoded, split, or otherwise unrecognized secrets are not detected, so this is n
 comprehensive secret detection. Since Phase C-2, `passphrase=` and the `=>` separator
 (`password => "..."`) are supported credential syntax. Because `=>` is also JavaScript
 arrow-function syntax, an unquoted `=>` value that is a call (`hash(x)`, `a.b(x)`) or a
-member access on the label itself (`token => token.trim()`) is treated as code, not a
-credential; quoted values and literal values such as `token => abc123` still block. Known
-gaps now include labels outside the list and backslash-escaped JSON written as text
-(`{\"api_key\": ...}`). A deterministic synthetic benchmark for this detector lives in
-`benchmarks/detection/` (53 hand-authored fixtures, per-family precision/recall,
+member access on the label itself (`token => token.trim()`) is read as code; quoted values
+and literal values such as `token => abc123` still block. Code is not a free pass: the whole
+arrow expression (through nested brackets, quotes, extra arguments, and chained calls, up to
+256 characters, else fail closed) is inspected, and it blocks when it carries a value rather
+than a name — a word with 5+ consecutive digits or 4+ letter/digit switches, an 8+ digit
+number, a property read from the labelled parameter that is not a plain lowercase-first name
+of at most 20 characters (`password.Hunter2024x`), a 20+ letter capitalised passphrase, or a
+string literal with a 12+ letter-and-digit run, or a single-token literal of 8+ letters and
+digits that mixes upper case, lower case, and a digit (`'Hunter2024x'`; codec and algorithm
+names such as `'base64url'`, `'aes256gcm'`, `'HS256'` do not). Called names
+(`token.toBase64String()`, `hashPasswordV2(...)`) and identifiers with short version or year
+tags (`apiEndpointV2Url`, `userId2024abcdef`) stay benign. The expression continues across
+whitespace or a newline when the next token is `.`, `?.`, `[`, or `(` (`send(x) .then(...)`),
+and after a `.` or `?.` whatever whitespace follows (`token . name`, `token ?. name`, a dot on
+its own line); member and bracket links to the labelled parameter tolerate the same spacing
+(`password .Hunter2024x`), and only a call written directly against a name (`x()`) is exempt as
+a call. It ends at `,`, `;`, an enclosing closing bracket, or other top-level whitespace. Because
+a sentence-ending dot also continues the expression, the word after it is inspected too
+(`token.trim(). AB1234567890 next` blocks). A quote glued
+to the expression (`token.x"...`) is not valid code and fails closed unless whitespace,
+punctuation, or the end of the text follows it (quoted prose or a JSON-quoted payload closing).
+Evidence redaction uses the same boundaries and also redacts unlabelled credential-shaped
+words (display only). Residual gaps: a lower-case-only credential literal
+(`send(x, 'hunter2024x')`), a credential identifier with short digit groups
+(`send(x, OAuth2Token)`), and text after a closing quote and a space (`token.x" value`) are
+not detected as arrow-body credentials. Known gaps also include labels outside the list and
+backslash-escaped JSON written as text (`{\"api_key\": ...}`).
+A deterministic synthetic benchmark for this detector lives in `benchmarks/detection/`
+(versioned corpora, 117 hand-authored fixtures in v1.4, per-family precision/recall,
 synthetic corpus only; see its README). Malformed
 payloads (nested objects, arrays, null values) are rejected with HTTP 400 at the
 API boundary.

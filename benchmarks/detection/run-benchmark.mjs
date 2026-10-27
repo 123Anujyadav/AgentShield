@@ -9,9 +9,11 @@
  *
  * Usage (from the repository root, engine built first):
  *   npm run build -w @agentshield/engine
- *   node benchmarks/detection/run-benchmark.mjs [output-name]
+ *   node benchmarks/detection/run-benchmark.mjs [output-name] [corpus-version-dir]
  *
- * Output: benchmarks/detection/results/<output-name>.json (default: latest)
+ * corpus-version-dir selects benchmarks/detection/<dir>/fixtures.json
+ * (default: v1). Output: benchmarks/detection/results/<output-name>.json
+ * (default name: latest)
  * The report contains no timestamps, so reruns are byte-identical for the
  * same engine build and corpus.
  *
@@ -148,7 +150,10 @@ export function scoreCorpus(corpus, evaluate) {
 
 async function main() {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-  const corpus = JSON.parse(readFileSync(resolve(root, "benchmarks/detection/v1/fixtures.json"), "utf8"));
+  // Corpus versions live side by side (v1/, v1.1/, v1.2/); v1 stays the default
+  // so historical commands reproduce their original reports.
+  const corpusDir = process.argv[3] ?? "v1";
+  const corpus = JSON.parse(readFileSync(resolve(root, "benchmarks/detection", corpusDir, "fixtures.json"), "utf8"));
   const errors = validateCorpus(corpus);
   if (errors.length > 0) {
     console.error(`Invalid benchmark corpus (${errors.length} problem${errors.length === 1 ? "" : "s"}):`);

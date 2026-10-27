@@ -102,8 +102,13 @@ function isStrongLabelValue(value: string): boolean {
 
 const LABELLED_SECRET_SOURCE = `["']?(?:(${STRONG_LABEL})|(${WEAK_LABEL}))["']?\\s*(=>|[:=])\\s*(["']?)`;
 
-/** A call or method call: `name(`, `a.b.c(`. Identifier chains need a dot, so no backtracking. */
-const ARROW_CALL_BODY = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\(/;
+/**
+ * A call or method call: `name(`, `a.b.c(`, `name (`, `a ?.b(`. Each chain
+ * step needs a dot, so the identifier runs cannot backtrack into each other.
+ */
+const ARROW_CALL_BODY = /^[A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*\s*\(/;
+/** After the label: `.x`, `?.x`, or `[`, optionally after whitespace (`token ["x"]`). */
+const LABEL_ACCESS = /^\s*(?:\??\.|\[)/;
 
 /**
  * `=>` is also JavaScript arrow-function syntax. `token => token.trim()` or
@@ -114,7 +119,235 @@ const ARROW_CALL_BODY = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\(/;
  */
 function isArrowFunctionBody(rest: string, label: string): boolean {
   if (ARROW_CALL_BODY.test(rest)) return true;
-  return rest.slice(0, label.length).toLowerCase() === label.toLowerCase() && /^[.[]/.test(rest.slice(label.length));
+  return rest.slice(0, label.length).toLowerCase() === label.toLowerCase() && LABEL_ACCESS.test(rest.slice(label.length));
+}
+
+/** A character that can end an expression piece: a name, a dot, or a closing bracket. */
+const EXPRESSION_TAIL = /[A-Za-z0-9_$.)\]]/;
+/** After a quote glued to an expression, these show it closes enclosing text instead. */
+const CLOSING_QUOTE_FOLLOWER = /[\s,.;:!?)\]}]/;
+/** Top-level whitespace followed by one of these continues the expression (`x .then(...)`). */
+const EXPRESSION_CONTINUATION = /^\s*(?:\?\.|[.[(])/;
+
+interface ArrowBodyWord {
+  text: string;
+  start: number;
+  end: number;
+}
+
+interface ArrowBody {
+  /** Index just past the arrow expression. */
+  end: number;
+  /** False when the expression ran past the capture limit or a quote never closed. */
+  inspectable: boolean;
+  words: ArrowBodyWord[];
+  strings: { text: string; start: number }[];
+}
+
+const OPENERS = "([{";
+const CLOSERS = ")]}";
+
+/**
+ * Reads one arrow-function expression starting at `start`. It follows nested
+ * brackets and quoted strings, and stops where the expression ends: `,` or
+ * `;` at the top level, a closing bracket that belongs to an enclosing call,
+ * or top-level whitespace not followed by `.`, `?.`, `[`, or `(` (so
+ * `send(x) .then(...)` and multi-line chains stay one expression).
+ *
+ * Quotes: a quote glued to the expression (after a name, `.`, `)`, or `]`)
+ * is not valid code. It only ends the expression when whitespace, punctuation,
+ * or the end of the text follows it, which is how quoted prose or a
+ * JSON-quoted payload value closes; otherwise (`token.x"value`) the expression
+ * fails closed. A quote that starts an operand (after `(`, `,`, `+`, `[`) is
+ * read as a string. Escaped quotes (\" in a JSON-quoted value) follow the same
+ * rules. The expression must end within LABELLED_VALUE_CAPTURE_LIMIT
+ * characters and every string must close, or it is reported as not
+ * inspectable (fail closed).
+ */
+function readArrowBody(text: string, start: number): ArrowBody {
+  const limit = start + LABELLED_VALUE_CAPTURE_LIMIT;
+  const words: ArrowBodyWord[] = [];
+  const strings: { text: string; start: number }[] = [];
+  const failClosed = (): ArrowBody => ({ end: text.length, inspectable: false, words, strings });
+  let depth = 0;
+  let i = start;
+  while (i < text.length) {
+    if (i >= limit) return { end: i, inspectable: false, words, strings };
+    const c = text[i] ?? "";
+    const next = text[i + 1] ?? "";
+    const escapedQuote = c === "\\" && (next === '"' || next === "'");
+    if (escapedQuote || c === '"' || c === "'" || c === "`") {
+      const quote = escapedQuote ? next : c;
+      const width = escapedQuote ? 2 : 1;
+      const glued = i > start && EXPRESSION_TAIL.test(text[i - 1] ?? "");
+      if (glued) {
+        const follower = text[i + width];
+        if (depth === 0 && (follower === undefined || CLOSING_QUOTE_FOLLOWER.test(follower))) break;
+        return failClosed();
+      }
+      const close = escapedQuote ? text.indexOf(`\\${quote}`, i + 2) : findUnescapedQuote(text, quote, i + 1);
+      if (close === -1 || close >= limit) {
+        // An unclosed top-level quote that ends the text closes the enclosing value.
+        if (depth === 0 && i + width >= text.length) break;
+        return failClosed();
+      }
+      strings.push({ text: text.slice(i + width, close), start: i });
+      i = close + width;
+      continue;
+    }
+    if (OPENERS.includes(c)) {
+      depth += 1;
+    } else if (CLOSERS.includes(c)) {
+      if (depth === 0) break;
+      depth -= 1;
+    } else if (depth === 0 && (c === "," || c === ";")) {
+      break;
+    } else if (depth === 0 && /\s/.test(c)) {
+      // Whitespace continues the expression when a member access is still open
+      // (`token . name`, `token ?. name`, a dot on its own line) or when the
+      // next token continues it (`x .then(...)`); otherwise the expression ends.
+      const previous = previousNonSpace(text, i - 1);
+      const afterDot = previous >= start && text[previous] === ".";
+      if (!afterDot && !EXPRESSION_CONTINUATION.test(text.slice(i, limit))) break;
+    } else if (/[A-Za-z0-9_$]/.test(c)) {
+      let j = i + 1;
+      while (j < text.length && /[A-Za-z0-9_$]/.test(text[j] ?? "")) j += 1;
+      words.push({ text: text.slice(i, j), start: i, end: j });
+      i = j;
+      continue;
+    }
+    i += 1;
+  }
+  return { end: i, inspectable: true, words, strings };
+}
+
+function longestDigitRun(word: string): number {
+  return Math.max(0, ...(word.match(/\d+/g) ?? []).map((run) => run.length));
+}
+
+function letterDigitSwitches(word: string): number {
+  return (word.match(/[A-Za-z](?=\d)|\d(?=[A-Za-z])/g) ?? []).length;
+}
+
+/**
+ * Credential evidence that holds wherever a word sits in code: a run of 5+
+ * digits (identifiers carry versions, sizes, and years of at most 4 digits),
+ * or 4+ letter/digit switches (a1b2c3...). Bare numbers of 8+ digits count too.
+ */
+function isCredentialShapedWord(word: string): boolean {
+  if (/^\d+$/.test(word)) return word.length >= 8;
+  return longestDigitRun(word) >= 5 || letterDigitSwitches(word) >= 4;
+}
+
+/**
+ * A property name read (not called) from the labelled parameter must be an
+ * ordinary lowercase-first name of at most 20 characters; a longer read-only
+ * name keeps the original D-1 member rule and counts as a disguised value.
+ */
+const PLAIN_PROPERTY_NAME = /^[a-z][A-Za-z_]{0,19}$/;
+/** A long capitalised letters-only word in a value position reads as a passphrase, not a name. */
+const PASSPHRASE_WORD = /^[A-Z][A-Za-z]{19,}$/;
+
+/**
+ * M-2 policy for string literals inside a labelled arrow body: a single token
+ * of 8+ letters and digits that mixes upper case, lower case, and a digit has
+ * the shape of a password ('Hunter2024x') and counts as a credential. Codec,
+ * algorithm, and format names ('base64url', 'aes256gcm', 'HS256', 'utf8') do
+ * not mix all three. Lower-case-only or symbol-split credentials in a literal
+ * are a documented residual.
+ */
+function isPasswordShapedLiteral(literal: string): boolean {
+  return /^[A-Za-z0-9]{8,}$/.test(literal) && /[a-z]/.test(literal) && /[A-Z]/.test(literal) && /\d/.test(literal);
+}
+
+/**
+ * Policy for labelled `=>` arrow bodies (Phase D-1 remediation): names are
+ * code, values are evidence. The whole expression is inspected, and any of
+ * the following is a credential:
+ * - any word or string literal with a 5+ digit run or 4+ letter/digit switches;
+ * - a property read on the labelled parameter (`password.x.y`, `token[...]`,
+ *   `send(token.y)`) that is not invoked and is not a plain lowercase-first
+ *   name, so `password.Hunter2024x` or `password.CorrectHorseBatter` block
+ *   while `secret.isActive` and `token.length` do not;
+ * - a capitalised letters-only word of 20+ characters in a value position
+ *   (a passphrase such as `CorrectHorseBatteryStaple` passed as an argument);
+ * - a string literal used as a key on the parameter that is not a plain name,
+ *   or any string literal containing a 12+ letter-and-digit run.
+ * Called names (`toBase64String()`, `getAuthorizationHeaderValue()`,
+ * `hashPasswordV2(...)`) are judged only by the digit rules above.
+ */
+function arrowBodyHasCredential(text: string, body: ArrowBody, label: string): boolean {
+  const lowerLabel = label.toLowerCase();
+  const byEnd = new Map(body.words.map((w) => [w.end, w]));
+  // Member and bracket links tolerate whitespace (`password .x`, `token ?. x`,
+  // `token [ "k" ]`), matching how readArrowBody keeps spaced chains together.
+  const memberOwner = (word: ArrowBodyWord): ArrowBodyWord | undefined => {
+    const dot = previousNonSpace(text, word.start - 1);
+    if (text[dot] !== ".") return undefined;
+    const beforeDot = text[dot - 1] === "?" ? dot - 2 : dot - 1;
+    return byEnd.get(previousNonSpace(text, beforeDot) + 1);
+  };
+  const bracketOwner = (start: number): ArrowBodyWord | undefined => {
+    const bracket = previousNonSpace(text, start - 1);
+    if (text[bracket] !== "[") return undefined;
+    return byEnd.get(previousNonSpace(text, bracket - 1) + 1);
+  };
+  const chainRoot = (word: ArrowBodyWord): ArrowBodyWord => {
+    let current = word;
+    for (let owner = memberOwner(current); owner; owner = memberOwner(current)) current = owner;
+    return current;
+  };
+  const isParam = (word: ArrowBodyWord | undefined) => word !== undefined && word.text.toLowerCase() === lowerLabel;
+
+  for (const word of body.words) {
+    if (isCredentialShapedWord(word.text)) return true;
+    if (isParam(word)) continue;
+    // Only a call written directly against the name (`x()`) exempts it; a
+    // spaced `(` keeps the stricter property-name rules.
+    const invoked = text[word.end] === "(";
+    if (invoked) continue;
+    const root = chainRoot(word);
+    const isParamProperty = root !== word && isParam(root);
+    // A bare word inside brackets directly on the parameter (token[x]) is a key read.
+    const isParamIndex = isParam(bracketOwner(word.start));
+    if ((isParamProperty || isParamIndex) && !PLAIN_PROPERTY_NAME.test(word.text) && !/^\d+$/.test(word.text)) return true;
+    if (PASSPHRASE_WORD.test(word.text)) return true;
+  }
+
+  for (const literal of body.strings) {
+    const owner = bracketOwner(literal.start);
+    if (owner && (isParam(owner) || isParam(chainRoot(owner))) && !PLAIN_PROPERTY_NAME.test(literal.text)) return true;
+    for (const run of literal.text.match(/[A-Za-z0-9]{12,}/g) ?? []) {
+      if (/[A-Za-z]/.test(run) && /\d/.test(run)) return true;
+    }
+    if (isPasswordShapedLiteral(literal.text)) return true;
+    for (const word of literal.text.match(/[A-Za-z0-9_$]+/g) ?? []) {
+      if (isCredentialShapedWord(word) || PASSPHRASE_WORD.test(word)) return true;
+    }
+  }
+  return false;
+}
+
+/** Spans [label start, expression end) of every labelled unquoted `=>` value, for evidence redaction. */
+function arrowValueSpans(text: string): [number, number][] {
+  const spans: [number, number][] = [];
+  const pattern = new RegExp(LABELLED_SECRET_SOURCE, "gi");
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    const [whole, , , separator, openingQuote = ""] = match;
+    const valueStart = match.index + whole.length;
+    if (separator === "=>" && !openingQuote) {
+      const body = readArrowBody(text, valueStart);
+      if (!body.inspectable) {
+        // Fail closed: redact to the end, which already covers every later match.
+        spans.push([match.index, text.length]);
+        break;
+      }
+      spans.push([match.index, body.end]);
+    }
+    pattern.lastIndex = valueStart;
+  }
+  return spans;
 }
 const UNQUOTED_VALUE_PATTERN = new RegExp(`^[^\\s"']{1,${LABELLED_VALUE_CAPTURE_LIMIT}}`);
 /**
@@ -124,6 +357,13 @@ const UNQUOTED_VALUE_PATTERN = new RegExp(`^[^\\s"']{1,${LABELLED_VALUE_CAPTURE_
  * still read as the short value null rather than swallowing the next field.
  */
 const QUOTE_TOLERANT_VALUE_PATTERN = new RegExp(`^[^\\s,;)\\]}]{1,${LABELLED_VALUE_CAPTURE_LIMIT}}`);
+
+/** Index of the last non-whitespace character at or before `index`, or -1. */
+function previousNonSpace(text: string, index: number): number {
+  let i = index;
+  while (i >= 0 && /\s/.test(text[i] ?? "")) i -= 1;
+  return i;
+}
 
 /** Index of the next unescaped occurrence of `quote` at or after `from`, or -1. */
 function findUnescapedQuote(text: string, quote: string, from: number): number {
@@ -167,8 +407,14 @@ function hasLabelledSecret(text: string): boolean {
       continue;
     }
     const rest = text.slice(valueStart);
-    if (separator === "=>" && isArrowFunctionBody(rest, strongLabel ?? weakLabel ?? "")) {
-      pattern.lastIndex = valueStart; // Code, not a credential; keep scanning after it.
+    const arrowLabel = strongLabel ?? weakLabel ?? "";
+    if (separator === "=>" && isArrowFunctionBody(rest, arrowLabel)) {
+      // Judge the whole arrow expression and decide here: evidence of a
+      // credential (or an expression too long to inspect) is a BLOCK, never a
+      // fall-through to reading only the first token of the value.
+      const body = readArrowBody(text, valueStart);
+      if (!body.inspectable || arrowBodyHasCredential(text, body, arrowLabel)) return true;
+      pattern.lastIndex = valueStart; // Ordinary code; keep scanning for later labels.
       continue;
     }
     const judge = strongLabel ? isStrongLabelValue : isSecretShapedValue;
@@ -254,11 +500,46 @@ export function detectOutboundSecret(field: string, text: unknown): OutboundSecr
   return null;
 }
 
-/** Redact seeded-secret-shaped values and addresses. Applied to all evidence. */
+/** Replaces each span (merged where they overlap) with [REDACTED]. */
+function redactSpans(text: string, spans: [number, number][]): string {
+  const merged: [number, number][] = [];
+  for (const [s, e] of [...spans].sort((a, b) => a[0] - b[0])) {
+    const last = merged[merged.length - 1];
+    if (last && s <= last[1]) last[1] = Math.max(last[1], e);
+    else merged.push([s, e]);
+  }
+  let out = text;
+  for (const [s, e] of merged.reverse()) out = `${out.slice(0, s)}[REDACTED]${out.slice(e)}`;
+  return out;
+}
+
+/**
+ * Redact seeded-secret-shaped values and addresses. Applied to all evidence.
+ * A labelled `=>` value is redacted through the end of its arrow expression,
+ * the same extent the detector judges, so `token => send(a, <value>)` cannot
+ * leak the part after the first space.
+ */
 export function redactEvidence(text: string): string {
   let out = text.replace(/\s+/g, " ").trim();
+  out = redactSpans(out, arrowValueSpans(out));
   for (const pattern of SECRET_VALUE_PATTERNS) out = out.replace(pattern, "[REDACTED]");
+  out = redactSpans(out, credentialWordSpans(out));
   return out.length > 160 ? `${out.slice(0, 157)}...` : out;
+}
+
+/**
+ * Evidence-only: spans of unlabelled credential-shaped words (12+ letters and
+ * digits with a 5+ digit run, 4+ letter/digit switches, or 8+ bare digits),
+ * such as `token.x"fakeValue123456` outside any assignment. Over-redacting a
+ * build or order number in display text is harmless; leaking a value is not.
+ * This never affects BLOCK decisions.
+ */
+function credentialWordSpans(text: string): [number, number][] {
+  const spans: [number, number][] = [];
+  for (const m of text.matchAll(/[A-Za-z0-9_]{12,}/g)) {
+    if (isCredentialShapedWord(m[0])) spans.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
+  }
+  return spans;
 }
 
 function sentenceAround(text: string, index: number): string {
@@ -270,7 +551,7 @@ function sentenceAround(text: string, index: number): string {
 
 /** Character ranges of every secret-shaped span the redactor recognizes. */
 function secretSpans(text: string): [number, number][] {
-  const spans: [number, number][] = [];
+  const spans: [number, number][] = [...arrowValueSpans(text), ...credentialWordSpans(text)];
   for (const pattern of SECRET_VALUE_PATTERNS) {
     for (const m of text.matchAll(pattern)) {
       const at = m.index ?? 0;
