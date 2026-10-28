@@ -99,6 +99,12 @@ export const ALLOWLIST = [
     fingerprint: "a2d4dcc786d695260eae795ab2cc9d246b5cc23149561ec89335f0070c67ea26",
     reason: "Invented fakeBenchmark Bearer destination value, fixture f-03 in benchmarks/detection/v1.5/fixtures.json",
   },
+  {
+    id: "benchmark-m-02-bearer",
+    category: "bearer-token",
+    fingerprint: "fec594e2f52978d490e04376ee4acb80c7618db63043c9863a8158f2d3e677d9",
+    reason: "Invented fakeBenchmark Bearer tool value, fixture m-02 in benchmarks/detection/v1.8/fixtures.json",
+  },
 ];
 
 /** Protected dataset payloads: Git is told never to read them. */

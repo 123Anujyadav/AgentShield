@@ -50,11 +50,21 @@ Each version is a separate file and only appends fixtures to the previous one.
 | `v1.5` | 128 | Phase F `destination` family: 5 secret-shaped destination positives, 4 benign destination negatives, and 2 summary/payload-equivalent positives (`f-01`..`f-11`) | `post-f.json` |
 | `v1.6` | 135 | Phase G: `gap-01` reclassified to an `escaped-json` positive, 3 more `escaped-json` positives (summary/payload/destination), and 4 hard-benign escaped-text negatives (`g-01`..`g-23`) | `post-g.json` |
 | `v1.7` | 159 | Phase H: 15 `provider-token` positives (private-key blocks, AWS, GitHub, GitLab, Stripe live, Slack, and Google formats in summary, payload value, payload key, and destination) and 9 hard-benign near-miss and documentation negatives (`h-01`..`h-28`) | `post-h.json` |
+| `v1.8` | 166 | Phase M `metadata` family: secret-shaped `action.tool`/`action.type` positives (4) and benign tool/type negatives (3) (`m-01`..`m-22`) | `post-m.json` |
+| `v1.9` | 198 | `invisible-label` family: 19 positives with an approved invisible format character inside a credential label or prefix (strong and weak labels, JSON and escaped-JSON keys, Bearer, `sk-`, all seven Phase H formats, a seeded fake secret, and an email address) across summary, payload value, payload key, destination, tool, and type, every approved character group on its own at least once, plus one value detected only as written (`iv-01`..`iv-19`); 10 benign near-misses (`iv-30`..`iv-39`); and 3 `known-unsupported` gaps (`iv-40`..`iv-42`) | `pre-invisible-label.json`, `post-invisible-label.json` |
 
 Phase H fixtures never contain a credential-shaped literal. Their values are
 `__PH_*__` placeholders that `run-benchmark.mjs` expands at run time from
 clearly fake parts (placeholders also expand inside `payloadKey`). Earlier
 corpora use only the `__PAD_*__` placeholders, so their results are unchanged.
+
+Corpus v1.9 splits provider values the same way: `__PH_*_SPLIT_*__`
+placeholders are the Phase H values with one approved invisible character
+inserted, built from its code point at run time. Every corpus file is plain
+ASCII: any other character, including every invisible format character, is
+written as an uppercase `\uXXXX` escape, and the self-tests reject a file that
+is not in that canonical form, so no raw invisible or bidi character can hide in
+a fixture.
 
 Families in v1.4 (`arrow-disguise` and `arrow-code` grow from v1.3's 25 and 20):
 
@@ -66,13 +76,15 @@ Families in v1.4 (`arrow-disguise` and `arrow-code` grow from v1.3's 25 and 20):
 | decoy-and-nested | 4 | Benign first labels hiding a later real credential |
 | boundary-lengths | 4 | 255/256 generic-value boundary, padded secret, overlong field |
 | hard-benign | 25 in v1.7 (16 in v1.6, 12 before Phase G) | Prose and counts/booleans that must not BLOCK, plus 4 escaped-text negatives added in Phase G and 9 provider near-miss and documentation negatives added in Phase H (short suffix, glued prefix, wrong case, `xoxo` text, an over-long Google key, a private-key header on its own or with an elided body, and a public key) |
-| known-unsupported | 2 in v1.6 (3 before Phase G) | Documented gaps expected not to BLOCK under current policy: split credentials and unlabelled high-entropy strings. The escaped-JSON gap (`gap-01`) moved to `escaped-json` in v1.6 |
+| known-unsupported | 5 in v1.9 (2 in v1.6 to v1.8, 3 before Phase G) | Documented gaps expected not to BLOCK under current policy: split credentials and unlabelled high-entropy strings, and since v1.9 an invisible character used in place of the space after `Bearer`, a label split by U+061C (outside the approved set), and a label with a Cyrillic look-alike letter. The escaped-JSON gap (`gap-01`) moved to `escaped-json` in v1.6 |
 | c2-new-syntax | 10 | Phase C-2 additions: `passphrase=` and the `=>` separator (7 positives), plus 3 JavaScript arrow-function negatives |
 | arrow-disguise | 37 | Credentials disguised as an arrow-function body: extra arguments, padded parentheses, later member segments, bracket keys, label members as arguments, curried and chained calls (also after a space or newline), digit-bearing or capitalised member names, a passphrase argument, a quote glued to the expression, a mixed-case password literal, and spaced member chains |
 | arrow-code | 27 | Ordinary arrow-function code that must stay ALLOW: long or digit-bearing method names, year- or version-tagged identifiers, helper and library calls, format strings, codec and algorithm names, chains across spaces and lines (including spaced dots), and quoted code in prose |
 | destination | 11 | Phase F: secret-shaped values in `action.destination` (5 positives, 4 benign destination negatives) plus summary/payload equivalents (2 positives). No benign email-destination negative is included: email-shaped destinations are BLOCKed by current policy, even when allowlisted, so such a fixture would be a positive, not a negative |
 | escaped-json | 4 | Phase G: backslash-escaped JSON-style labelled credentials (`{\"api_key\": \"...\"}` as literal text) in summary, payload, and destination, plus the reclassified `gap-01` |
 | provider-token | 15 | Phase H: unlabelled provider credentials (PEM private-key blocks, AWS `AKIA`/`ASIA` key IDs, GitHub, GitLab, Stripe live, Slack, and Google API keys) in summary, payload value, payload key, and destination |
+| metadata | 7 | Phase M: secret-shaped values in `action.tool` and `action.type` (4 positives, 3 benign negatives). `intent.task` is not a benchmark field: it remains uninspected for decisions by policy |
+| invisible-label | 29 | v1.9: credential labels and prefixes split by an approved invisible format character (19 positives, including `iv-18`, a short value that blocks only as written because removing its zero-width spaces would shorten it below the minimum), and 10 benign near-misses that contain approved characters (a soft-hyphenated `password` in prose, `token: 42`, `secret: false`, `sk-learn`, a words-only `AKIA` lookalike, a leading byte-order mark, and benign tool and type names) |
 
 Expected results (`expectedBlock`) follow the documented detection policy and
 are never derived from detector output. Provenance note: the arrow-function
@@ -119,6 +131,17 @@ its own corpus version and the engine build that produced it.
 - `results/post-h.json`: corpus v1.7, Phase H provider-credential detector.
   TP 97, FP 0, TN 62, FN 0 (`provider-token` TP 15; `hard-benign` TN 25).
   The same detector on corpus v1.6 reproduces `post-g.json` byte-for-byte.
+- `results/pre-invisible-label.json`: corpus v1.9, the detector before the
+  invisible-label fix (the committed scanner with the Phase M evaluator).
+  TP 102, FP 0, TN 78, FN 18; precision 1.0, recall 0.85. The 18 false
+  negatives are every split-label positive except `iv-18`, which is detected
+  as written.
+- `results/post-invisible-label.json`: corpus v1.9, after the fix (each field
+  inspected as written, then, only if nothing matched, with the approved
+  invisible characters removed). TP 120, FP 0, TN 78, FN 0 (`invisible-label`
+  TP 19, TN 10; `known-unsupported` TN 5). The same detector reproduces
+  `post-g.json` (v1.6), `post-h.json` (v1.7), and `post-m.json` (v1.8)
+  byte-for-byte.
 
 `known-unsupported` fixtures describe real gaps (for example `gap-03`
 contains credential-like text) yet count as true negatives, because

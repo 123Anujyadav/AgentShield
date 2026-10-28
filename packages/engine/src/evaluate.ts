@@ -38,6 +38,14 @@ function findOutboundSecret(action: EvaluationInput["action"]): OutboundSecretMa
   }
   const destinationMatch = detectOutboundSecret("action.destination", action.destination);
   if (destinationMatch) return destinationMatch;
+  // Secret-shaped metadata (Phase M): tool and type are structural
+  // identifiers, not prose, so a credential-shaped value there is a hard
+  // BLOCK under the same guard. intent.task is free-form user prose and is
+  // intentionally not inspected for decisions.
+  const toolMatch = detectOutboundSecret("action.tool", action.tool);
+  if (toolMatch) return toolMatch;
+  const typeMatch = detectOutboundSecret("action.type", action.type);
+  if (typeMatch) return typeMatch;
   return null;
 }
 
@@ -107,8 +115,8 @@ export function evaluateAction(input: EvaluationInput): EvaluationResult {
       title: "Outbound action contains a secret-shaped value",
       explanation:
         outboundSecret.kind === "field-too-long-to-inspect"
-          ? "The proposed action has a summary, payload, or destination field too long to fully inspect for secret-shaped values, so it cannot be allowed or confirmed. Only the field position is reported."
-          : "The proposed action's summary, payload, or destination contains a value matching a supported secret pattern. Outbound actions must not carry secrets. Only the matching pattern family is reported; detection is limited to the documented patterns and is not comprehensive secret detection.",
+          ? "The proposed action has a summary, payload, destination, tool, or type field too long to fully inspect for secret-shaped values, so it cannot be allowed or confirmed. Only the field position is reported."
+          : "The proposed action's summary, payload, destination, tool, or type contains a value matching a supported secret pattern. Outbound actions must not carry secrets. Only the matching pattern family is reported; detection is limited to the documented patterns and is not comprehensive secret detection.",
       evidence: `field=${outboundSecret.field}; pattern=${outboundSecret.kind}; value=[REDACTED]`,
     }, `Blocked: "${shownType}" would send a secret-shaped value (${outboundSecret.kind} in ${outboundSecret.field}). This is a hard block; approval cannot override it and nothing was executed.`);
   }

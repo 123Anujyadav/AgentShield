@@ -621,6 +621,104 @@ describe("approval lifecycle and guarded execution", () => {
     expect(JSON.stringify(events.body)).not.toContain(marker);
   });
 
+  it("data-leak guard: secret-shaped tool and type BLOCK before simulation and on recheck (Phase M)", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const app = createApp({ simulator, approvalStore });
+    const toolMarker = "fakeBenchmarkToolApi123456";
+    const baseIntent = { task: "Summarize", allowedActions: ["create_summary"], deniedActions: [], allowedDestinations: ["simulated-workspace"] };
+    const toolRes = await request(app)
+      .post("/api/evaluate")
+      .send({ intent: baseIntent, action: { type: "create_summary", tool: `simulated.api_key=${toolMarker}`, destination: "simulated-workspace", summary: "Create" } });
+    expect(toolRes.body.evaluation.decision).toBe("BLOCK");
+    expect(toolRes.body.executed).toBe(false);
+    expect(toolRes.body.pendingApproval).toBeNull();
+    expect(JSON.stringify(toolRes.body)).not.toContain(toolMarker);
+    const typeMarker = "fakeBenchmarkTypeApi123456";
+    const typeValue = `create_summary.api_key=${typeMarker}`;
+    const typeRes = await request(app)
+      .post("/api/evaluate")
+      .send({ intent: { ...baseIntent, allowedActions: [typeValue] }, action: { type: typeValue, tool: "simulated.workspace.createSummary", destination: "simulated-workspace", summary: "Create" } });
+    expect(typeRes.body.evaluation.decision).toBe("BLOCK");
+    expect(JSON.stringify(typeRes.body)).not.toContain(typeMarker);
+    expect(simulator.invocationCount).toBe(0);
+
+    const pending = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const id = pending.body.pendingApproval.id as string;
+    const record = approvalStore.records.get(id);
+    if (!record) throw new Error("pending record missing");
+    record.action = { ...record.action, tool: `simulated.api_key=${toolMarker}` };
+    const list = await request(app).get("/api/approvals");
+    expect(JSON.stringify(list.body)).not.toContain(toolMarker);
+    const approved = await request(app).post(`/api/approvals/${id}/approve`).send({});
+    expect(approved.status).toBe(409);
+    expect(approved.body.approval.status).toBe("BLOCKED_ON_RECHECK");
+    expect(JSON.stringify(approved.body)).not.toContain(toolMarker);
+    expect(simulator.invocationCount).toBe(0);
+    const events = await request(app).get("/api/events");
+    expect(JSON.stringify(events.body)).not.toContain(toolMarker);
+    expect(JSON.stringify(events.body)).not.toContain(typeMarker);
+  });
+
+  it("data-leak guard: credential labels split by an invisible character BLOCK before simulation and on recheck", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const app = createApp({ simulator, approvalStore });
+    // Built from its code point, so the file holds no raw invisible character.
+    const zwsp = String.fromCharCode(0x200b);
+    const marker = "fakeInvisApiValue2026";
+    const split = `api${zwsp}_key=${marker}`;
+    const splitKey = `api${zwsp}_key`;
+    const intent = { task: "Summarize", allowedActions: ["create_summary"], deniedActions: [], allowedDestinations: ["simulated-workspace"] };
+    const base = { type: "create_summary", tool: "simulated.workspace.createSummary", destination: "simulated-workspace", summary: "Create" };
+    for (const action of [{ ...base, summary: split }, { ...base, tool: `simulated.${split}` }, { ...base, payload: { [splitKey]: marker } }]) {
+      const res = await request(app).post("/api/evaluate").send({ intent, action });
+      expect(res.body.evaluation.decision).toBe("BLOCK");
+      expect(res.body.evaluation.findings.at(-1).ruleId).toBe("data-leak.outbound-secret");
+      expect(res.body.executed).toBe(false);
+      expect(res.body.pendingApproval).toBeNull();
+      expect(JSON.stringify(res.body)).not.toContain(marker);
+    }
+    expect(simulator.invocationCount).toBe(0);
+
+    // A stored pending approval tampered to carry the split label is BLOCKed on recheck.
+    const pending = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const id = pending.body.pendingApproval.id as string;
+    const record = approvalStore.records.get(id);
+    if (!record) throw new Error("pending record missing");
+    record.action = { ...record.action, summary: split, tool: `simulated.${split}` };
+    record.intent = { ...record.intent, task: split };
+    const list = await request(app).get("/api/approvals");
+    expect(JSON.stringify(list.body)).not.toContain(marker);
+    const approved = await request(app).post(`/api/approvals/${id}/approve`).send({});
+    expect(approved.status).toBe(409);
+    expect(approved.body.approval.status).toBe("BLOCKED_ON_RECHECK");
+    expect(approved.body.executed).toBe(false);
+    expect(JSON.stringify(approved.body)).not.toContain(marker);
+    expect(simulator.invocationCount).toBe(0);
+
+    // Public approval views: a payload key that is itself secret-shaped once split is renamed
+    // (and, as for an unsplit secret key, its entry's value is replaced), and the value under a
+    // split credential label is replaced (the existing key contract).
+    const secretKeyMarker = "INVIS_API_SECRET_1";
+    const splitSecretKey = `FAKE_${zwsp}${secretKeyMarker}`;
+    const second = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const secondId = second.body.pendingApproval.id as string;
+    const secondRecord = approvalStore.records.get(secondId);
+    if (!secondRecord) throw new Error("pending record missing");
+    secondRecord.action = { ...secondRecord.action, payload: { [splitSecretKey]: "hello", [splitKey]: marker } };
+    const secondList = await request(app).get("/api/approvals");
+    const shown = secondList.body.approvals.find((a: { id: string }) => a.id === secondId);
+    expect(shown.action.payload).toEqual({ "[REDACTED] field-0": "[REDACTED]", [splitKey]: "[REDACTED]" });
+    const rejected = await request(app).post(`/api/approvals/${secondId}/reject`).send({});
+    const events = await request(app).get("/api/events");
+    for (const body of [secondList.body, rejected.body, events.body]) {
+      expect(JSON.stringify(body)).not.toContain(marker);
+      expect(JSON.stringify(body)).not.toContain(secretKeyMarker);
+    }
+    expect(simulator.invocationCount).toBe(0);
+  });
+
   it("data-leak guard: escaped-JSON credential BLOCKs before simulation and on recheck (Phase G)", async () => {
     const simulator = createSimulator();
     const approvalStore = createApprovalStore();
@@ -1579,29 +1677,36 @@ describe("Phase I: secret-shaped request metadata is never echoed", () => {
   /** [field, run(value, h)]; each run asserts the unchanged decisions and simulator counts. */
   const FIELDS: [string, (v: string, h: ReturnType<typeof harness>) => Promise<void>][] = [
     ["action.tool", async (v, h) => {
+      // Phase M: a secret-shaped tool is a hard BLOCK, not merely redacted.
       const action = { ...baseAction, tool: `simulated.workspace.createSummary?k=${v}` };
-      const allowed = await h.call("post", "/api/evaluate", { intent: baseIntent, action });
-      expect(allowed.body.evaluation.decision).toBe("ALLOW");
-      expect(allowed.body.executed).toBe(true);
-      await h.lifecycle({ intent: baseIntent, action, untrustedContent: suspicious }, 200, "EXECUTED");
-      // Redaction does not change execution: the allowed action and the approved one both ran.
-      expect(h.simulator.invocationCount).toBe(2);
+      const blocked = await h.call("post", "/api/evaluate", { intent: baseIntent, action });
+      expect(blocked.body.evaluation.decision).toBe("BLOCK");
+      expect(blocked.body.evaluation.findings.at(-1).ruleId).toBe("data-leak.outbound-secret");
+      expect(blocked.body.executed).toBe(false);
+      const pending = await h.call("post", "/api/evaluate", { scenarioId: "injection-in-document" });
+      const record = h.approvalStore.records.get(pending.body.pendingApproval.id);
+      if (!record) throw new Error("record missing");
+      record.action = { ...record.action, tool: action.tool };
+      await h.call("get", "/api/approvals");
+      const recheck = await h.call("post", `/api/approvals/${pending.body.pendingApproval.id}/approve`);
+      expect(recheck.status).toBe(409);
+      expect(recheck.body.approval.status).toBe("BLOCKED_ON_RECHECK");
+      expect(h.simulator.invocationCount).toBe(0);
     }],
     ["action.type", async (v, h) => {
       const action = { ...baseAction, type: v };
       const notAllowed = await h.call("post", "/api/evaluate", { intent: baseIntent, action });
       expect(notAllowed.body.evaluation.decision).toBe("BLOCK");
       const intentAllowed = { ...baseIntent, allowedActions: [v] };
-      const noHandler = await h.call("post", "/api/evaluate", { intent: intentAllowed, action });
-      expect(noHandler.body.evaluation.decision).toBe("ALLOW");
-      expect(noHandler.body.executed).toBe(false);
-      expect(noHandler.body.execution.reason).toContain("[REDACTED]");
+      // Phase M: a secret-shaped type is a hard BLOCK even when allowed.
+      const metadataBlock = await h.call("post", "/api/evaluate", { intent: intentAllowed, action });
+      expect(metadataBlock.body.evaluation.decision).toBe("BLOCK");
+      expect(metadataBlock.body.evaluation.findings.at(-1).ruleId).toBe("data-leak.outbound-secret");
+      expect(metadataBlock.body.executed).toBe(false);
       const denied = await h.call("post", "/api/evaluate", { intent: { ...baseIntent, deniedActions: [v] }, action });
       expect(denied.body.evaluation.findings.at(-1).ruleId).toBe("hard-deny.explicitly-forbidden-action");
       const dataLeak = await h.call("post", "/api/evaluate", { intent: baseIntent, action: { ...action, summary: "password=fakePhaseIsummary" } });
       expect(dataLeak.body.evaluation.findings.at(-1).ruleId).toBe("data-leak.outbound-secret");
-      // Approval recheck allows it but no handler exists, so nothing executes (unchanged behaviour).
-      await h.lifecycle({ intent: intentAllowed, action, untrustedContent: suspicious }, 200, "BLOCKED_ON_RECHECK");
       // Recheck BLOCK: a pending scenario approval whose stored type is not allowed.
       const pending = await h.call("post", "/api/evaluate", { scenarioId: "injection-in-document" });
       const record = h.approvalStore.records.get(pending.body.pendingApproval.id);

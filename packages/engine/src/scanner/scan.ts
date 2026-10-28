@@ -614,13 +614,13 @@ export function payloadAssignment(key: string, value: string): string {
 }
 
 /**
- * Inspects one outbound field for a recognized secret-shaped value.
- * Fields up to MAX_OUTBOUND_FIELD_LENGTH are scanned in full. A longer
- * field returns kind "field-too-long-to-inspect" so callers hard-BLOCK it
- * instead of silently truncating the scan. Non-string input never throws
- * and never matches. Returns only the pattern kind and field name.
+ * Inspects one outbound field, exactly as written, for a recognized
+ * secret-shaped value. Fields up to MAX_OUTBOUND_FIELD_LENGTH are scanned in
+ * full. A longer field returns kind "field-too-long-to-inspect" so callers
+ * hard-BLOCK it instead of silently truncating the scan. Non-string input
+ * never throws and never matches. Returns only the pattern kind and field name.
  */
-export function detectOutboundSecret(field: string, text: unknown): OutboundSecretMatch | null {
+function detectRawOutboundSecret(field: string, text: unknown): OutboundSecretMatch | null {
   if (typeof text !== "string" || text.length === 0) return null;
   if (text.length > MAX_OUTBOUND_FIELD_LENGTH) {
     return { kind: "field-too-long-to-inspect", field };
@@ -634,6 +634,25 @@ export function detectOutboundSecret(field: string, text: unknown): OutboundSecr
     if (detector.pattern.test(text)) return { kind: detector.kind, field };
   }
   return null;
+}
+
+/**
+ * Inspects one outbound field for a recognized secret-shaped value, used by
+ * every decision and every public-output redaction. The field is first
+ * inspected exactly as written, and a match there is returned unchanged.
+ * Only when that finds nothing is a copy with the Phase L invisible format
+ * characters (INVISIBLE_FORMAT_CHARACTERS) removed inspected too, so a label
+ * or prefix split by one of them ("api" + zero-width space + "_key=...") is
+ * still recognized. Raw first means nothing detected today is lost: removing
+ * characters can shorten a value below a minimum length. The size bound
+ * applies to the raw field, so a raw field over MAX_OUTBOUND_FIELD_LENGTH is
+ * reported as uninspectable before any normalization.
+ */
+export function detectOutboundSecret(field: string, text: unknown): OutboundSecretMatch | null {
+  const raw = detectRawOutboundSecret(field, text);
+  if (raw || typeof text !== "string") return raw;
+  const normalized = text.replace(INVISIBLE_FORMAT_CHARACTERS, "");
+  return normalized === text ? null : detectRawOutboundSecret(field, normalized);
 }
 
 /**

@@ -12,7 +12,7 @@ const good = { id: "x-01", family: "fam", field: "summary", text: "hello", expec
 const withFixtures = (...fixtures) => ({ corpus: "c", version: "v", fixtures });
 
 test("every corpus version validates cleanly and declares its own version", () => {
-  for (const [dir, version, count] of [["v1", "v1", 53], ["v1.1", "v1.1", 55], ["v1.2", "v1.2", 81], ["v1.3", "v1.3", 98], ["v1.4", "v1.4", 117], ["v1.5", "v1.5", 128], ["v1.6", "v1.6", 135], ["v1.7", "v1.7", 159]]) {
+  for (const [dir, version, count] of [["v1", "v1", 53], ["v1.1", "v1.1", 55], ["v1.2", "v1.2", 81], ["v1.3", "v1.3", 98], ["v1.4", "v1.4", 117], ["v1.5", "v1.5", 128], ["v1.6", "v1.6", 135], ["v1.7", "v1.7", 159], ["v1.8", "v1.8", 166], ["v1.9", "v1.9", 198]]) {
     const corpus = loadCorpus(dir);
     assert.deepEqual(validateCorpus(corpus), [], dir);
     assert.equal(corpus.version, version);
@@ -21,7 +21,7 @@ test("every corpus version validates cleanly and declares its own version", () =
 });
 
 test("each corpus version extends the previous one without changing earlier fixtures", () => {
-  const [v1, v11, v12, v13, v14, v15, v16, v17] = ["v1", "v1.1", "v1.2", "v1.3", "v1.4", "v1.5", "v1.6", "v1.7"].map(loadCorpus);
+  const [v1, v11, v12, v13, v14, v15, v16, v17, v18, v19] = ["v1", "v1.1", "v1.2", "v1.3", "v1.4", "v1.5", "v1.6", "v1.7", "v1.8", "v1.9"].map(loadCorpus);
   assert.deepEqual(v11.fixtures.slice(0, v1.fixtures.length), v1.fixtures);
   assert.deepEqual(v12.fixtures.slice(0, v11.fixtures.length), v11.fixtures);
   assert.deepEqual(v13.fixtures.slice(0, v12.fixtures.length), v12.fixtures);
@@ -39,6 +39,69 @@ test("each corpus version extends the previous one without changing earlier fixt
   });
   // v1.7 (Phase H) only appends to v1.6.
   assert.deepEqual(v17.fixtures.slice(0, v16.fixtures.length), v16.fixtures);
+  // v1.8 (Phase M) only appends to v1.7.
+  assert.deepEqual(v18.fixtures.slice(0, v17.fixtures.length), v17.fixtures);
+  // v1.9 (invisible characters in credential labels) only appends to v1.8.
+  assert.deepEqual(v19.fixtures.slice(0, v18.fixtures.length), v18.fixtures);
+});
+
+/** The approved invisible format characters (Phase L), as [first, last] code point groups. */
+const INVISIBLE_GROUPS = [[0x00ad], [0x180e], [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x2064], [0x2066, 0x2069], [0xfeff]];
+const inGroup = ([first, last = first], char) => char.codePointAt(0) >= first && char.codePointAt(0) <= last;
+const isInvisible = (char) => INVISIBLE_GROUPS.some((group) => inGroup(group, char));
+const escapeNonAscii = (text) =>
+  [...text].map((c) => (c.codePointAt(0) > 127 ? `\\u${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}` : c)).join("");
+
+test("every corpus file is canonical JSON with non-ASCII written as escapes, so no raw invisible character can hide", () => {
+  for (const dir of ["v1", "v1.1", "v1.2", "v1.3", "v1.4", "v1.5", "v1.6", "v1.7", "v1.8", "v1.9"]) {
+    const raw = readFileSync(resolve(here, dir, "fixtures.json"), "utf8");
+    assert.ok(![...raw].some((c) => c.codePointAt(0) > 127), `${dir} must hold only ASCII`);
+    assert.equal(raw, `${escapeNonAscii(JSON.stringify(JSON.parse(raw), null, 2))}\n`, dir);
+  }
+});
+
+test("v1.9 invisible-label fixtures cover every approved group, every field, and benign near-misses", () => {
+  const added = loadCorpus("v1.9").fixtures.slice(loadCorpus("v1.8").fixtures.length);
+  const expanded = (f) => [f.text, f.payloadKey, f.payloadValue].filter((v) => typeof v === "string").map(expand).join(" ");
+  const positives = added.filter((f) => f.family === "invisible-label" && f.expectedBlock);
+  const negatives = added.filter((f) => f.family === "invisible-label" && !f.expectedBlock);
+  assert.ok(positives.length >= 15 && negatives.length >= 8);
+  for (const field of ["summary", "payload", "destination", "tool", "type"]) {
+    assert.ok(positives.some((f) => f.field === field), `positives cover ${field}`);
+  }
+  assert.ok(positives.some((f) => f.payloadKey !== undefined), "a split payload key is covered");
+  // Every approved group is the only invisible character class in at least one positive.
+  for (const group of INVISIBLE_GROUPS) {
+    const sole = positives.filter((f) => {
+      const used = [...expanded(f)].filter(isInvisible);
+      return used.length > 0 && used.every((c) => inGroup(group, c));
+    });
+    assert.ok(sole.length > 0, `group U+${group[0].toString(16).toUpperCase()} is exercised on its own`);
+  }
+  assert.ok(negatives.every((f) => [...expanded(f)].some(isInvisible)), "every benign near-miss contains an approved character");
+});
+
+test("v1.9 split provider placeholders are the Phase H values with one approved character inserted", () => {
+  const pairs = [
+    ["__PH_GITHUB_SPLIT_FEFF__", "__PH_GITHUB_CLASSIC__"],
+    ["__PH_GITHUB_BODY_SPLIT_200B__", "__PH_GITHUB_CLASSIC__"],
+    ["__PH_GITLAB_SPLIT_200D__", "__PH_GITLAB__"],
+    ["__PH_AWS_SPLIT_200F__", "__PH_AWS_AKIA__"],
+    ["__PH_STRIPE_SPLIT_2062__", "__PH_STRIPE_SK__"],
+    ["__PH_SLACK_SPLIT_202E__", "__PH_SLACK_BOT__"],
+    ["__PH_GOOGLE_SPLIT_2069__", "__PH_GOOGLE__"],
+    ["__PH_PEM_SPLIT_200E__", "__PH_PEM_RSA__"],
+  ];
+  for (const [split, whole] of pairs) {
+    const value = expand(split);
+    const inserted = [...value].filter(isInvisible);
+    assert.equal(inserted.length, 1, split);
+    assert.equal(inserted[0].codePointAt(0).toString(16).toUpperCase().padStart(4, "0"), split.match(/_([0-9A-F]{4})__$/)[1], split);
+    assert.equal([...value].filter((c) => !isInvisible(c)).join(""), expand(whole), split);
+  }
+  // The corpus file holds no credential shape a split placeholder expands to.
+  const raw = readFileSync(resolve(here, "v1.9", "fixtures.json"), "utf8");
+  assert.doesNotMatch(raw, /(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30}|glpat-[A-Za-z0-9_-]{20}|(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35}|BEGIN (?:RSA )?PRIVATE KEY/);
 });
 
 test("Phase H fixtures carry provider credentials only as runtime placeholders", () => {

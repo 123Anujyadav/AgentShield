@@ -103,9 +103,10 @@ an unsplit one. Because the characters are removed rather than replaced, one use
 space joins the neighbouring words: "Ignore all previous instructions" with a zero-width space
 instead of each space is not matched (a known gap, not a regression; it was not matched before
 Phase L either). Not covered: other Unicode format characters, variation selectors, Hangul
-fillers, and look-alike letters (for example a Cyrillic "і" in "іgnore"). The outbound
-Data-Leak Guard is unchanged, so invisible characters inside credential labels remain a
-documented gap there.
+fillers, and look-alike letters (for example a Cyrillic "і" in "іgnore"). Outbound
+credential detection is separate: the Data-Leak Guard inspects each field as written and, only
+when that finds nothing, a copy with this same set removed (see "Invisible characters in
+credential labels" under the Data-Leak Guard below).
 
 ## Action Gate and approvals (Phase 3)
 
@@ -143,7 +144,7 @@ Intent Firewall: action types must be explicitly allowed, destinations must matc
 Conflicting allow+deny resolves to deny. Scanner findings stay separate from intent findings.
 
 Data-Leak Guard: the engine also inspects the outbound action's `summary`, `payload`,
-and `destination` before execution or confirmation. Current policy is security-first:
+`destination`, and (since Phase M) `tool` and `type` before execution or confirmation. Current policy is security-first:
 an email-shaped destination is hard-BLOCKed even when it is listed in
 `allowedDestinations`, because email addresses are a detected pattern. This is
 intentional for the current phase and may be reconsidered before legitimate
@@ -255,8 +256,9 @@ Residual gaps for these formats include key material split into short chunks, lo
 mixed-case variants of a prefix, and providers not listed here. A private-key header followed
 by a double-escaped `\\n` separator (a key inside JSON that was encoded twice) is not detected:
 the action is not blocked and public approval views do not redact the field, although evidence
-redaction still masks it from the header through its `END` line. JWTs, `Authorization: Basic`
-headers, and Unicode-obfuscated labels are not detected.
+redaction still masks it from the header through its `END` line. JWTs and `Authorization: Basic`
+headers are not detected, and Unicode obfuscation beyond the approved invisible format
+characters (described below), such as look-alike letters, is not detected either.
 
 Since Phase I, request metadata that the Data-Leak Guard would recognize is shown as
 `[REDACTED]` wherever it is echoed: `action.type` (finding evidence, explanations,
@@ -264,17 +266,43 @@ Since Phase I, request metadata that the Data-Leak Guard would recognize is show
 `intent.task` (events and approval views), `intent.id`, `intent.allowedActions`, and
 `intent.deniedActions` (approval views), each entry of `intent.allowedActions` and
 `intent.allowedDestinations` in finding evidence, and an unknown `scenarioId` in the 404 error. Redaction replaces the whole value, so
-a task that mentions an email address, for example, is also shown as `[REDACTED]`. It is
-display-only: decisions are unchanged, and a redacted value is not thereby safe to send.
+a task that mentions an email address, for example, is also shown as `[REDACTED]`. The
+redaction is display-only: it never changes a decision itself, and a redacted value is not
+thereby safe to send (Phase M, below, separately made `action.tool` and `action.type` decision
+inputs).
 
-Known unresolved limitations, left for a separately approved phase: `action.tool`,
-`action.type`, and `intent.task` are still not inspected for decisions, so a secret in
-`action.tool` does not block an otherwise allowed action (it is only redacted in output).
+Since Phase M, `action.tool` and `action.type` are also inspected for decisions: a
+secret-shaped value in either is a hard BLOCK under the same guard, before simulation
+and on approval recheck. Every supported pattern applies there, including the Phase G and
+Phase H formats, and a `tool` or `type` longer than 8,000 characters is hard-BLOCKed as
+uninspectable like any other inspected field (the API sets no shorter length limit for them).
+Fields are checked in the order summary, payload, destination, tool, type, and only the first
+match is reported. `intent.task` remains uninspected for decisions because it is
+free-form user prose; it is still redacted in public output when secret-shaped.
+
+Invisible characters in credential labels: every inspected field (summary, payload values and
+keys, destination, tool, type) is checked first exactly as written, and only when that finds
+nothing is a copy with the Phase L invisible format characters (the set listed under the
+Injection Scanner) removed checked too. A label or prefix split by one of them, such as `api`,
+a zero-width space, then `_key=...`, or a provider prefix split by a soft hyphen, is therefore a
+hard BLOCK with the same pattern kind as the unsplit value, and public display redaction, which
+uses the same detector, hides it in `action.type`, `action.tool`, `intent.task`, approval
+views, and events. Checking the field as written first keeps every existing detection:
+removing characters can shorten a value below a minimum length (`password=ab` followed by
+`c`, `d`, and `e`, each after a zero-width space, still blocks). The 8,000-character bound
+applies to the field as written, before normalization, and `intent.task` is still not
+inspected for decisions. Residual gaps: invisible characters outside the approved set (for
+example U+061C), look-alike letters, an invisible character used in place of the space after
+`Bearer` (the words are joined and no longer match), encoded secrets, and secrets split by
+visible characters. The repository secret scanner (`scripts/secret-scan.mjs`, see
+`docs/security-baseline.md`) is separate and does not remove invisible characters, so a
+credential split this way in a committed file is not found by it.
+
 Calling the engine's `scanUntrustedContent` directly with more than 8,000 characters scans
 only the first 8,000; the API rejects such content with HTTP 400.
 
 A deterministic synthetic benchmark for this detector lives in `benchmarks/detection/`
-(versioned corpora, 159 hand-authored fixtures in v1.7, per-family precision/recall,
+(versioned corpora, 198 hand-authored fixtures in v1.9, per-family precision/recall,
 synthetic corpus only; see its README). Malformed
 payloads (nested objects, arrays, null values) are rejected with HTTP 400 at the
 API boundary.

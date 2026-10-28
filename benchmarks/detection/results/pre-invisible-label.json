@@ -1,0 +1,233 @@
+{
+  "benchmark": "agentshield-detection-benchmark",
+  "corpusVersion": "v1.9",
+  "fixtures": 198,
+  "definition": "expectedBlock=true means the documented policy requires a hard BLOCK; precision = TP/(TP+FP), recall = TP/(TP+FN), null when the denominator is zero.",
+  "overall": {
+    "tp": 102,
+    "fp": 0,
+    "tn": 78,
+    "fn": 18,
+    "precision": 1,
+    "recall": 0.85
+  },
+  "perFamily": {
+    "arrow-code": {
+      "tp": 0,
+      "fp": 0,
+      "tn": 27,
+      "fn": 0,
+      "precision": null,
+      "recall": null
+    },
+    "arrow-disguise": {
+      "tp": 37,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "boundary-lengths": {
+      "tp": 3,
+      "fp": 0,
+      "tn": 1,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "c2-new-syntax": {
+      "tp": 7,
+      "fp": 0,
+      "tn": 3,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "decoy-and-nested": {
+      "tp": 4,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "destination": {
+      "tp": 7,
+      "fp": 0,
+      "tn": 4,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "escaped-json": {
+      "tp": 4,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "hard-benign": {
+      "tp": 0,
+      "fp": 0,
+      "tn": 25,
+      "fn": 0,
+      "precision": null,
+      "recall": null
+    },
+    "invisible-label": {
+      "tp": 1,
+      "fp": 0,
+      "tn": 10,
+      "fn": 18,
+      "precision": 1,
+      "recall": 0.0526
+    },
+    "known-unsupported": {
+      "tp": 0,
+      "fp": 0,
+      "tn": 5,
+      "fn": 0,
+      "precision": null,
+      "recall": null
+    },
+    "labelled-assignment": {
+      "tp": 8,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "metadata": {
+      "tp": 4,
+      "fp": 0,
+      "tn": 3,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "provider-token": {
+      "tp": 15,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "quoted-credential": {
+      "tp": 6,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "token-formats": {
+      "tp": 6,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    }
+  },
+  "failures": [
+    {
+      "id": "iv-01",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-02",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-03",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-04",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-05",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-06",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-07",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-08",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-09",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-10",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-11",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-12",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-13",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-14",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-15",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-16",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-17",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    },
+    {
+      "id": "iv-19",
+      "family": "invisible-label",
+      "kind": "false-negative"
+    }
+  ],
+  "limitations": [
+    "Synthetic hand-authored fixtures only; metrics estimate performance on similar synthetic text, not real-world traffic.",
+    "known-unsupported fixtures are expected not to block under the current documented policy and count as true negatives when they do not.",
+    "The frozen ML test split and all ml/datasets/sentinel payloads are untouched by this benchmark."
+  ]
+}

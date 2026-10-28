@@ -27,7 +27,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const DATA_LEAK_RULE = "data-leak.outbound-secret";
-const FIELDS = new Set(["summary", "payload", "destination"]);
+const FIELDS = new Set(["summary", "payload", "destination", "tool", "type"]);
 /**
  * Phase H provider-credential placeholders. Values are assembled here at run
  * time from clearly fake parts, so neither the corpus files nor this source
@@ -60,7 +60,29 @@ const PROVIDER_PLACEHOLDERS = {
   __PH_PEM_ELIDED__: join(pemArmor("BEGIN", PRIVATE_KEY_LABEL), "\nMIIEvQIBADANBg...\n", pemArmor("END", PRIVATE_KEY_LABEL)),
   __PH_PEM_PUBLIC__: join(pemArmor("BEGIN", "PUBLIC KEY"), "\n", PEM_BODY, "\n", pemArmor("END", "PUBLIC KEY")),
 };
-const PLACEHOLDERS = { __PAD_2500__: "a".repeat(2500), __PAD_9000__: "a".repeat(9000), ...PROVIDER_PLACEHOLDERS };
+/**
+ * v1.9 placeholders: a provider value with one approved invisible format
+ * character inserted inside its prefix (or, for one GitHub case, its body).
+ * Characters are built from their code points, so neither this file nor the
+ * corpus holds a raw invisible character. Earlier corpora do not use them.
+ */
+const insertAt = (value, index, codePoint) => join(value.slice(0, index), String.fromCharCode(codePoint), value.slice(index));
+const INVISIBLE_SPLIT_PLACEHOLDERS = {
+  __PH_GITHUB_SPLIT_FEFF__: insertAt(PROVIDER_PLACEHOLDERS.__PH_GITHUB_CLASSIC__, 2, 0xfeff),
+  __PH_GITHUB_BODY_SPLIT_200B__: insertAt(PROVIDER_PLACEHOLDERS.__PH_GITHUB_CLASSIC__, 16, 0x200b),
+  __PH_GITLAB_SPLIT_200D__: insertAt(PROVIDER_PLACEHOLDERS.__PH_GITLAB__, 2, 0x200d),
+  __PH_AWS_SPLIT_200F__: insertAt(PROVIDER_PLACEHOLDERS.__PH_AWS_AKIA__, 2, 0x200f),
+  __PH_STRIPE_SPLIT_2062__: insertAt(PROVIDER_PLACEHOLDERS.__PH_STRIPE_SK__, 3, 0x2062),
+  __PH_SLACK_SPLIT_202E__: insertAt(PROVIDER_PLACEHOLDERS.__PH_SLACK_BOT__, 2, 0x202e),
+  __PH_GOOGLE_SPLIT_2069__: insertAt(PROVIDER_PLACEHOLDERS.__PH_GOOGLE__, 2, 0x2069),
+  __PH_PEM_SPLIT_200E__: insertAt(PROVIDER_PLACEHOLDERS.__PH_PEM_RSA__, 19, 0x200e),
+};
+const PLACEHOLDERS = {
+  __PAD_2500__: "a".repeat(2500),
+  __PAD_9000__: "a".repeat(9000),
+  ...PROVIDER_PLACEHOLDERS,
+  ...INVISIBLE_SPLIT_PLACEHOLDERS,
+};
 const PLACEHOLDER_TOKEN = /__[A-Z0-9_]+__/g;
 
 /** Replaces every known placeholder; an unknown placeholder is an error, never left in place. */
@@ -94,7 +116,7 @@ export function validateCorpus(corpus) {
     else if (seen.has(fixture.id)) errors.push(`${at}: duplicate id`);
     else seen.add(fixture.id);
     if (typeof fixture.family !== "string" || !fixture.family) errors.push(`${at}: family must be a non-empty string`);
-    if (!FIELDS.has(fixture.field)) errors.push(`${at}: field must be "summary", "payload", or "destination"`);
+    if (!FIELDS.has(fixture.field)) errors.push(`${at}: field must be "summary", "payload", "destination", "tool", or "type"`);
     if (typeof fixture.expectedBlock !== "boolean") errors.push(`${at}: expectedBlock must be true or false`);
     if (typeof fixture.text !== "string" || !fixture.text) errors.push(`${at}: text must be a non-empty string`);
     if (fixture.field !== "payload" && (fixture.payloadKey !== undefined || fixture.payloadValue !== undefined)) {
@@ -120,6 +142,12 @@ export function validateCorpus(corpus) {
 
 /** Builds the action for one fixture from the benign scenario. */
 export function actionFor(baseAction, fixture) {
+  if (fixture.field === "tool") {
+    return { ...baseAction, tool: expand(fixture.text) };
+  }
+  if (fixture.field === "type") {
+    return { ...baseAction, type: expand(fixture.text) };
+  }
   if (fixture.field === "destination") {
     return { ...baseAction, destination: expand(fixture.text) };
   }
@@ -205,7 +233,9 @@ async function main() {
     const intent =
       fixture.field === "destination"
         ? { ...scenario.intent, allowedDestinations: [expand(fixture.text)] }
-        : scenario.intent;
+        : fixture.field === "type"
+          ? { ...scenario.intent, allowedActions: [expand(fixture.text)] }
+          : scenario.intent;
     return evaluateAction({ intent, action: actionFor(scenario.action, fixture) });
   });
 
