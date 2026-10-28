@@ -123,6 +123,14 @@ export function toPublicApproval(record: ApprovalRecord): PendingApproval {
   if (detectOutboundSecret("action.summary", pub.action.summary)) {
     pub.action.summary = "[REDACTED]";
   }
+  if (detectOutboundSecret("action.destination", pub.action.destination)) {
+    pub.action.destination = "[REDACTED]";
+  }
+  if (pub.intent.allowedDestinations) {
+    pub.intent.allowedDestinations = pub.intent.allowedDestinations.map((destination) =>
+      detectOutboundSecret("action.destination", destination) ? "[REDACTED]" : destination,
+    );
+  }
   if (pub.action.payload) {
     const sanitized: NonNullable<typeof pub.action.payload> = {};
     const entries = Object.entries(pub.action.payload);

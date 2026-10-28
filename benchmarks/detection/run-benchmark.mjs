@@ -27,7 +27,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const DATA_LEAK_RULE = "data-leak.outbound-secret";
-const FIELDS = new Set(["summary", "payload"]);
+const FIELDS = new Set(["summary", "payload", "destination"]);
 const PLACEHOLDERS = { __PAD_2500__: "a".repeat(2500), __PAD_9000__: "a".repeat(9000) };
 const PLACEHOLDER_TOKEN = /__[A-Z0-9_]+__/g;
 
@@ -62,7 +62,7 @@ export function validateCorpus(corpus) {
     else if (seen.has(fixture.id)) errors.push(`${at}: duplicate id`);
     else seen.add(fixture.id);
     if (typeof fixture.family !== "string" || !fixture.family) errors.push(`${at}: family must be a non-empty string`);
-    if (!FIELDS.has(fixture.field)) errors.push(`${at}: field must be "summary" or "payload"`);
+    if (!FIELDS.has(fixture.field)) errors.push(`${at}: field must be "summary", "payload", or "destination"`);
     if (typeof fixture.expectedBlock !== "boolean") errors.push(`${at}: expectedBlock must be true or false`);
     if (typeof fixture.text !== "string" || !fixture.text) errors.push(`${at}: text must be a non-empty string`);
     if (fixture.field !== "payload" && (fixture.payloadKey !== undefined || fixture.payloadValue !== undefined)) {
@@ -88,6 +88,9 @@ export function validateCorpus(corpus) {
 
 /** Builds the action for one fixture from the benign scenario. */
 export function actionFor(baseAction, fixture) {
+  if (fixture.field === "destination") {
+    return { ...baseAction, destination: expand(fixture.text) };
+  }
   if (fixture.field === "payload") {
     const key = fixture.payloadKey ?? "note";
     const raw = fixture.payloadValue ?? fixture.text;
@@ -164,9 +167,15 @@ async function main() {
   const { evaluateAction, getScenario } = await import("../../packages/engine/dist/index.js");
   const scenario = getScenario("benign-summary");
   if (!scenario) throw new Error("benign-summary scenario missing from built engine");
-  const report = scoreCorpus(corpus, (fixture) =>
-    evaluateAction({ intent: scenario.intent, action: actionFor(scenario.action, fixture) }),
-  );
+  const report = scoreCorpus(corpus, (fixture) => {
+    // A destination fixture is judged on its secret content, not on whether
+    // the fixture text happens to be an allowed destination.
+    const intent =
+      fixture.field === "destination"
+        ? { ...scenario.intent, allowedDestinations: [expand(fixture.text)] }
+        : scenario.intent;
+    return evaluateAction({ intent, action: actionFor(scenario.action, fixture) });
+  });
 
   const outName = process.argv[2] ?? "latest";
   const outDir = resolve(root, "benchmarks/detection/results");

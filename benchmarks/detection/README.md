@@ -47,6 +47,7 @@ Each version is a separate file and only appends fixtures to the previous one.
 | `v1.2` | 81 | 14 `arrow-disguise` positives (`d1r-01`..`d1r-14`) and 12 `arrow-code` negatives (`d1r-20`..`d1r-31`) | `post-d1-remediation.json` |
 | `v1.3` | 98 | 9 `arrow-disguise` positives for quote and whitespace boundaries and the mixed-case literal rule (`d1s-01`..`d1s-09`) and 8 `arrow-code` negatives (`d1s-20`..`d1s-27`) | `post-d1-boundary-remediation.json` |
 | `v1.4` | 117 | 12 `arrow-disguise` positives for spaced member chains (`token . x`, `token ?. x`, `send(x) . then(...)`, `password .x`, a dot on its own line), each in summary and payload (`d1t-01`..`d1t-12`), and 7 `arrow-code` negatives (`d1t-20`..`d1t-26`) | `post-d1-spaced-chain-remediation.json` |
+| `v1.5` | 128 | Phase F `destination` family: 5 secret-shaped destination positives, 4 benign destination negatives, and 2 summary/payload-equivalent positives (`f-01`..`f-11`) | `post-f.json` |
 
 Families in v1.4 (`arrow-disguise` and `arrow-code` grow from v1.3's 25 and 20):
 
@@ -62,6 +63,7 @@ Families in v1.4 (`arrow-disguise` and `arrow-code` grow from v1.3's 25 and 20):
 | c2-new-syntax | 10 | Phase C-2 additions: `passphrase=` and the `=>` separator (7 positives), plus 3 JavaScript arrow-function negatives |
 | arrow-disguise | 37 | Credentials disguised as an arrow-function body: extra arguments, padded parentheses, later member segments, bracket keys, label members as arguments, curried and chained calls (also after a space or newline), digit-bearing or capitalised member names, a passphrase argument, a quote glued to the expression, a mixed-case password literal, and spaced member chains |
 | arrow-code | 27 | Ordinary arrow-function code that must stay ALLOW: long or digit-bearing method names, year- or version-tagged identifiers, helper and library calls, format strings, codec and algorithm names, chains across spaces and lines (including spaced dots), and quoted code in prose |
+| destination | 11 | Phase F: secret-shaped values in `action.destination` (5 positives, 4 benign destination negatives) plus summary/payload equivalents (2 positives). No benign email-destination negative is included: email-shaped destinations are BLOCKed by current policy, even when allowlisted, so such a fixture would be a positive, not a negative |
 
 Expected results (`expectedBlock`) follow the documented detection policy and
 are never derived from detector output. Provenance note: the arrow-function

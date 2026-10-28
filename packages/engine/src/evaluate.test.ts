@@ -389,6 +389,47 @@ describe("evaluateAction (walking skeleton)", () => {
     expect(result.decision).toBe("ALLOW");
   });
 
+  it.each([
+    ["labelled", "api_key=fakeBenchmarkDest123456", "fakeBenchmarkDest123456"],
+    ["sk-style", "sk-proj-" + "fakeBenchmarkDest123456", "fakeBenchmarkDest123456"],
+    ["bearer", "Bearer " + "fakeBenchmarkDestBearer123456", "fakeBenchmarkDestBearer123456"],
+    ["email", "user.fakeBenchmarkDest123456@example.com", "fakeBenchmarkDest123456"],
+  ])("data-leak guard: secret-shaped destination is BLOCKed (%s)", (_label, destination, marker) => {
+    const scenario = getScenario("benign-summary");
+    if (!scenario) throw new Error("missing scenario");
+    const intent = { ...scenario.intent, allowedDestinations: [destination] };
+    const result = evaluateAction({ intent, action: { ...scenario.action, destination } });
+    expect(result.decision).toBe("BLOCK");
+    expect(result.findings.some((f) => f.ruleId === "data-leak.outbound-secret" && f.evidence.includes("field=action.destination"))).toBe(true);
+    expect(JSON.stringify(result)).not.toContain(marker);
+  });
+
+  it.each([
+    ["workspace", "simulated-workspace"],
+    ["url", "https://example.com/reports/summary"],
+    ["path", "reports/2026/summary-output"],
+  ])("data-leak guard: benign destination does not BLOCK (%s)", (_label, destination) => {
+    const scenario = getScenario("benign-summary");
+    if (!scenario) throw new Error("missing scenario");
+    const intent = { ...scenario.intent, allowedDestinations: [destination] };
+    const result = evaluateAction({ intent, action: { ...scenario.action, destination } });
+    expect(result.decision).toBe("ALLOW");
+  });
+
+  it("data-leak guard: summary takes precedence when summary and destination both carry secrets", () => {
+    const scenario = getScenario("benign-summary");
+    if (!scenario) throw new Error("missing scenario");
+    const destination = "api_key=fakeBenchmarkDestPrecedence123";
+    const intent = { ...scenario.intent, allowedDestinations: [destination] };
+    const result = evaluateAction({
+      intent,
+      action: { ...scenario.action, summary: "api_key=fakeBenchmarkSummaryPrecedence123", destination },
+    });
+    expect(result.decision).toBe("BLOCK");
+    expect(result.findings.some((f) => f.evidence.includes("field=action.summary"))).toBe(true);
+    expect(JSON.stringify(result)).not.toContain("fakeBenchmarkDestPrecedence123");
+  });
+
   it("scanner evidence never echoes an arrow-disguised credential from untrusted content", () => {
     const scenario = getScenario("benign-summary");
     if (!scenario) throw new Error("missing scenario");

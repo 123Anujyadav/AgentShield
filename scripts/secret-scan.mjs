@@ -87,6 +87,18 @@ export const ALLOWLIST = [
     fingerprint: "25b43f6bb92a438f4e1b5c05b13b2f7c8bcda03e76df063862593c0418a7d982",
     reason: "Invented fakeBenchmark sk-ant value, fixture tok-03 in benchmarks/detection/*/fixtures.json",
   },
+  {
+    id: "benchmark-f-02-sk-proj",
+    category: "sk-" + "style-token",
+    fingerprint: "9e98e94f851c6f7349ce7d7ae8daf62d632c6339643d8ac1147caeeeffff36f1",
+    reason: "Invented fakeBenchmark sk-proj destination value, fixture f-02 in benchmarks/detection/v1.5/fixtures.json",
+  },
+  {
+    id: "benchmark-f-03-bearer",
+    category: "bearer-token",
+    fingerprint: "a2d4dcc786d695260eae795ab2cc9d246b5cc23149561ec89335f0070c67ea26",
+    reason: "Invented fakeBenchmark Bearer destination value, fixture f-03 in benchmarks/detection/v1.5/fixtures.json",
+  },
 ];
 
 /** Protected dataset payloads: Git is told never to read them. */

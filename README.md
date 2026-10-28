@@ -102,8 +102,12 @@ Intent Firewall: action types must be explicitly allowed, destinations must matc
 `allowedDestinations` when present, and missing/empty permissions block conservatively.
 Conflicting allow+deny resolves to deny. Scanner findings stay separate from intent findings.
 
-Data-Leak Guard: the engine also inspects the outbound action's `summary` and `payload`
-before execution or confirmation. A value matching a supported secret pattern — labelled
+Data-Leak Guard: the engine also inspects the outbound action's `summary`, `payload`,
+and `destination` before execution or confirmation. Current policy is security-first:
+an email-shaped destination is hard-BLOCKed even when it is listed in
+`allowedDestinations`, because email addresses are a detected pattern. This is
+intentional for the current phase and may be reconsidered before legitimate
+email-targeting workflows are introduced. A value matching a supported secret pattern — labelled
 assignments such as `api_key=`, `access_token=`, `client_secret=`, `auth_token=`,
 `private_key=`, `refresh_token=`, `session_token=`, `secret_key=`, `db_password=`,
 `aws_secret_access_key=`, `x-api-key`, `passphrase=`, `password:`/`token:` with `=`, `:`,
@@ -180,7 +184,7 @@ words (display only). Residual gaps: a lower-case-only credential literal
 not detected as arrow-body credentials. Known gaps also include labels outside the list and
 backslash-escaped JSON written as text (`{\"api_key\": ...}`).
 A deterministic synthetic benchmark for this detector lives in `benchmarks/detection/`
-(versioned corpora, 117 hand-authored fixtures in v1.4, per-family precision/recall,
+(versioned corpora, 128 hand-authored fixtures in v1.5, per-family precision/recall,
 synthetic corpus only; see its README). Malformed
 payloads (nested objects, arrays, null values) are rejected with HTTP 400 at the
 API boundary.

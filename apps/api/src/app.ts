@@ -16,7 +16,7 @@ import { createSimulator, type Simulator } from "./simulator.js";
 import { ModelAnalysisService } from "./model/analyze.js";
 import { loadModelConfig, type ModelConfig } from "./model/config.js";
 import { selectModelProvider } from "./model/live.js";
-import { failedAnalysis } from "@agentshield/engine";
+import { detectOutboundSecret, failedAnalysis } from "@agentshield/engine";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -106,10 +106,15 @@ export function createApp(deps: AppDeps = {}) {
   function recordEvent(
     partial: Omit<ActivityEvent, "id" | "timestamp">,
   ): ActivityEvent {
+    // A secret-shaped destination is never stored in the public event log.
+    const safePartial =
+      partial.destination && detectOutboundSecret("action.destination", partial.destination)
+        ? { ...partial, destination: "[REDACTED]" }
+        : partial;
     const event: ActivityEvent = {
       id: `evt-${nextId++}`,
       timestamp: new Date().toISOString(),
-      ...partial,
+      ...safePartial,
     };
     events.push(event);
     return event;

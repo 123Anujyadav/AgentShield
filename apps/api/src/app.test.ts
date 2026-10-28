@@ -583,6 +583,141 @@ describe("approval lifecycle and guarded execution", () => {
     expect(simulator.invocationCount).toBe(1);
   });
 
+  it("data-leak guard: secret-shaped destination BLOCKs before simulation and on recheck, with no leaked output", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const app = createApp({ simulator, approvalStore });
+    const marker = "fakeBenchmarkDest123456";
+    const intent = { task: "Summarize", allowedActions: ["create_summary"], deniedActions: [], allowedDestinations: [`api_key=${marker}`] };
+    const res = await request(app)
+      .post("/api/evaluate")
+      .send({
+        intent,
+        action: { type: "create_summary", tool: "simulated.workspace.createSummary", destination: `api_key=${marker}`, summary: "Create a summary" },
+      });
+    expect(res.body.evaluation.decision).toBe("BLOCK");
+    expect(res.body.executed).toBe(false);
+    expect(res.body.pendingApproval).toBeNull();
+    expect(JSON.stringify(res.body)).not.toContain(marker);
+    expect(simulator.invocationCount).toBe(0);
+    const eventsAfterBlock = await request(app).get("/api/events");
+    expect(JSON.stringify(eventsAfterBlock.body)).not.toContain(marker);
+
+    const pending = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const id = pending.body.pendingApproval.id as string;
+    const record = approvalStore.records.get(id);
+    if (!record) throw new Error("pending record missing");
+    record.action = { ...record.action, destination: `api_key=${marker}` };
+    const list = await request(app).get("/api/approvals");
+    expect(JSON.stringify(list.body)).not.toContain(marker);
+    expect(JSON.stringify(list.body)).toContain("[REDACTED]");
+    const approved = await request(app).post(`/api/approvals/${id}/approve`).send({});
+    expect(approved.status).toBe(409);
+    expect(approved.body.approval.status).toBe("BLOCKED_ON_RECHECK");
+    expect(approved.body.executed).toBe(false);
+    expect(JSON.stringify(approved.body)).not.toContain(marker);
+    expect(simulator.invocationCount).toBe(0);
+    const events = await request(app).get("/api/events");
+    expect(JSON.stringify(events.body)).not.toContain(marker);
+  });
+
+  it("data-leak guard: event destinations are redacted on hard-deny and over-long block paths", async () => {
+    const simulator = createSimulator();
+    const app = createApp({ simulator });
+    const marker = "fakeBenchmarkDestEvent123456";
+    const hardDeny = await request(app)
+      .post("/api/evaluate")
+      .send({
+        intent: { task: "Summarize", allowedActions: ["create_summary"], deniedActions: ["create_summary"], allowedDestinations: [] },
+        action: { type: "create_summary", tool: "simulated.workspace.createSummary", destination: `api_key=${marker}`, summary: "Create" },
+      });
+    expect(hardDeny.body.evaluation.decision).toBe("BLOCK");
+    const longDestination = `https://example.com/${"a".repeat(9000)}`;
+    const overLong = await request(app)
+      .post("/api/evaluate")
+      .send({
+        intent: { task: "Summarize", allowedActions: ["create_summary"], deniedActions: [], allowedDestinations: [longDestination] },
+        action: { type: "create_summary", tool: "simulated.workspace.createSummary", destination: longDestination, summary: "Create" },
+      });
+    expect(overLong.body.evaluation.decision).toBe("BLOCK");
+    expect(simulator.invocationCount).toBe(0);
+    const events = await request(app).get("/api/events");
+    expect(JSON.stringify(events.body)).not.toContain(marker);
+    expect(JSON.stringify(events.body)).toContain("[REDACTED]");
+    // The over-long destination itself must not survive in any event: no long
+    // run of the repeated padding character may appear. This catches a
+    // regression in the over-long path specifically, not just the hard-deny.
+    expect(JSON.stringify(events.body)).not.toContain("a".repeat(100));
+    const overLongEvent = (events.body.events as { destination?: string }[]).find(
+      (e) => typeof e.destination === "string" && e.destination.length > 100,
+    );
+    expect(overLongEvent).toBeUndefined();
+  });
+
+  it("data-leak guard: mutated secret destination on reject and expiry paths never executes or leaks", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const app = createApp({ simulator, approvalStore });
+    const marker = "fakeBenchmarkDestReject123456";
+    const pending = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const id = pending.body.pendingApproval.id as string;
+    const record = approvalStore.records.get(id);
+    if (!record) throw new Error("pending record missing");
+    record.action = { ...record.action, destination: `api_key=${marker}` };
+    const rejected = await request(app).post(`/api/approvals/${id}/reject`).send({});
+    expect(rejected.body.approval.status).toBe("REJECTED");
+    expect(rejected.body.executed).toBe(false);
+    expect(JSON.stringify(rejected.body)).not.toContain(marker);
+    expect(simulator.invocationCount).toBe(0);
+
+    const pending2 = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const id2 = pending2.body.pendingApproval.id as string;
+    const record2 = approvalStore.records.get(id2);
+    if (!record2) throw new Error("pending record missing");
+    record2.action = { ...record2.action, destination: `api_key=${marker}` };
+    record2.expiresAt = new Date(Date.now() - 1000).toISOString();
+    const list = await request(app).get("/api/approvals");
+    expect(JSON.stringify(list.body)).not.toContain(marker);
+    const expired = await request(app).post(`/api/approvals/${id2}/approve`).send({});
+    expect(expired.status).toBe(410);
+    expect(expired.body.executed).toBe(false);
+    expect(JSON.stringify(expired.body)).not.toContain(marker);
+    expect(simulator.invocationCount).toBe(0);
+    const events = await request(app).get("/api/events");
+    expect(JSON.stringify(events.body)).not.toContain(marker);
+  });
+
+  it("data-leak guard: URL query credential in destination and allowedDestinations redaction", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const app = createApp({ simulator, approvalStore });
+    const queryMarker = "fakeBenchmarkQuery123456";
+    const res = await request(app)
+      .post("/api/evaluate")
+      .send({
+        intent: { task: "Summarize", allowedActions: ["create_summary"], deniedActions: [], allowedDestinations: [`https://example.com/x?token=${queryMarker}`] },
+        action: { type: "create_summary", tool: "simulated.workspace.createSummary", destination: `https://example.com/x?token=${queryMarker}`, summary: "Create" },
+      });
+    expect(res.body.evaluation.decision).toBe("BLOCK");
+    expect(JSON.stringify(res.body)).not.toContain(queryMarker);
+    expect(simulator.invocationCount).toBe(0);
+    const queryEvents = await request(app).get("/api/events");
+    expect(JSON.stringify(queryEvents.body)).not.toContain(queryMarker);
+
+    const allowMarker = "fakeBenchmarkAllowDest123456";
+    const pending = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    const id = pending.body.pendingApproval.id as string;
+    const record = approvalStore.records.get(id);
+    if (!record) throw new Error("pending record missing");
+    record.intent = { ...record.intent, allowedDestinations: ["simulated-workspace", `api_key=${allowMarker}`] };
+    const list = await request(app).get("/api/approvals");
+    expect(JSON.stringify(list.body)).not.toContain(allowMarker);
+    expect(JSON.stringify(list.body)).toContain("simulated-workspace");
+    expect(JSON.stringify(record.intent)).toContain(allowMarker);
+    const single = list.body.approvals.find((a: { id: string }) => a.id === id);
+    expect(single.intent.allowedDestinations).toContain("[REDACTED]");
+  });
+
   it("data-leak guard: a generic-labelled value past the 256-character cap is BLOCKed with no execution", async () => {
     const simulator = createSimulator();
     const app = createApp({ simulator });

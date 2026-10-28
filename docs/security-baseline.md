@@ -94,8 +94,8 @@ which cannot be annotated without rewriting it.
 Allowlisted hits are still printed, as `ALLOWLISTED [id] <category> at
 <location>`, so the classification is auditable.
 
-The allowlist currently holds five invented values used by the detector's own
-tests and benchmark fixtures (`engine-test-*`, `benchmark-tok-*`).
+The allowlist currently holds seven invented values used by the detector's own
+tests and benchmark fixtures (`engine-test-*`, `benchmark-tok-*`, `benchmark-f-*`).
 
 To add an entry:
 

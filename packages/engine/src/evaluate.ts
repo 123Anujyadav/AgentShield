@@ -36,6 +36,8 @@ function findOutboundSecret(action: EvaluationInput["action"]): OutboundSecretMa
       if (match) return match;
     }
   }
+  const destinationMatch = detectOutboundSecret("action.destination", action.destination);
+  if (destinationMatch) return destinationMatch;
   return null;
 }
 
@@ -101,8 +103,8 @@ export function evaluateAction(input: EvaluationInput): EvaluationResult {
       title: "Outbound action contains a secret-shaped value",
       explanation:
         outboundSecret.kind === "field-too-long-to-inspect"
-          ? "The proposed action has a summary or payload field too long to fully inspect for secret-shaped values, so it cannot be allowed or confirmed. Only the field position is reported."
-          : "The proposed action's summary or payload contains a value matching a supported secret pattern. Outbound actions must not carry secrets. Only the matching pattern family is reported; detection is limited to the documented patterns and is not comprehensive secret detection.",
+          ? "The proposed action has a summary, payload, or destination field too long to fully inspect for secret-shaped values, so it cannot be allowed or confirmed. Only the field position is reported."
+          : "The proposed action's summary, payload, or destination contains a value matching a supported secret pattern. Outbound actions must not carry secrets. Only the matching pattern family is reported; detection is limited to the documented patterns and is not comprehensive secret detection.",
       evidence: `field=${outboundSecret.field}; pattern=${outboundSecret.kind}; value=[REDACTED]`,
     }, `Blocked: "${action.type}" would send a secret-shaped value (${outboundSecret.kind} in ${outboundSecret.field}). This is a hard block; approval cannot override it and nothing was executed.`);
   }

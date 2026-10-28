@@ -1,0 +1,110 @@
+{
+  "benchmark": "agentshield-detection-benchmark",
+  "corpusVersion": "v1.5",
+  "fixtures": 128,
+  "definition": "expectedBlock=true means the documented policy requires a hard BLOCK; precision = TP/(TP+FP), recall = TP/(TP+FN), null when the denominator is zero.",
+  "overall": {
+    "tp": 78,
+    "fp": 0,
+    "tn": 50,
+    "fn": 0,
+    "precision": 1,
+    "recall": 1
+  },
+  "perFamily": {
+    "arrow-code": {
+      "tp": 0,
+      "fp": 0,
+      "tn": 27,
+      "fn": 0,
+      "precision": null,
+      "recall": null
+    },
+    "arrow-disguise": {
+      "tp": 37,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "boundary-lengths": {
+      "tp": 3,
+      "fp": 0,
+      "tn": 1,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "c2-new-syntax": {
+      "tp": 7,
+      "fp": 0,
+      "tn": 3,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "decoy-and-nested": {
+      "tp": 4,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "destination": {
+      "tp": 7,
+      "fp": 0,
+      "tn": 4,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "hard-benign": {
+      "tp": 0,
+      "fp": 0,
+      "tn": 12,
+      "fn": 0,
+      "precision": null,
+      "recall": null
+    },
+    "known-unsupported": {
+      "tp": 0,
+      "fp": 0,
+      "tn": 3,
+      "fn": 0,
+      "precision": null,
+      "recall": null
+    },
+    "labelled-assignment": {
+      "tp": 8,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "quoted-credential": {
+      "tp": 6,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    },
+    "token-formats": {
+      "tp": 6,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1
+    }
+  },
+  "failures": [],
+  "limitations": [
+    "Synthetic hand-authored fixtures only; metrics estimate performance on similar synthetic text, not real-world traffic.",
+    "known-unsupported fixtures are expected not to block under the current documented policy and count as true negatives when they do not.",
+    "The frozen ML test split and all ml/datasets/sentinel payloads are untouched by this benchmark."
+  ]
+}
