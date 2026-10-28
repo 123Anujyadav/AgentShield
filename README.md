@@ -181,10 +181,13 @@ Evidence redaction uses the same boundaries and also redacts unlabelled credenti
 words (display only). Residual gaps: a lower-case-only credential literal
 (`send(x, 'hunter2024x')`), a credential identifier with short digit groups
 (`send(x, OAuth2Token)`), and text after a closing quote and a space (`token.x" value`) are
-not detected as arrow-body credentials. Known gaps also include labels outside the list and
-backslash-escaped JSON written as text (`{\"api_key\": ...}`).
+not detected as arrow-body credentials. Known gaps also include labels outside the list.
+Since Phase G, the exact backslash-escaped JSON-style labelled shape
+(`{\"api_key\": \"...\"}` written as literal text) is detected in summary, payload, and
+destination, judged by the existing label rules; this is not general escaped-secret
+detection, and other escaped forms remain unsupported.
 A deterministic synthetic benchmark for this detector lives in `benchmarks/detection/`
-(versioned corpora, 128 hand-authored fixtures in v1.5, per-family precision/recall,
+(versioned corpora, 135 hand-authored fixtures in v1.6, per-family precision/recall,
 synthetic corpus only; see its README). Malformed
 payloads (nested objects, arrays, null values) are rejected with HTTP 400 at the
 API boundary.

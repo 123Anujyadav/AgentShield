@@ -36,6 +36,18 @@ const EMAIL_SOURCE = "(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A
  * backslash (\\) before a quote leaves that quote terminating.
  */
 const SECRET_VALUE_PATTERNS: RegExp[] = [
+  // Backslash-escaped JSON form ({\"api_key\": \"...\"} as literal text).
+  // The value runs to just before its escaped closing quote (or the end of
+  // the text). The closing boundary is a lookahead, not consumed: consuming
+  // it would swallow the next field's opening quote when fields are adjacent
+  // or a value ends in an escaped backslash, and that field's credential
+  // would then never match. A bare quote inside the value does not stop it,
+  // and a lone trailing backslash is left behind by the lookahead, so
+  // malformed and truncated values are still redacted in full (fail closed).
+  new RegExp(
+    `\\\\"[^"\\\\]*?(?:${STRONG_LABEL}|${WEAK_LABEL})\\\\"\\s*:\\s*\\\\"[\\s\\S]*?(?=\\\\"|\\\\?$)`,
+    "gi",
+  ),
   new RegExp(
     `["']?(?:${STRONG_LABEL}|${WEAK_LABEL})["']?\\s*(?:=>|[:=])\\s*(?:"(?:\\\\.|[^"\\\\])*(?:"|$)|'(?:\\\\.|[^'\\\\])*(?:'|$)|\\S+)`,
     "gi",
@@ -378,6 +390,33 @@ function findUnescapedQuote(text: string, quote: string, from: number): number {
 }
 
 /**
+ * Owner-approved Phase G (Option A): only the exact backslash-escaped
+ * JSON-style labelled assignment shape ({\"api_key\": \"...\"} written as
+ * literal text) is normalized, by judging the value inside its escaped
+ * quotes with the existing label rules. No general unescaping is performed:
+ * Windows paths, regex examples, and other backslash text are untouched.
+ * An unclosed escaped value fails closed, like an unclosed quoted value.
+ */
+function hasEscapedJsonLabelledSecret(text: string): boolean {
+  // The label may sit inside a longer quoted key (`user_password`), matching
+  // how the ordinary JSON form finds the label as a substring of the key.
+  const pattern = new RegExp(`\\\\"[^"\\\\]*?(?:(${STRONG_LABEL})|(${WEAK_LABEL}))\\\\"\\s*:\\s*\\\\"`, "gi");
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    const [, strongLabel] = match;
+    const valueStart = match.index + match[0].length;
+    const closing = text.indexOf('\\"', valueStart);
+    if (closing === -1) return true; // Unclosed escaped quote: fail closed.
+    const contents = text.slice(valueStart, closing);
+    if (contents.length > 0 && (strongLabel ? isStrongLabelValue(contents) : isSecretShapedValue(contents))) {
+      return true;
+    }
+    pattern.lastIndex = valueStart; // Keep scanning for a later escaped label.
+  }
+  return false;
+}
+
+/**
  * Checks every labelled occurrence, including labels nested inside a previous
  * value. A value capture can swallow a later assignment ("token:password=...",
  * "secret=api-key:..."), so after a non-secret match the scan resumes at the
@@ -391,6 +430,7 @@ function findUnescapedQuote(text: string, quote: string, from: number): number {
  * approval or evidence output.
  */
 function hasLabelledSecret(text: string): boolean {
+  if (hasEscapedJsonLabelledSecret(text)) return true;
   const pattern = new RegExp(LABELLED_SECRET_SOURCE, "gi");
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) !== null) {
