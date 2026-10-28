@@ -20,3 +20,12 @@ ml/datasets/sentinel/*/REVIEW_PACKAGE/
 ml/datasets/sentinel/*/REVIEW_ROUND2/
 ml/datasets/sentinel/*/REVIEW_QUEUE.csv
 **/review_blind*.csv
+# Protected Sentinel dataset payloads: never stage or commit these exact paths.
+# Approved metadata (dataset cards, labelling guides, changelogs, and
+# POLICY_ADJUDICATION records) in the same directories stays trackable.
+/ml/datasets/sentinel/v0.1.0/samples.jsonl
+/ml/datasets/sentinel/v0.1.0/splits/
+/ml/datasets/sentinel/v0.2.0/samples.jsonl
+/ml/datasets/sentinel/v0.2.0/splits/
+/ml/datasets/sentinel/v0.3.0/samples.jsonl
+/ml/datasets/sentinel/v0.3.0/splits/
