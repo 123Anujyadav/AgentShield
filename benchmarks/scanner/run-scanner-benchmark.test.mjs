@@ -27,11 +27,61 @@ test("corpus v1 validates cleanly and meets the Phase K composition minimums", (
   assert.ok(corpus.fixtures.some((f) => f.category === "malformed"));
 });
 
-test("every corpus version is stored in canonical JSON form", () => {
-  for (const dir of ["v1", "v2"]) {
+/** The approved invisible format characters (Phase L), as [first, last] code point groups. */
+const INVISIBLE_GROUPS = [[0x00ad], [0x180e], [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x2064], [0x2066, 0x2069], [0xfeff]];
+const inGroup = ([first, last = first], char) => char.codePointAt(0) >= first && char.codePointAt(0) <= last;
+const isInvisible = (char) => INVISIBLE_GROUPS.some((group) => inGroup(group, char));
+
+/** Canonical file form: JSON.stringify(…, 2) with invisible characters written as \uXXXX escapes. */
+const canonical = (corpus) =>
+  `${[...JSON.stringify(corpus, null, 2)].map((c) => (isInvisible(c) ? `\\u${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}` : c)).join("")}\n`;
+
+test("every corpus version is stored in canonical JSON form with no raw invisible characters", () => {
+  for (const dir of ["v1", "v2", "v3"]) {
     const raw = readFileSync(resolve(here, dir, "fixtures.json"), "utf8");
-    assert.equal(raw, `${JSON.stringify(JSON.parse(raw), null, 2)}\n`, dir);
+    assert.equal(raw, canonical(JSON.parse(raw)), dir);
+    assert.ok(![...raw].some(isInvisible), `${dir} must not contain raw invisible characters`);
   }
+});
+
+test("corpus v3 only appends to v2 and meets the Phase L composition minimums", () => {
+  const [v2, v3] = ["v2", "v3"].map(loadCorpus);
+  assert.deepEqual(validateCorpus(v3), []);
+  assert.equal(v3.version, "v3");
+  assert.deepEqual(v3.fixtures.slice(0, v2.fixtures.length), v2.fixtures);
+  const added = v3.fixtures.slice(v2.fixtures.length);
+  const attacks = added.filter((f) => f.category === "obfuscated-attack");
+  assert.ok(attacks.length >= 12 && attacks.every((f) => f.expectedDecision === "CONFIRM"));
+  for (const rule of ["injection.instruction-override", "injection.privilege-impersonation", ...AFFECTED_RULES]) {
+    assert.ok(attacks.some((f) => f.expectedRules.includes(rule)), `obfuscated attacks cover ${rule}`);
+  }
+  // Every approved group is the only invisible character class in at least one attack,
+  // so removing that group from the normalizer is observable.
+  for (const group of INVISIBLE_GROUPS) {
+    const sole = attacks.filter((f) => {
+      const used = [...f.text].filter(isInvisible);
+      return used.length > 0 && used.every((c) => inGroup(group, c));
+    });
+    assert.ok(sole.length > 0, `group U+${group[0].toString(16).toUpperCase()} is exercised on its own`);
+  }
+  const benign = added.filter((f) => f.category === "obfuscated-benign");
+  assert.ok(benign.length >= 10 && benign.every((f) => f.expectedDecision === "ALLOW"));
+  assert.ok(benign.every((f) => [...f.text].some(isInvisible)), "every benign v3 text contains an invisible character");
+  assert.ok(benign.some((f) => f.text.startsWith("\uFEFF")), "a leading BOM is covered");
+  assert.ok(benign.some((f) => /[\u200E\u200F]/.test(f.text)), "directional marks are covered");
+  assert.ok(benign.some((f) => f.text.includes("\u00AD")), "soft hyphens are covered");
+  assert.ok(benign.some((f) => /^(never|do not)\b/i.test(f.text)), "negated safety advice is covered");
+});
+
+test("report limitations keep the v1/v2 wording and state the v3 obfuscated attacks", () => {
+  const limitations = (dir) => scoreCorpus(loadCorpus(dir), () => ({ decision: "ALLOW", rules: [] })).limitations;
+  const stored = (name) => JSON.parse(readFileSync(resolve(here, "results", `${name}.json`), "utf8")).limitations;
+  assert.deepEqual(limitations("v1"), stored("post-k"));
+  assert.deepEqual(limitations("v2"), stored("post-k-remediation"));
+  const v3 = limitations("v3").join("\n");
+  assert.match(v3, /includes 15 obfuscated attacks/);
+  assert.doesNotMatch(v3, /Obfuscated, encoded/);
+  assert.match(v3, /encoded, non-English, paraphrased, and mid-sentence injections are documented gaps and are not comprehensively represented/);
 });
 
 test("corpus v2 only appends to v1 and meets the remediation composition minimums", () => {

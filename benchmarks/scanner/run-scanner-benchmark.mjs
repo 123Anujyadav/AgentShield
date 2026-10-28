@@ -41,6 +41,10 @@ export const CATEGORIES = new Set([
   "education-descriptive",
   "attack-framed",
   "pattern-gap",
+  // v3: attacks hidden with invisible format characters, and benign text that
+  // legitimately contains them (directional marks, soft hyphens, a leading BOM).
+  "obfuscated-attack",
+  "obfuscated-benign",
 ]);
 const DECISIONS = new Set(["CONFIRM", "ALLOW"]);
 const FIXTURE_KEYS = new Set(["id", "category", "text", "expectedRules", "expectedDecision", "reason"]);
@@ -152,12 +156,24 @@ export function scoreCorpus(corpus, scan) {
     perRule: Object.fromEntries(AFFECTED_RULES.map((rule) => [rule, toMetrics(perRule.get(rule))])),
     perCategory: Object.fromEntries([...perCategory.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, toMetrics(v)])),
     failures,
-    limitations: [
-      "Synthetic hand-authored fixtures only; metrics describe agreement with the documented Phase K policy on similar synthetic text, not real-world detection accuracy.",
-      "Only the rule-based scanner is measured. Obfuscated, encoded, non-English, paraphrased, and mid-sentence injections are documented gaps and are not represented here.",
-      "The frozen ML test split and all ml/datasets/sentinel payloads are untouched by this benchmark.",
-    ],
+    limitations: limitationsFor(corpus),
   };
+}
+
+/**
+ * Fixed report caveats. A corpus without obfuscated attacks (v1, v2) keeps the
+ * original wording, so its historical reports reproduce byte-for-byte; a corpus
+ * that includes them (v3) says how many and names the gaps that remain.
+ */
+function limitationsFor(corpus) {
+  const obfuscated = corpus.fixtures.filter((f) => f.category === "obfuscated-attack").length;
+  return [
+    "Synthetic hand-authored fixtures only; metrics describe agreement with the documented Phase K policy on similar synthetic text, not real-world detection accuracy.",
+    obfuscated === 0
+      ? "Only the rule-based scanner is measured. Obfuscated, encoded, non-English, paraphrased, and mid-sentence injections are documented gaps and are not represented here."
+      : `Only the rule-based scanner is measured. This corpus includes ${obfuscated} obfuscated attacks that hide a request with the approved invisible format characters (Phase L). Other obfuscation (look-alike letters, invisible characters outside the approved set, and approved characters used in place of spaces) and encoded, non-English, paraphrased, and mid-sentence injections are documented gaps and are not comprehensively represented here.`,
+    "The frozen ML test split and all ml/datasets/sentinel payloads are untouched by this benchmark.",
+  ];
 }
 
 async function main() {

@@ -11,6 +11,27 @@ export interface ScannerResult {
 
 export const MAX_SCAN_LENGTH = 8000;
 
+/**
+ * Invisible format characters removed from untrusted content before scanner
+ * rules are matched (Phase L), so "Ign\u200Bore all previous instructions"
+ * cannot slip past a rule. A fixed, documented set only; other Unicode format
+ * characters, variation selectors, Hangul fillers, and look-alike letters are
+ * not covered. Bidi controls are removed too, so evidence shows the logical
+ * (stored) character order, not the visually reordered display.
+ */
+const INVISIBLE_FORMAT_CHARACTERS = new RegExp(
+  `[${[
+    "\\u00AD", // soft hyphen
+    "\\u180E", // Mongolian vowel separator
+    "\\u200B-\\u200F", // zero-width space, non-joiner, joiner; left-to-right and right-to-left marks
+    "\\u202A-\\u202E", // bidi embeddings, pop formatting, and overrides
+    "\\u2060-\\u2064", // word joiner and invisible operators
+    "\\u2066-\\u2069", // bidi isolates
+    "\\uFEFF", // byte-order mark (zero-width no-break space)
+  ].join("")}]`,
+  "g",
+);
+
 /** Explicit credential labels: a plausible value after one of these is a secret. */
 const STRONG_LABEL =
   "(?:aws[-_ ]?secret[-_ ]?access[-_ ]?key|db[-_ ]?password|client[-_ ]?secret|secret[-_ ]?key|private[-_ ]?key|api[-_ ]?key|x-api-key|access[-_ ]?token|refresh[-_ ]?token|session[-_ ]?token|auth[-_ ]?token|passphrase|password|passwd)";
@@ -740,7 +761,11 @@ export function scanUntrustedContent(input: unknown): ScannerResult {
   if (typeof input !== "string" || input.trim().length === 0) {
     return { status: "empty", findings: [], contentLength: 0 };
   }
-  const text = input.slice(0, MAX_SCAN_LENGTH);
+  // The size bound applies to the raw input first, so normalization only ever
+  // processes at most MAX_SCAN_LENGTH characters; rules and evidence then use
+  // the normalized text (Phase L).
+  const bounded = input.slice(0, MAX_SCAN_LENGTH);
+  const text = bounded.replace(INVISIBLE_FORMAT_CHARACTERS, "");
   const findings: Finding[] = [];
   let spans: [number, number][] | null = null;
 
@@ -758,5 +783,5 @@ export function scanUntrustedContent(input: unknown): ScannerResult {
     });
   }
 
-  return { status: findings.length > 0 ? "suspicious" : "clean", findings, contentLength: text.length };
+  return { status: findings.length > 0 ? "suspicious" : "clean", findings, contentLength: bounded.length };
 }

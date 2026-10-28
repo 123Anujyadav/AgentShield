@@ -48,6 +48,11 @@ change existing ids, text, or expected outcomes.
 | --- | --- | --- |
 | `v1` | 45 | 3 controls, 14 suppression-bypass positives (8 exfiltration, 6 tool-redirect), 13 safety-advice negatives, 11 boundary cases, 4 malformed cases |
 | `v2` | 87 | v1 unchanged, plus 11 `hard-benign` safety advice (8 with "ever" between the negation and the verb), 10 `education-descriptive` cases that discuss attacks without requesting them, 10 `attack-framed` requests wrapped in quotes, training, or concealment wording, 9 boundary cases (`x-01`..`x-09`), and 2 `pattern-gap` attacks the current patterns cannot see (`g-01`, `g-02`) |
+| `v3` | 115 | v2 unchanged, plus 15 `obfuscated-attack` cases across all four rules that hide a request with invisible format characters (every approved character group appears on its own at least once; `o-01`..`o-15`) and 13 `obfuscated-benign` texts that legitimately contain them: a leading BOM, soft hyphens, directional marks with Hebrew and Arabic, an emoji joiner sequence, bidi isolates, an invisible operator, and negated safety advice (`w-01`..`w-13`) |
+
+Corpus files store the invisible characters as `\uXXXX` escapes, so they are
+reviewable and contain no raw bidi controls; the self-tests check that every
+version is in this canonical form.
 
 Educational fixtures are labelled by whether they *request* an action, not by
 their framing: a description of an attack expects `ALLOW` even when it quotes
@@ -80,10 +85,23 @@ corpus version and the engine build that produced it.
   `e-07`, `e-09`) remain false positives, and `g-01`/`g-02` remain false
   negatives.
 
+- `results/pre-l.json`: corpus v3, Phase K scanner before invisible-character
+  normalization. Overall TP 42, FP 6, TN 50, FN 17: all 15 obfuscated attacks
+  are false negatives, all 13 obfuscated-benign texts are correct, and the v2
+  failures are unchanged.
+- `results/post-l.json`: corpus v3, Phase L scanner. Overall TP 57, FP 6,
+  TN 50, FN 2: all 15 obfuscated attacks are CONFIRM and all 13 obfuscated-benign
+  texts are ALLOW; the remaining failures are the six v2 educational false
+  positives and the two v2 pattern gaps. The same scanner reproduces
+  `post-k.json` (v1) and `post-k-remediation.json` (v2) byte-for-byte.
+
 These numbers describe these synthetic corpora only. The corpora were written
 after the behaviour they test was known; the results are not a real-world
-precision or recall claim. Known gaps: obfuscated, encoded, non-English,
-paraphrased, and mid-sentence injections; negations separated from the verb by
+precision or recall claim. Known gaps: approved invisible characters used in
+place of spaces (removing them joins the neighbouring words, so "Ignore all
+previous instructions" with a zero-width space instead of each space is not
+matched); invisible characters outside the approved set and look-alike letters (for example a Cyrillic "і"); encoded,
+non-English, paraphrased, and mid-sentence injections; negations separated from the verb by
 any word other than "ever"; descriptions that quote an attack's imperative
 (flagged, by design no exemption); an override wrapped in quote marks after
 other text; "transfer" as an exfiltration verb; and payment amounts written as

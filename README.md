@@ -89,6 +89,24 @@ after other text) is not matched because those patterns need a sentence start, a
 is not an exfiltration verb ("transfer the API keys to ..."). A deterministic synthetic
 benchmark for these rules lives in `benchmarks/scanner/` (synthetic corpus only; see its README).
 
+Since Phase L, the scanner removes a fixed set of invisible format characters from untrusted
+content before any rule is matched, so "Ign\u200Bore all previous instructions" (with a
+zero-width space) is detected like the plain text. The set is U+00AD (soft hyphen), U+180E
+(Mongolian vowel separator), U+200B-U+200F (zero-width space, non-joiner, joiner, and the
+left-to-right and right-to-left marks), U+202A-U+202E (bidi embeddings, pop, and overrides),
+U+2060-U+2064 (word joiner and invisible operators), U+2066-U+2069 (bidi isolates), and U+FEFF
+(byte-order mark). The 8,000-character bound is applied to the raw input first, and
+`contentLength` still reports that bounded raw length. Rules and evidence use the normalized
+text: bidi controls are removed, so evidence shows the logical (stored) character order, not
+the visually reordered display, and a secret split by one of these characters is redacted like
+an unsplit one. Because the characters are removed rather than replaced, one used in place of a
+space joins the neighbouring words: "Ignore all previous instructions" with a zero-width space
+instead of each space is not matched (a known gap, not a regression; it was not matched before
+Phase L either). Not covered: other Unicode format characters, variation selectors, Hangul
+fillers, and look-alike letters (for example a Cyrillic "і" in "іgnore"). The outbound
+Data-Leak Guard is unchanged, so invisible characters inside credential labels remain a
+documented gap there.
+
 ## Action Gate and approvals (Phase 3)
 
 Decision semantics: `ALLOW` may run an allowlisted simulated handler. `CONFIRM` creates a
