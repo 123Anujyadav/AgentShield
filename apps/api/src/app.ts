@@ -9,6 +9,7 @@ import {
   processApproval,
   processRejection,
   createPendingApproval,
+  publicExecution,
   toPublicApproval,
   type ApprovalStore,
 } from "./approvals.js";
@@ -16,7 +17,7 @@ import { createSimulator, type Simulator } from "./simulator.js";
 import { ModelAnalysisService } from "./model/analyze.js";
 import { loadModelConfig, type ModelConfig } from "./model/config.js";
 import { selectModelProvider } from "./model/live.js";
-import { detectOutboundSecret, failedAnalysis } from "@agentshield/engine";
+import { failedAnalysis, redactSecretValue } from "@agentshield/engine";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -106,11 +107,15 @@ export function createApp(deps: AppDeps = {}) {
   function recordEvent(
     partial: Omit<ActivityEvent, "id" | "timestamp">,
   ): ActivityEvent {
-    // A secret-shaped destination is never stored in the public event log.
-    const safePartial =
-      partial.destination && detectOutboundSecret("action.destination", partial.destination)
-        ? { ...partial, destination: "[REDACTED]" }
-        : partial;
+    // Secret-shaped request metadata (destination, and since Phase I the
+    // action type, tool, and intent task) is never stored in the public event log.
+    const safePartial = {
+      ...partial,
+      intentTask: redactSecretValue(partial.intentTask),
+      actionType: redactSecretValue(partial.actionType),
+      tool: redactSecretValue(partial.tool),
+      destination: redactSecretValue(partial.destination),
+    };
     const event: ActivityEvent = {
       id: `evt-${nextId++}`,
       timestamp: new Date().toISOString(),
@@ -169,7 +174,7 @@ export function createApp(deps: AppDeps = {}) {
     if (typeof body.scenarioId === "string") {
       const scenario = getScenario(body.scenarioId);
       if (!scenario) {
-        res.status(404).json({ error: `Unknown scenario: ${body.scenarioId}` });
+        res.status(404).json({ error: `Unknown scenario: ${redactSecretValue(body.scenarioId)}` });
         return;
       }
       scenarioId = scenario.id;
@@ -207,7 +212,7 @@ export function createApp(deps: AppDeps = {}) {
     let pendingApproval = null as ReturnType<typeof createPendingApproval> | null;
 
     if (evaluation.decision === "ALLOW") {
-      execution = simulator.execute(action, evaluation.decision);
+      execution = publicExecution(simulator.execute(action, evaluation.decision), action.type);
     } else if (evaluation.decision === "CONFIRM") {
       pendingApproval = createPendingApproval(approvalStore, {
         scenarioId,
@@ -308,6 +313,7 @@ export function createApp(deps: AppDeps = {}) {
     const id = approvalIdParam(req, res);
     if (!id || !hasValidBody(req, res)) return;
     // Any client-supplied action/findings/score in the body is ignored on purpose.
+    const storedType = approvalStore.records.get(id)?.action.type ?? "";
     const outcome = processApproval(approvalStore, id, (record) =>
       evaluateAction({ intent: record.intent, action: record.action, untrustedContent: record.untrustedContent }),
       simulator,
@@ -342,6 +348,7 @@ export function createApp(deps: AppDeps = {}) {
       res.status(409).json({ error: "Policy recheck returned BLOCK. Approval rejected; nothing executed.", approval: outcome.approval, executed: false });
       return;
     }
+    const execution = publicExecution(outcome.execution, storedType);
     recordEvent({
       scenarioId: outcome.approval.scenarioId,
       intentTask: outcome.approval.intent.task,
@@ -351,13 +358,13 @@ export function createApp(deps: AppDeps = {}) {
       decision: outcome.approval.decision,
       riskScore: outcome.approval.riskScore,
       findings: outcome.approval.findings,
-      explanation: outcome.execution.executed
+      explanation: execution.executed
         ? "Approved after policy recheck. Simulated handler executed exactly once."
-        : `Approved, but simulated execution did not run: ${outcome.execution.reason}`,
+        : `Approved, but simulated execution did not run: ${execution.reason}`,
       approvalId: id,
       lifecycle: outcome.execution.executed ? "SIMULATED_EXECUTED" : "APPROVED_NOT_EXECUTED",
     });
-    res.json({ approval: outcome.approval, execution: outcome.execution, executed: outcome.execution.executed });
+    res.json({ approval: outcome.approval, execution, executed: execution.executed });
   });
 
   app.post("/api/approvals/:id/reject", (req, res) => {

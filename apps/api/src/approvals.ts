@@ -6,7 +6,7 @@ import type {
   UntrustedContent,
   UserIntent,
 } from "@agentshield/engine";
-import { detectOutboundSecret, payloadAssignment } from "@agentshield/engine";
+import { detectOutboundSecret, payloadAssignment, redactSecretValue } from "@agentshield/engine";
 import type { Simulator } from "./simulator.js";
 
 export const APPROVAL_TTL_MS = 15 * 60 * 1000;
@@ -114,10 +114,30 @@ export function markExpiryEventRecorded(store: ApprovalStore, id: string): boole
   return true;
 }
 
+/**
+ * Public copy of a simulated execution. The simulator's reason can quote the
+ * action type, so a secret-shaped type is replaced wherever it appears
+ * (Phase I, display only: the stored record and the decision are untouched).
+ */
+export function publicExecution(execution: SimulatedExecution, actionType: string): SimulatedExecution {
+  const shown = redactSecretValue(actionType);
+  if (shown === actionType) return execution;
+  const hide = (text: string | null) => (text === null ? null : text.split(actionType).join(shown));
+  return { ...execution, handler: hide(execution.handler), result: hide(execution.result), reason: hide(execution.reason) };
+}
+
 /** Public view never echoes the raw untrusted content or internal bookkeeping back. */
 export function toPublicApproval(record: ApprovalRecord): PendingApproval {
   const { untrustedContent: _ignored, expiryEventPending: _pending, ...rest } = record;
   const pub = clone(rest);
+  // Phase I: secret-shaped request metadata is shown as [REDACTED].
+  if (pub.execution) pub.execution = publicExecution(pub.execution, record.action.type);
+  pub.action.type = redactSecretValue(pub.action.type);
+  pub.action.tool = redactSecretValue(pub.action.tool);
+  pub.intent.task = redactSecretValue(pub.intent.task);
+  if (pub.intent.id !== undefined) pub.intent.id = redactSecretValue(pub.intent.id);
+  pub.intent.allowedActions = pub.intent.allowedActions.map(redactSecretValue);
+  pub.intent.deniedActions = pub.intent.deniedActions.map(redactSecretValue);
   // Defense in depth: never echo a secret-shaped outbound value back to a
   // client. The stored record is untouched and still governs policy recheck.
   if (detectOutboundSecret("action.summary", pub.action.summary)) {

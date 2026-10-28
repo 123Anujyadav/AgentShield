@@ -218,13 +218,20 @@ the action is not blocked and public approval views do not redact the field, alt
 redaction still masks it from the header through its `END` line. JWTs, `Authorization: Basic`
 headers, and Unicode-obfuscated labels are not detected.
 
-Known unresolved limitations, outside the Data-Leak Guard's inspected fields and left for a
-separately approved phase: `action.tool`, `action.type`, and `intent.task` are not inspected
-for secrets, and they appear unredacted in API responses, events, and approval views (a secret
-in `action.tool` does not block an otherwise allowed action). Policy BLOCK evidence also echoes
-`action.type` and, when a destination is not allowed, the raw `intent.allowedDestinations`
-list. Calling the engine's `scanUntrustedContent` directly with more than 8,000 characters
-scans only the first 8,000; the API rejects such content with HTTP 400.
+Since Phase I, request metadata that the Data-Leak Guard would recognize is shown as
+`[REDACTED]` wherever it is echoed: `action.type` (finding evidence, explanations,
+`evaluation.actionType`, events, approval views, and execution reasons), `action.tool` and
+`intent.task` (events and approval views), `intent.id`, `intent.allowedActions`, and
+`intent.deniedActions` (approval views), each entry of `intent.allowedActions` and
+`intent.allowedDestinations` in finding evidence, and an unknown `scenarioId` in the 404 error. Redaction replaces the whole value, so
+a task that mentions an email address, for example, is also shown as `[REDACTED]`. It is
+display-only: decisions are unchanged, and a redacted value is not thereby safe to send.
+
+Known unresolved limitations, left for a separately approved phase: `action.tool`,
+`action.type`, and `intent.task` are still not inspected for decisions, so a secret in
+`action.tool` does not block an otherwise allowed action (it is only redacted in output).
+Calling the engine's `scanUntrustedContent` directly with more than 8,000 characters scans
+only the first 8,000; the API rejects such content with HTTP 400.
 
 A deterministic synthetic benchmark for this detector lives in `benchmarks/detection/`
 (versioned corpora, 159 hand-authored fixtures in v1.7, per-family precision/recall,

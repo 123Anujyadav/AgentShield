@@ -615,6 +615,16 @@ export function detectOutboundSecret(field: string, text: unknown): OutboundSecr
   return null;
 }
 
+/**
+ * Whole-value display redaction for echoed request metadata (Phase I): a value
+ * the Data-Leak Guard recognizes (detectOutboundSecret) is shown as
+ * [REDACTED], and any other value is returned unchanged. Display only: it
+ * never affects a decision, and a redacted value is not thereby safe to send.
+ */
+export function redactSecretValue(value: string): string {
+  return detectOutboundSecret("display", value) ? "[REDACTED]" : value;
+}
+
 /** Replaces each span (merged where they overlap) with [REDACTED]. */
 function redactSpans(text: string, spans: [number, number][]): string {
   const merged: [number, number][] = [];
