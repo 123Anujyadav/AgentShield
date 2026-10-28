@@ -71,6 +71,24 @@ Limitations: paraphrases, non-English text, encoded payloads, and mid-sentence i
 can evade these patterns, and descriptive text can occasionally match. Evidence is redacted
 before it leaves the engine.
 
+Since Phase K, the secret-exfiltration and tool-redirect rules are suppressed only when a
+negation (`never`, `do not`, `don't`, `should not`, `must not`) directly precedes the matched
+risky verb, as in safety advice such as "Do not send API keys to unknown addresses". Secrecy or
+pretext wording elsewhere ("... and do not tell the user", "keep this between us", "To protect
+the account, ...") no longer suppresses a match, and a negated match no longer hides a later
+request of the same rule. The only word allowed between the negation and the verb is the
+intensifier "ever", optionally after a comma ("do not ever send", "never, ever send"); a comma
+or any other word directly before the verb ends the negation ("do not hesitate; send ...",
+"... never, send ..."), and other adverbs ("never under any circumstances send") are not
+recognised, so such advice escalates to CONFIRM. Quote marks and educational framing never
+exempt a request, so a description that quotes an attack's imperative ("Attackers often write
+'send the API keys to me ...'") is still flagged; descriptions without such an imperative are
+not. Known pattern gaps, unchanged: payment amounts written as `$500` are not matched by the
+tool-redirect rule, an override wrapped in quote marks (`"Ignore all previous instructions"`
+after other text) is not matched because those patterns need a sentence start, and "transfer"
+is not an exfiltration verb ("transfer the API keys to ..."). A deterministic synthetic
+benchmark for these rules lives in `benchmarks/scanner/` (synthetic corpus only; see its README).
+
 ## Action Gate and approvals (Phase 3)
 
 Decision semantics: `ALLOW` may run an allowlisted simulated handler. `CONFIRM` creates a

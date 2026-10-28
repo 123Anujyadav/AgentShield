@@ -1,5 +1,5 @@
 import type { Finding } from "../types.js";
-import { SCANNER_RULES } from "./rules.js";
+import { SCANNER_RULES, type ScannerRule } from "./rules.js";
 
 export type ScannerStatus = "clean" | "suspicious" | "empty";
 
@@ -667,11 +667,34 @@ function credentialWordSpans(text: string): [number, number][] {
   return spans;
 }
 
-function sentenceAround(text: string, index: number): string {
-  const start = Math.max(text.lastIndexOf(".", index - 1), text.lastIndexOf("\n", index - 1)) + 1;
-  const endDot = text.indexOf(".", index);
-  const end = endDot === -1 ? Math.min(text.length, index + 160) : endDot + 1;
-  return text.slice(start, end).trim();
+/**
+ * What a rule match may start with before its risky verb: punctuation,
+ * whitespace, and the connectives the patterns allow ("\n", ". Please",
+ * ", then", "and").
+ */
+const VERB_PREFIX = /^(?:[^A-Za-z]*\b(?:please|and|then)\b)*[^A-Za-z]*/i;
+/** How far back from the risky verb a governing negation is looked for. */
+const NEGATION_WINDOW = 32;
+
+/** True when the rule's negation guard ends immediately before the match's risky verb. */
+function isVerbNegated(text: string, match: RegExpMatchArray, negation: RegExp): boolean {
+  const verbStart = (match.index ?? 0) + (VERB_PREFIX.exec(match[0])?.[0].length ?? 0);
+  return negation.test(text.slice(Math.max(0, verbStart - NEGATION_WINDOW), verbStart));
+}
+
+/**
+ * The rule's first match that is not suppressed (Phase K). Every match of
+ * every pattern is considered, so a negated match (safety advice) never hides
+ * a later request that is not negated.
+ */
+function firstUnsuppressedMatch(text: string, rule: ScannerRule): RegExpMatchArray | null {
+  for (const pattern of rule.patterns) {
+    const all = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
+    for (const match of text.matchAll(all)) {
+      if (!rule.suppressIfVerbNegatedBy || !isVerbNegated(text, match, rule.suppressIfVerbNegatedBy)) return match;
+    }
+  }
+  return null;
 }
 
 /** Character ranges of every secret-shaped span the redactor recognizes. */
@@ -722,16 +745,8 @@ export function scanUntrustedContent(input: unknown): ScannerResult {
   let spans: [number, number][] | null = null;
 
   for (const rule of SCANNER_RULES) {
-    let matched: RegExpExecArray | null = null;
-    for (const pattern of rule.patterns) {
-      pattern.lastIndex = 0;
-      matched = pattern.exec(text);
-      if (matched) break;
-    }
+    const matched = firstUnsuppressedMatch(text, rule);
     if (!matched) continue;
-
-    const sentence = sentenceAround(text, matched.index);
-    if (rule.suppressIfSentenceMatches?.some((guard) => guard.test(sentence))) continue;
 
     findings.push({
       ruleId: rule.ruleId,
@@ -739,7 +754,7 @@ export function scanUntrustedContent(input: unknown): ScannerResult {
       severity: rule.severity,
       title: rule.title,
       explanation: `${rule.explanation} (rule-based matching, not an ML classifier)`,
-      evidence: evidenceAround(text, matched.index, matched[0].length, (spans ??= secretSpans(text))),
+      evidence: evidenceAround(text, matched.index ?? 0, matched[0].length, (spans ??= secretSpans(text))),
     });
   }
 

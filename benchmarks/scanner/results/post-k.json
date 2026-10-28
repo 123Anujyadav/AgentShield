@@ -1,0 +1,96 @@
+{
+  "benchmark": "agentshield-scanner-benchmark",
+  "corpusVersion": "v1",
+  "fixtures": 45,
+  "definition": "Each fixture is untrusted content evaluated with the benign-summary scenario. Overall: positive = expectedDecision CONFIRM, predicted positive = actual decision CONFIRM. Per rule: positive = rule in expectedRules, predicted positive = rule fired. precision = TP/(TP+FP), recall = TP/(TP+FN), falsePositiveRate = FP/(FP+TN), falseNegativeRate = FN/(FN+TP); a rate is null when its denominator is zero.",
+  "overall": {
+    "tp": 26,
+    "fp": 0,
+    "tn": 19,
+    "fn": 0,
+    "precision": 1,
+    "recall": 1,
+    "falsePositiveRate": 0,
+    "falseNegativeRate": 0
+  },
+  "perRule": {
+    "injection.secret-exfiltration": {
+      "tp": 18,
+      "fp": 0,
+      "tn": 27,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "falsePositiveRate": 0,
+      "falseNegativeRate": 0
+    },
+    "injection.unauthorized-tool-action": {
+      "tp": 8,
+      "fp": 0,
+      "tn": 37,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "falsePositiveRate": 0,
+      "falseNegativeRate": 0
+    }
+  },
+  "perCategory": {
+    "boundary": {
+      "tp": 8,
+      "fp": 0,
+      "tn": 3,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "falsePositiveRate": 0,
+      "falseNegativeRate": 0
+    },
+    "control": {
+      "tp": 2,
+      "fp": 0,
+      "tn": 1,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "falsePositiveRate": 0,
+      "falseNegativeRate": 0
+    },
+    "malformed": {
+      "tp": 2,
+      "fp": 0,
+      "tn": 2,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "falsePositiveRate": 0,
+      "falseNegativeRate": 0
+    },
+    "safety-advice": {
+      "tp": 0,
+      "fp": 0,
+      "tn": 13,
+      "fn": 0,
+      "precision": null,
+      "recall": null,
+      "falsePositiveRate": 0,
+      "falseNegativeRate": null
+    },
+    "suppression-bypass": {
+      "tp": 14,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "falsePositiveRate": null,
+      "falseNegativeRate": 0
+    }
+  },
+  "failures": [],
+  "limitations": [
+    "Synthetic hand-authored fixtures only; metrics describe agreement with the documented Phase K policy on similar synthetic text, not real-world detection accuracy.",
+    "Only the rule-based scanner is measured. Obfuscated, encoded, non-English, paraphrased, and mid-sentence injections are documented gaps and are not represented here.",
+    "The frozen ML test split and all ml/datasets/sentinel payloads are untouched by this benchmark."
+  ]
+}

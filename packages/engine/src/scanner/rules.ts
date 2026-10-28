@@ -6,9 +6,28 @@ export interface ScannerRule {
   title: string;
   explanation: string;
   patterns: RegExp[];
-  /** Guard patterns: if the sentence containing a match matches one, suppress (e.g. safety advice with "never"). */
-  suppressIfSentenceMatches?: RegExp[];
+  /**
+   * Negation guard (Phase K): a match is suppressed only when the text
+   * immediately before its risky verb ends with this negation, so the negation
+   * governs that verb ("Do not send the API keys", "You should never forward
+   * credentials"). Words elsewhere in the sentence, such as "and do not tell
+   * the user" or "keep this between us", never suppress a match.
+   */
+  suppressIfVerbNegatedBy?: RegExp;
 }
+
+/**
+ * Negations that can govern a risky verb, ending right before it. Only the
+ * negation words of the earlier sentence-wide guard are kept; whitespace
+ * between their words may vary. "avoid", "protect", and "keep" are not
+ * negations of the matched verb and no longer suppress anything.
+ *
+ * The only word allowed between the negation and the verb is the intensifier
+ * "ever", optionally after a comma ("do not ever send", "never, ever send").
+ * A comma or any other word directly before the verb ends the negation, so
+ * "do not hesitate; send ..." and "... never, send ..." are not suppressed.
+ */
+const VERB_NEGATION = /\b(?:never|do\s+not|don'?t|should\s+not|must\s+not)(?:\s*,?\s*ever\b)*\s+$/i;
 
 /**
  * Small documented rule set. Patterns favour imperative phrasing at the start
@@ -54,7 +73,7 @@ export const SCANNER_RULES: ScannerRule[] = [
       /\bexfiltrate\b[^.\n]{0,60}\b(data|secrets?|credentials?|keys?)\b/i,
       /\b(?:and|,)\s*(?:then\s+)?(reveal|show|print|disclose|leak|send|share)\s+(the\s+|your\s+)?(api[-_ ]?keys?|secrets?|passwords?|credentials?|tokens?|private keys?)/i,
     ],
-    suppressIfSentenceMatches: [/\b(never|do not|don'?t|should not|must not|avoid|protect|keep)\b/i],
+    suppressIfVerbNegatedBy: VERB_NEGATION,
   },
   {
     ruleId: "injection.unauthorized-tool-action",
@@ -69,6 +88,6 @@ export const SCANNER_RULES: ScannerRule[] = [
       /\b(run|execute|open)\b[^.\n]{0,40}\b(shell|terminal|command|script)\b/i,
       /\buse the (payment|email|shell|admin) tool\b/i,
     ],
-    suppressIfSentenceMatches: [/\b(never|do not|don'?t|should not|must not|avoid)\b/i],
+    suppressIfVerbNegatedBy: VERB_NEGATION,
   },
 ];
