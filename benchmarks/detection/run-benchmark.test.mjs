@@ -12,7 +12,7 @@ const good = { id: "x-01", family: "fam", field: "summary", text: "hello", expec
 const withFixtures = (...fixtures) => ({ corpus: "c", version: "v", fixtures });
 
 test("every corpus version validates cleanly and declares its own version", () => {
-  for (const [dir, version, count] of [["v1", "v1", 53], ["v1.1", "v1.1", 55], ["v1.2", "v1.2", 81], ["v1.3", "v1.3", 98], ["v1.4", "v1.4", 117], ["v1.5", "v1.5", 128], ["v1.6", "v1.6", 135]]) {
+  for (const [dir, version, count] of [["v1", "v1", 53], ["v1.1", "v1.1", 55], ["v1.2", "v1.2", 81], ["v1.3", "v1.3", 98], ["v1.4", "v1.4", 117], ["v1.5", "v1.5", 128], ["v1.6", "v1.6", 135], ["v1.7", "v1.7", 159]]) {
     const corpus = loadCorpus(dir);
     assert.deepEqual(validateCorpus(corpus), [], dir);
     assert.equal(corpus.version, version);
@@ -21,7 +21,7 @@ test("every corpus version validates cleanly and declares its own version", () =
 });
 
 test("each corpus version extends the previous one without changing earlier fixtures", () => {
-  const [v1, v11, v12, v13, v14, v15, v16] = ["v1", "v1.1", "v1.2", "v1.3", "v1.4", "v1.5", "v1.6"].map(loadCorpus);
+  const [v1, v11, v12, v13, v14, v15, v16, v17] = ["v1", "v1.1", "v1.2", "v1.3", "v1.4", "v1.5", "v1.6", "v1.7"].map(loadCorpus);
   assert.deepEqual(v11.fixtures.slice(0, v1.fixtures.length), v1.fixtures);
   assert.deepEqual(v12.fixtures.slice(0, v11.fixtures.length), v11.fixtures);
   assert.deepEqual(v13.fixtures.slice(0, v12.fixtures.length), v12.fixtures);
@@ -37,6 +37,42 @@ test("each corpus version extends the previous one without changing earlier fixt
     family: "escaped-json",
     expectedBlock: true,
   });
+  // v1.7 (Phase H) only appends to v1.6.
+  assert.deepEqual(v17.fixtures.slice(0, v16.fixtures.length), v16.fixtures);
+});
+
+test("Phase H fixtures carry provider credentials only as runtime placeholders", () => {
+  const raw = readFileSync(resolve(here, "v1.7", "fixtures.json"), "utf8");
+  // Credential shapes the runtime detector recognizes; none may appear literally in the corpus file.
+  const shapes = [
+    /(?:AKIA|ASIA)[A-Z0-9]{16}/,
+    /(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30}|github_pat_[A-Za-z0-9_]{30}/,
+    /glpat-[A-Za-z0-9_-]{20}/,
+    /(?:sk|rk)_live_[A-Za-z0-9]{24}/,
+    /xox[abprs]-[A-Za-z0-9-]{10}/,
+    /AIza[A-Za-z0-9_-]{35}/,
+    /BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY/,
+  ];
+  for (const shape of shapes) assert.doesNotMatch(raw, shape);
+  const v17 = loadCorpus("v1.7");
+  const added = v17.fixtures.slice(loadCorpus("v1.6").fixtures.length);
+  for (const fixture of added) {
+    const fields = [fixture.text, fixture.payloadKey, fixture.payloadValue].filter((v) => typeof v === "string").join(" ");
+    if (fixture.family === "provider-token") assert.match(fields, /__PH_[A-Z0-9_]+__/, fixture.id);
+  }
+  // Placeholders expand in payload keys too, and to the documented shapes.
+  const action = actionFor({ summary: "s" }, { ...good, field: "payload", payloadKey: "__PH_GITLAB__", payloadValue: "x" });
+  const [key] = Object.keys(action.payload);
+  assert.match(key, shapes[2]);
+  assert.match(expand("__PH_PEM_RSA__"), shapes[6]);
+  assert.doesNotMatch(expand("__PH_PEM_PUBLIC__"), shapes[6]);
+});
+
+test("earlier corpora use only the original padding placeholders", () => {
+  for (const dir of ["v1", "v1.1", "v1.2", "v1.3", "v1.4", "v1.5", "v1.6"]) {
+    const tokens = readFileSync(resolve(here, dir, "fixtures.json"), "utf8").match(/__[A-Z0-9_]+__/g) ?? [];
+    assert.deepEqual([...new Set(tokens)].sort(), ["__PAD_2500__", "__PAD_9000__"], dir);
+  }
 });
 
 test("invalid fixtures are rejected instead of scored silently", () => {

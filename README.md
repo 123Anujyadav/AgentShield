@@ -113,7 +113,8 @@ assignments such as `api_key=`, `access_token=`, `client_secret=`, `auth_token=`
 `aws_secret_access_key=`, `x-api-key`, `passphrase=`, `password:`/`token:` with `=`, `:`,
 or `=>` separators (including JSON-style quoted
 keys), Bearer credentials, realistic `sk-` tokens (`sk-proj-...`, `sk-ant-...`, underscored
-forms), seeded `FAKE_...SECRET` values, or email addresses — is a hard `BLOCK`
+forms), the Phase H provider formats listed below, seeded `FAKE_...SECRET` values, or email
+addresses — is a hard `BLOCK`
 (rule `data-leak.outbound-secret`, risk 95). Every labelled occurrence is checked, so a
 benign first label cannot hide a later secret, including a label swallowed into a previous
 value such as `token:password=...` or `secret=api-key:...`.
@@ -186,8 +187,47 @@ Since Phase G, the exact backslash-escaped JSON-style labelled shape
 (`{\"api_key\": \"...\"}` written as literal text) is detected in summary, payload, and
 destination, judged by the existing label rules; this is not general escaped-secret
 detection, and other escaped forms remain unsupported.
+
+Since Phase H, seven provider credential formats are detected without a label, in summary,
+payload values, payload keys, and destination, and are redacted the same way in evidence,
+public approval views, and events. Prefixes are case-sensitive, and a prefix glued to a
+preceding letter, digit, or underscore is not matched (as for `sk-`):
+- PEM private-key blocks: a `-----BEGIN [RSA |EC |DSA |OPENSSH |ENCRYPTED ]PRIVATE KEY-----`
+  header followed by key material, meaning a run of 32+ base64 characters mixing upper case,
+  lower case, and a digit (after whitespace or literal `\n`), or a legacy `Proc-Type:` line.
+  A header on its own, or with an elided (`MIIEvQ...`), placeholder, or filler body, is
+  treated as documentation and does not block; evidence still redacts from the header through
+  its `END` line, or to the end of the text. Public keys, certificates, and PGP key blocks are
+  not matched.
+- AWS access key IDs: `AKIA` or `ASIA` plus exactly 16 upper-case letters or digits, not part
+  of a longer run. An `ASIA` ID must contain a digit, so words such as `ASIAPACIFIC...` do not
+  block; a letters-only `ASIA` ID is therefore a known gap.
+- GitHub tokens: `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, or `github_pat_` plus 30+ characters.
+- GitLab tokens: `glpat-` plus 20+ characters.
+- Stripe live keys: `sk_live_` or `rk_live_` plus 24+ letters or digits. Test-mode keys
+  (`sk_test_`) are not in scope.
+- Slack tokens: `xoxa-`, `xoxb-`, `xoxp-`, `xoxr-`, or `xoxs-` plus 10+ characters including a
+  digit. `xoxo` is excluded so ordinary text does not match, and other Slack formats such as
+  `xoxe` are not covered.
+- Google API keys: `AIza` plus exactly 35 characters, not part of a longer run.
+
+Residual gaps for these formats include key material split into short chunks, lower- or
+mixed-case variants of a prefix, and providers not listed here. A private-key header followed
+by a double-escaped `\\n` separator (a key inside JSON that was encoded twice) is not detected:
+the action is not blocked and public approval views do not redact the field, although evidence
+redaction still masks it from the header through its `END` line. JWTs, `Authorization: Basic`
+headers, and Unicode-obfuscated labels are not detected.
+
+Known unresolved limitations, outside the Data-Leak Guard's inspected fields and left for a
+separately approved phase: `action.tool`, `action.type`, and `intent.task` are not inspected
+for secrets, and they appear unredacted in API responses, events, and approval views (a secret
+in `action.tool` does not block an otherwise allowed action). Policy BLOCK evidence also echoes
+`action.type` and, when a destination is not allowed, the raw `intent.allowedDestinations`
+list. Calling the engine's `scanUntrustedContent` directly with more than 8,000 characters
+scans only the first 8,000; the API rejects such content with HTTP 400.
+
 A deterministic synthetic benchmark for this detector lives in `benchmarks/detection/`
-(versioned corpora, 135 hand-authored fixtures in v1.6, per-family precision/recall,
+(versioned corpora, 159 hand-authored fixtures in v1.7, per-family precision/recall,
 synthetic corpus only; see its README). Malformed
 payloads (nested objects, arrays, null values) are rejected with HTTP 400 at the
 API boundary.

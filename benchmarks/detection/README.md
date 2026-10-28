@@ -49,6 +49,12 @@ Each version is a separate file and only appends fixtures to the previous one.
 | `v1.4` | 117 | 12 `arrow-disguise` positives for spaced member chains (`token . x`, `token ?. x`, `send(x) . then(...)`, `password .x`, a dot on its own line), each in summary and payload (`d1t-01`..`d1t-12`), and 7 `arrow-code` negatives (`d1t-20`..`d1t-26`) | `post-d1-spaced-chain-remediation.json` |
 | `v1.5` | 128 | Phase F `destination` family: 5 secret-shaped destination positives, 4 benign destination negatives, and 2 summary/payload-equivalent positives (`f-01`..`f-11`) | `post-f.json` |
 | `v1.6` | 135 | Phase G: `gap-01` reclassified to an `escaped-json` positive, 3 more `escaped-json` positives (summary/payload/destination), and 4 hard-benign escaped-text negatives (`g-01`..`g-23`) | `post-g.json` |
+| `v1.7` | 159 | Phase H: 15 `provider-token` positives (private-key blocks, AWS, GitHub, GitLab, Stripe live, Slack, and Google formats in summary, payload value, payload key, and destination) and 9 hard-benign near-miss and documentation negatives (`h-01`..`h-28`) | `post-h.json` |
+
+Phase H fixtures never contain a credential-shaped literal. Their values are
+`__PH_*__` placeholders that `run-benchmark.mjs` expands at run time from
+clearly fake parts (placeholders also expand inside `payloadKey`). Earlier
+corpora use only the `__PAD_*__` placeholders, so their results are unchanged.
 
 Families in v1.4 (`arrow-disguise` and `arrow-code` grow from v1.3's 25 and 20):
 
@@ -59,13 +65,14 @@ Families in v1.4 (`arrow-disguise` and `arrow-code` grow from v1.3's 25 and 20):
 | token-formats | 6 | Bearer, realistic `sk-` tokens, and email addresses |
 | decoy-and-nested | 4 | Benign first labels hiding a later real credential |
 | boundary-lengths | 4 | 255/256 generic-value boundary, padded secret, overlong field |
-| hard-benign | 16 in v1.6 (12 before Phase G) | Prose and counts/booleans that must not BLOCK, plus 4 escaped-text negatives added in Phase G |
+| hard-benign | 25 in v1.7 (16 in v1.6, 12 before Phase G) | Prose and counts/booleans that must not BLOCK, plus 4 escaped-text negatives added in Phase G and 9 provider near-miss and documentation negatives added in Phase H (short suffix, glued prefix, wrong case, `xoxo` text, an over-long Google key, a private-key header on its own or with an elided body, and a public key) |
 | known-unsupported | 2 in v1.6 (3 before Phase G) | Documented gaps expected not to BLOCK under current policy: split credentials and unlabelled high-entropy strings. The escaped-JSON gap (`gap-01`) moved to `escaped-json` in v1.6 |
 | c2-new-syntax | 10 | Phase C-2 additions: `passphrase=` and the `=>` separator (7 positives), plus 3 JavaScript arrow-function negatives |
 | arrow-disguise | 37 | Credentials disguised as an arrow-function body: extra arguments, padded parentheses, later member segments, bracket keys, label members as arguments, curried and chained calls (also after a space or newline), digit-bearing or capitalised member names, a passphrase argument, a quote glued to the expression, a mixed-case password literal, and spaced member chains |
 | arrow-code | 27 | Ordinary arrow-function code that must stay ALLOW: long or digit-bearing method names, year- or version-tagged identifiers, helper and library calls, format strings, codec and algorithm names, chains across spaces and lines (including spaced dots), and quoted code in prose |
 | destination | 11 | Phase F: secret-shaped values in `action.destination` (5 positives, 4 benign destination negatives) plus summary/payload equivalents (2 positives). No benign email-destination negative is included: email-shaped destinations are BLOCKed by current policy, even when allowlisted, so such a fixture would be a positive, not a negative |
 | escaped-json | 4 | Phase G: backslash-escaped JSON-style labelled credentials (`{\"api_key\": \"...\"}` as literal text) in summary, payload, and destination, plus the reclassified `gap-01` |
+| provider-token | 15 | Phase H: unlabelled provider credentials (PEM private-key blocks, AWS `AKIA`/`ASIA` key IDs, GitHub, GitLab, Stripe live, Slack, and Google API keys) in summary, payload value, payload key, and destination |
 
 Expected results (`expectedBlock`) follow the documented detection policy and
 are never derived from detector output. Provenance note: the arrow-function
@@ -109,6 +116,9 @@ its own corpus version and the engine build that produced it.
   corpus v1.3 reproduces `post-d1-boundary-remediation.json` byte-for-byte.
 - For reference (not stored): `=>` support without the Phase C arrow-function
   guard scored TP 34, FP 3, TN 16, FN 0 on corpus v1.
+- `results/post-h.json`: corpus v1.7, Phase H provider-credential detector.
+  TP 97, FP 0, TN 62, FN 0 (`provider-token` TP 15; `hard-benign` TN 25).
+  The same detector on corpus v1.6 reproduces `post-g.json` byte-for-byte.
 
 `known-unsupported` fixtures describe real gaps (for example `gap-03`
 contains credential-like text) yet count as true negatives, because

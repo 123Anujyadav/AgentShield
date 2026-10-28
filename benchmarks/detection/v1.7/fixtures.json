@@ -1,0 +1,1128 @@
+{
+  "corpus": "agentshield-detection-benchmark",
+  "version": "v1.7",
+  "note": "Hand-authored synthetic fixtures. expectedBlock is defined by the documented detection policy, never derived from detector output. Fake markers only; no real secrets, no ML dataset payloads. Phase H provider-credential values are runtime placeholders (__PH_*__) that the runner expands from clearly fake parts; the corpus file holds no credential-shaped literal.",
+  "fixtures": [
+    {
+      "id": "lab-01",
+      "family": "labelled-assignment",
+      "field": "summary",
+      "text": "api_key=fake-benchmark-key-001",
+      "expectedBlock": true
+    },
+    {
+      "id": "lab-02",
+      "family": "labelled-assignment",
+      "field": "summary",
+      "text": "password: fake-benchmark-pass-002",
+      "expectedBlock": true
+    },
+    {
+      "id": "lab-03",
+      "family": "labelled-assignment",
+      "field": "summary",
+      "text": "ACCESS_TOKEN=FAKE-BENCHMARK-TOKEN-003",
+      "expectedBlock": true
+    },
+    {
+      "id": "lab-04",
+      "family": "labelled-assignment",
+      "field": "summary",
+      "text": "{\"client_secret\": \"fake-benchmark-secret-004\"}",
+      "expectedBlock": true
+    },
+    {
+      "id": "lab-05",
+      "family": "labelled-assignment",
+      "field": "payload",
+      "text": "token=fake-benchmark-token-005",
+      "expectedBlock": true
+    },
+    {
+      "id": "lab-06",
+      "family": "labelled-assignment",
+      "field": "summary",
+      "text": "private_key=fake-benchmark-key-006",
+      "expectedBlock": true
+    },
+    {
+      "id": "lab-07",
+      "family": "labelled-assignment",
+      "field": "summary",
+      "text": "db_password=fake-benchmark-pass-007",
+      "expectedBlock": true
+    },
+    {
+      "id": "lab-08",
+      "family": "labelled-assignment",
+      "field": "summary",
+      "text": "x-api-key: fake-benchmark-key-008",
+      "expectedBlock": true
+    },
+    {
+      "id": "quo-01",
+      "family": "quoted-credential",
+      "field": "summary",
+      "text": "password: \"abc fakeBenchmarkQuoted001 tail\"",
+      "expectedBlock": true
+    },
+    {
+      "id": "quo-02",
+      "family": "quoted-credential",
+      "field": "summary",
+      "text": "password: 'abc fakeBenchmarkQuoted002 tail'",
+      "expectedBlock": true
+    },
+    {
+      "id": "quo-03",
+      "family": "quoted-credential",
+      "field": "summary",
+      "text": "password: \"abc fakeBenchmarkQuoted003 tail",
+      "expectedBlock": true
+    },
+    {
+      "id": "quo-04",
+      "family": "quoted-credential",
+      "field": "payload",
+      "text": "password: \"abc fakeBenchmarkQuoted004 tail\"",
+      "expectedBlock": true
+    },
+    {
+      "id": "quo-05",
+      "family": "quoted-credential",
+      "field": "summary",
+      "text": "{\"client_secret\": \"abc fakeBenchmarkQuoted005 tail\"}",
+      "expectedBlock": true
+    },
+    {
+      "id": "quo-06",
+      "family": "quoted-credential",
+      "field": "summary",
+      "text": "api_key: 'abc fakeBenchmarkQuoted006 tail",
+      "expectedBlock": true
+    },
+    {
+      "id": "tok-01",
+      "family": "token-formats",
+      "field": "summary",
+      "text": "Authorization: Bearer fakeBenchmarkBearer00112233",
+      "expectedBlock": true
+    },
+    {
+      "id": "tok-02",
+      "family": "token-formats",
+      "field": "summary",
+      "text": "key sk-proj-fakeBenchmark00112233",
+      "expectedBlock": true
+    },
+    {
+      "id": "tok-03",
+      "family": "token-formats",
+      "field": "summary",
+      "text": "key sk-ant-api03-fakeBenchmark001122",
+      "expectedBlock": true
+    },
+    {
+      "id": "tok-04",
+      "family": "token-formats",
+      "field": "payload",
+      "text": "sk-FAKE_BENCH_0044556677",
+      "expectedBlock": true
+    },
+    {
+      "id": "tok-05",
+      "family": "token-formats",
+      "field": "summary",
+      "text": "send to benchmark.person@example.com",
+      "expectedBlock": true
+    },
+    {
+      "id": "tok-06",
+      "family": "token-formats",
+      "field": "payload",
+      "text": "contact benchmark.person@example.com",
+      "expectedBlock": true
+    },
+    {
+      "id": "dec-01",
+      "family": "decoy-and-nested",
+      "field": "summary",
+      "text": "token: 42 and api_key=fake-benchmark-decoy-001",
+      "expectedBlock": true
+    },
+    {
+      "id": "dec-02",
+      "family": "decoy-and-nested",
+      "field": "summary",
+      "text": "Password: see vault. api_key=fake-benchmark-decoy-002",
+      "expectedBlock": true
+    },
+    {
+      "id": "dec-03",
+      "family": "decoy-and-nested",
+      "field": "summary",
+      "text": "secret: false; password=fake-benchmark-decoy-003",
+      "expectedBlock": true
+    },
+    {
+      "id": "dec-04",
+      "family": "decoy-and-nested",
+      "field": "summary",
+      "text": "token:password=fake-benchmark-decoy-004",
+      "expectedBlock": true
+    },
+    {
+      "id": "bnd-01",
+      "family": "boundary-lengths",
+      "field": "summary",
+      "text": "token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expectedBlock": false
+    },
+    {
+      "id": "bnd-02",
+      "family": "boundary-lengths",
+      "field": "summary",
+      "text": "token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expectedBlock": true
+    },
+    {
+      "id": "bnd-03",
+      "family": "boundary-lengths",
+      "field": "summary",
+      "text": "__PAD_2500__ api_key=fake-benchmark-boundary-003",
+      "expectedBlock": true
+    },
+    {
+      "id": "bnd-04",
+      "family": "boundary-lengths",
+      "field": "summary",
+      "text": "__PAD_9000__",
+      "expectedBlock": true
+    },
+    {
+      "id": "ben-01",
+      "family": "hard-benign",
+      "field": "payload",
+      "text": "tokenCount",
+      "payloadKey": "token",
+      "payloadValue": 42,
+      "expectedBlock": false
+    },
+    {
+      "id": "ben-02",
+      "family": "hard-benign",
+      "field": "payload",
+      "text": "secretFlag",
+      "payloadKey": "secret",
+      "payloadValue": false,
+      "expectedBlock": false
+    },
+    {
+      "id": "ben-03",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "token: 3 remaining",
+      "expectedBlock": false
+    },
+    {
+      "id": "ben-04",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "The bearer bond matures next year.",
+      "expectedBlock": false
+    },
+    {
+      "id": "ben-05",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "Explain the bearer instrument rules",
+      "expectedBlock": false
+    },
+    {
+      "id": "ben-06",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "Our pipeline is sk-learn-pipeline based.",
+      "expectedBlock": false
+    },
+    {
+      "id": "ben-07",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "token: unlimited-tier",
+      "expectedBlock": false
+    },
+    {
+      "id": "ben-08",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "password=abc12",
+      "expectedBlock": false
+    },
+    {
+      "id": "ben-09",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "Create a summary of quarterly revenue and regional growth.",
+      "expectedBlock": false
+    },
+    {
+      "id": "ben-10",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "The passphrase protects the vault and is never shared.",
+      "expectedBlock": false
+    },
+    {
+      "id": "ben-11",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "Use an arrow => to show the next step in the diagram.",
+      "expectedBlock": false
+    },
+    {
+      "id": "ben-12",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "Discuss why password hygiene matters for every account.",
+      "expectedBlock": false
+    },
+    {
+      "id": "gap-01",
+      "family": "escaped-json",
+      "field": "summary",
+      "text": "{\\\"api_key\\\": \\\"fake-benchmark-gap-001\\\"} written with backslash escapes as text",
+      "expectedBlock": true
+    },
+    {
+      "id": "gap-02",
+      "family": "known-unsupported",
+      "field": "summary",
+      "text": "the credential is split across two fields and never written whole",
+      "expectedBlock": false
+    },
+    {
+      "id": "gap-03",
+      "family": "known-unsupported",
+      "field": "summary",
+      "text": "an unlabelled high entropy string zxqwvkjhdplmrfngbtysacueio1234567890",
+      "expectedBlock": false
+    },
+    {
+      "id": "new-01",
+      "family": "c2-new-syntax",
+      "field": "summary",
+      "text": "passphrase=fake-benchmark-phrase-001",
+      "expectedBlock": true
+    },
+    {
+      "id": "new-02",
+      "family": "c2-new-syntax",
+      "field": "summary",
+      "text": "passphrase: fake-benchmark-phrase-002",
+      "expectedBlock": true
+    },
+    {
+      "id": "new-03",
+      "family": "c2-new-syntax",
+      "field": "payload",
+      "text": "passphrase=fake-benchmark-phrase-003",
+      "expectedBlock": true
+    },
+    {
+      "id": "new-04",
+      "family": "c2-new-syntax",
+      "field": "summary",
+      "text": "PASSPHRASE=FAKE-BENCHMARK-PHRASE-004",
+      "expectedBlock": true
+    },
+    {
+      "id": "new-05",
+      "family": "c2-new-syntax",
+      "field": "summary",
+      "text": "password => \"fake-benchmark-arrow-005\"",
+      "expectedBlock": true
+    },
+    {
+      "id": "new-06",
+      "family": "c2-new-syntax",
+      "field": "summary",
+      "text": "api_key => fake-benchmark-arrow-006",
+      "expectedBlock": true
+    },
+    {
+      "id": "new-07",
+      "family": "c2-new-syntax",
+      "field": "payload",
+      "text": "token => fake-benchmark-arrow-007",
+      "expectedBlock": true
+    },
+    {
+      "id": "new-08",
+      "family": "c2-new-syntax",
+      "field": "summary",
+      "text": "Refactor tokens.map(token => token.trim()) in the parser",
+      "expectedBlock": false
+    },
+    {
+      "id": "new-09",
+      "family": "c2-new-syntax",
+      "field": "summary",
+      "text": "Update users.map(password => hashPassword(password)) before saving",
+      "expectedBlock": false
+    },
+    {
+      "id": "new-10",
+      "family": "c2-new-syntax",
+      "field": "payload",
+      "text": "filter(secret => secret.isActive) before rendering",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1-01",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "password => password.fakeBenchmarkSecret123456",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1-02",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "token => send(fakeBenchmarkToken123456)",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1r-01",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "token => send(userId, fakeBenchmarkArg123456)",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1r-02",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "password => f(x, fakeBenchmarkShort123456)",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1r-03",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "secret => send(a, b, fakeBenchmarkThird123456)",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1r-04",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "token => send( fakeBenchmarkPadded123456 )",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1r-05",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "password => password.x.fakeBenchmarkSegment123456",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1r-06",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "token => token[fakeBenchmarkBracket123456]",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1r-07",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "token => token[\"fakeBenchmarkKey123456\"]",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1r-08",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "token => send(token.fakeBenchmarkMember123456)",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1r-09",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "token => send(userId)(fakeBenchmarkCurried123456)",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1r-10",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "token => a.b(x)(fakeBenchmarkChained123456)",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1r-11",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "password => password.Hunter2024x",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1r-12",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "password => password.abcdefghij1",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1r-13",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "password => password.CorrectHorseBatter",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1r-14",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "password => send(CorrectHorseBatteryStaple)",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1r-20",
+      "family": "arrow-code",
+      "field": "summary",
+      "text": "token => token.getAuthorizationHeaderValue()",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1r-21",
+      "family": "arrow-code",
+      "field": "payload",
+      "text": "token => token.toBase64String()",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1r-22",
+      "family": "arrow-code",
+      "field": "summary",
+      "text": "token => send(userId2024abcdef)",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1r-23",
+      "family": "arrow-code",
+      "field": "payload",
+      "text": "token => fetch(apiEndpointV2Url)",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1r-24",
+      "family": "arrow-code",
+      "field": "summary",
+      "text": "password => hash(password, saltRounds2024x)",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1r-25",
+      "family": "arrow-code",
+      "field": "payload",
+      "text": "password => hashPassword(password, salt)",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1r-26",
+      "family": "arrow-code",
+      "field": "summary",
+      "text": "password => hashPasswordV2(password)",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1r-27",
+      "family": "arrow-code",
+      "field": "payload",
+      "text": "password => password.sha256()",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1r-28",
+      "family": "arrow-code",
+      "field": "summary",
+      "text": "token => send(userId)",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1r-29",
+      "family": "arrow-code",
+      "field": "payload",
+      "text": "token => jwt.verify(token, process.env.JWT_SECRET)",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1r-30",
+      "family": "arrow-code",
+      "field": "summary",
+      "text": "password => bcrypt.compare(password, user.passwordHash)",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1r-31",
+      "family": "arrow-code",
+      "field": "payload",
+      "text": "items.map(token => format(token, 'yyyy-MM-dd'))",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1s-01",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "token => token.x\"fakeBenchmarkQuote123456",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1s-02",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "password => password.x\"fakeBenchmarkQuote654321",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1s-03",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "token => send(x) .then(fakeBenchmarkChain123456)",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1s-04",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "token => send(x) .then(fakeBenchmarkChain654321)",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1s-05",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "token => send(x)\n  .then(fakeBenchmarkNewline123456)",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1s-06",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "token => token [\"fakeBenchmarkSpacedKey123456\"]",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1s-07",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "token => send(x)'fakeBenchmarkSingle123456",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1s-08",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "token => send(userId, 'Hunter2024x')",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1s-09",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "token => send(x) .then(done); api_key=fakeBenchmarkLater123456",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1s-20",
+      "family": "arrow-code",
+      "field": "summary",
+      "text": "Use \"token => token.trim()\" when parsing",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1s-21",
+      "family": "arrow-code",
+      "field": "payload",
+      "text": "Use \"token => token.trim()\" when parsing",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1s-22",
+      "family": "arrow-code",
+      "field": "summary",
+      "text": "token => send(x) .then(done)",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1s-23",
+      "family": "arrow-code",
+      "field": "payload",
+      "text": "token => send(x)\n  .then(done)\n  .catch(fail)",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1s-24",
+      "family": "arrow-code",
+      "field": "summary",
+      "text": "token => token.trim() (see the parser docs)",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1s-25",
+      "family": "arrow-code",
+      "field": "payload",
+      "text": "token => Buffer.from(token, 'base64url')",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1s-26",
+      "family": "arrow-code",
+      "field": "summary",
+      "text": "password => encrypt(password, 'aes256gcm')",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1s-27",
+      "family": "arrow-code",
+      "field": "payload",
+      "text": "token => jwt.sign(token, key, 'HS256')",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1t-01",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "token => token . fakeBenchmarkSpaced123456",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1t-02",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "token => token . fakeBenchmarkSpaced654321",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1t-03",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "token => token?. fakeBenchmarkOptAfter123456",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1t-04",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "token => token?. fakeBenchmarkOptAfter654321",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1t-05",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "token => token ?. fakeBenchmarkOptAround123456",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1t-06",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "token => token ?. fakeBenchmarkOptAround654321",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1t-07",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "token => send(x) . then(fakeBenchmarkSpacedThen123456)",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1t-08",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "token => send(x) . then(fakeBenchmarkSpacedThen654321)",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1t-09",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "password => password .Hunter2024x",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1t-10",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "password => password .Hunter2024x",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1t-11",
+      "family": "arrow-disguise",
+      "field": "summary",
+      "text": "token => token\n.\n fakeBenchmarkNewlineDot123456",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1t-12",
+      "family": "arrow-disguise",
+      "field": "payload",
+      "text": "token => token\n.\n fakeBenchmarkNewlineDot654321",
+      "expectedBlock": true
+    },
+    {
+      "id": "d1t-20",
+      "family": "arrow-code",
+      "field": "summary",
+      "text": "token => token . trim()",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1t-21",
+      "family": "arrow-code",
+      "field": "payload",
+      "text": "token => token ?. value",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1t-22",
+      "family": "arrow-code",
+      "field": "summary",
+      "text": "token => send(x) . then(done)",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1t-23",
+      "family": "arrow-code",
+      "field": "payload",
+      "text": "token => token\n  .trim()\n  .toLowerCase()",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1t-24",
+      "family": "arrow-code",
+      "field": "summary",
+      "text": "password => password .length",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1t-25",
+      "family": "arrow-code",
+      "field": "payload",
+      "text": "password => password . sha256()",
+      "expectedBlock": false
+    },
+    {
+      "id": "d1t-26",
+      "family": "arrow-code",
+      "field": "summary",
+      "text": "token => token.trim(). Then save the result",
+      "expectedBlock": false
+    },
+    {
+      "id": "f-01",
+      "family": "destination",
+      "field": "destination",
+      "text": "api_key=fakeBenchmarkDest123456",
+      "expectedBlock": true
+    },
+    {
+      "id": "f-02",
+      "family": "destination",
+      "field": "destination",
+      "text": "sk-proj-fakeBenchmarkDest234567",
+      "expectedBlock": true
+    },
+    {
+      "id": "f-03",
+      "family": "destination",
+      "field": "destination",
+      "text": "Bearer fakeBenchmarkDestBearer123456",
+      "expectedBlock": true
+    },
+    {
+      "id": "f-04",
+      "family": "destination",
+      "field": "destination",
+      "text": "user.fakeBenchmarkDest123456@example.com",
+      "expectedBlock": true
+    },
+    {
+      "id": "f-05",
+      "family": "destination",
+      "field": "destination",
+      "text": "password => password.fakeBenchmarkDest345678",
+      "expectedBlock": true
+    },
+    {
+      "id": "f-06",
+      "family": "destination",
+      "field": "destination",
+      "text": "simulated-workspace",
+      "expectedBlock": false
+    },
+    {
+      "id": "f-07",
+      "family": "destination",
+      "field": "destination",
+      "text": "https://example.com/reports/daily-summary",
+      "expectedBlock": false
+    },
+    {
+      "id": "f-08",
+      "family": "destination",
+      "field": "destination",
+      "text": "reports/2026/summary-output",
+      "expectedBlock": false
+    },
+    {
+      "id": "f-09",
+      "family": "destination",
+      "field": "destination",
+      "text": "token => token.trim()",
+      "expectedBlock": false
+    },
+    {
+      "id": "f-10",
+      "family": "destination",
+      "field": "summary",
+      "text": "Send the summary to api_key=fakeBenchmarkDest456789",
+      "expectedBlock": true
+    },
+    {
+      "id": "f-11",
+      "family": "destination",
+      "field": "payload",
+      "text": "api_key=fakeBenchmarkDest567890",
+      "expectedBlock": true
+    },
+    {
+      "id": "g-01",
+      "family": "escaped-json",
+      "field": "summary",
+      "text": "{\\\"api_key\\\": \\\"fakeBenchmarkEscaped123456\\\"} written with backslash escapes as text",
+      "expectedBlock": true
+    },
+    {
+      "id": "g-02",
+      "family": "escaped-json",
+      "field": "payload",
+      "text": "{\\\"password\\\": \\\"fakeBenchmarkEscaped234567\\\"}",
+      "expectedBlock": true
+    },
+    {
+      "id": "g-03",
+      "family": "escaped-json",
+      "field": "destination",
+      "text": "{\\\"token\\\": \\\"fakeBenchmarkEscaped345678\\\"}",
+      "expectedBlock": true
+    },
+    {
+      "id": "g-20",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "Copy the file from C:\\Users\\test\\reports\\summary.txt when ready",
+      "expectedBlock": false
+    },
+    {
+      "id": "g-21",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "Use \\d+ to match digits and \\s for whitespace in the pattern",
+      "expectedBlock": false
+    },
+    {
+      "id": "g-22",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "{\\\"api_key\\\": \\\"abc\\\"} is too short to be a credential",
+      "expectedBlock": false
+    },
+    {
+      "id": "g-23",
+      "family": "hard-benign",
+      "field": "payload",
+      "text": "{\\\"api_key\\\": null} carries no value",
+      "expectedBlock": false
+    },
+    {
+      "id": "h-01",
+      "family": "provider-token",
+      "field": "summary",
+      "text": "Deploy with __PH_AWS_AKIA__ for the upload",
+      "expectedBlock": true
+    },
+    {
+      "id": "h-02",
+      "family": "provider-token",
+      "field": "payload",
+      "text": "__PH_AWS_ASIA__",
+      "expectedBlock": true
+    },
+    {
+      "id": "h-03",
+      "family": "provider-token",
+      "field": "destination",
+      "text": "https://ci.example.com/hook?auth=__PH_GITHUB_CLASSIC__",
+      "expectedBlock": true
+    },
+    {
+      "id": "h-04",
+      "family": "provider-token",
+      "field": "summary",
+      "text": "Fine-grained access: __PH_GITHUB_FINE__",
+      "expectedBlock": true
+    },
+    {
+      "id": "h-05",
+      "family": "provider-token",
+      "field": "payload",
+      "text": "payload key carries a GitLab token",
+      "payloadKey": "__PH_GITLAB__",
+      "payloadValue": "enabled",
+      "expectedBlock": true
+    },
+    {
+      "id": "h-06",
+      "family": "provider-token",
+      "field": "destination",
+      "text": "__PH_STRIPE_SK__",
+      "expectedBlock": true
+    },
+    {
+      "id": "h-07",
+      "family": "provider-token",
+      "field": "summary",
+      "text": "Restricted key __PH_STRIPE_RK__ attached",
+      "expectedBlock": true
+    },
+    {
+      "id": "h-08",
+      "family": "provider-token",
+      "field": "payload",
+      "text": "Slack bot: __PH_SLACK_BOT__",
+      "expectedBlock": true
+    },
+    {
+      "id": "h-09",
+      "family": "provider-token",
+      "field": "destination",
+      "text": "https://maps.example.com/api?key=__PH_GOOGLE__",
+      "expectedBlock": true
+    },
+    {
+      "id": "h-10",
+      "family": "provider-token",
+      "field": "summary",
+      "text": "Key file contents: __PH_PEM_RSA__",
+      "expectedBlock": true
+    },
+    {
+      "id": "h-11",
+      "family": "provider-token",
+      "field": "payload",
+      "text": "__PH_PEM_RSA__",
+      "expectedBlock": true
+    },
+    {
+      "id": "h-12",
+      "family": "provider-token",
+      "field": "payload",
+      "text": "payload key carries a Stripe live key",
+      "payloadKey": "__PH_STRIPE_SK__",
+      "payloadValue": "live",
+      "expectedBlock": true
+    },
+    {
+      "id": "h-13",
+      "family": "provider-token",
+      "field": "summary",
+      "text": "Use key __PH_GOOGLE__ in the client",
+      "expectedBlock": true
+    },
+    {
+      "id": "h-14",
+      "family": "provider-token",
+      "field": "destination",
+      "text": "__PH_GITLAB__",
+      "expectedBlock": true
+    },
+    {
+      "id": "h-15",
+      "family": "provider-token",
+      "field": "destination",
+      "text": "__PH_SLACK_BOT__",
+      "expectedBlock": true
+    },
+    {
+      "id": "h-20",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "__PH_AWS_SHORT__ is too short to be a key id",
+      "expectedBlock": false
+    },
+    {
+      "id": "h-21",
+      "family": "hard-benign",
+      "field": "payload",
+      "text": "__PH_AWS_GLUED__",
+      "expectedBlock": false
+    },
+    {
+      "id": "h-22",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "Region code __PH_ASIA_WORD__ in the report",
+      "expectedBlock": false
+    },
+    {
+      "id": "h-23",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "__PH_GITHUB_UPPER__",
+      "expectedBlock": false
+    },
+    {
+      "id": "h-24",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "hugs and __PH_SLACK_XOXO__",
+      "expectedBlock": false
+    },
+    {
+      "id": "h-25",
+      "family": "hard-benign",
+      "field": "payload",
+      "text": "__PH_GOOGLE_LONG__",
+      "expectedBlock": false
+    },
+    {
+      "id": "h-26",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "A PEM file starts with __PH_PEM_HEADER_ONLY__ and ends with its END line.",
+      "expectedBlock": false
+    },
+    {
+      "id": "h-27",
+      "family": "hard-benign",
+      "field": "payload",
+      "text": "__PH_PEM_ELIDED__",
+      "expectedBlock": false
+    },
+    {
+      "id": "h-28",
+      "family": "hard-benign",
+      "field": "summary",
+      "text": "__PH_PEM_PUBLIC__",
+      "expectedBlock": false
+    }
+  ]
+}

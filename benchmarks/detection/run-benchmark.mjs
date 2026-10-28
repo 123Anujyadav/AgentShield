@@ -28,7 +28,39 @@ import { fileURLToPath } from "node:url";
 
 const DATA_LEAK_RULE = "data-leak.outbound-secret";
 const FIELDS = new Set(["summary", "payload", "destination"]);
-const PLACEHOLDERS = { __PAD_2500__: "a".repeat(2500), __PAD_9000__: "a".repeat(9000) };
+/**
+ * Phase H provider-credential placeholders. Values are assembled here at run
+ * time from clearly fake parts, so neither the corpus files nor this source
+ * contain a literal that looks like a real credential (or that the repository
+ * secret scanner would flag). Earlier corpora use only the __PAD_*__ entries.
+ */
+const join = (...parts) => parts.join("");
+const fake = (seed, length) => seed.padEnd(length, "0");
+const PEM_BODY = "FAKEbenchmarkKeyMaterial0123456789abcdefFAKE";
+const pemArmor = (edge, label) => join("-----", edge, " ", label, "-----");
+const PRIVATE_KEY_LABEL = join("RSA PRIV", "ATE KEY");
+const PROVIDER_PLACEHOLDERS = {
+  __PH_AWS_AKIA__: join("AK", "IA", fake("FAKEBENCH", 16)),
+  __PH_AWS_ASIA__: join("AS", "IA", fake("FAKEBENCH2", 16)),
+  __PH_GITHUB_CLASSIC__: join("gh", "p_", fake("fakeBenchmarkGithub", 36)),
+  __PH_GITHUB_FINE__: join("github", "_pat_", fake("fakeBenchmark", 22), "_", fake("fakeBenchmarkFine", 59)),
+  __PH_GITLAB__: join("gl", "pat-", fake("fakeBenchmarkGitlab", 20)),
+  __PH_STRIPE_SK__: join("sk", "_live_", fake("fakeBenchmarkStripe", 24)),
+  __PH_STRIPE_RK__: join("rk", "_live_", fake("fakeBenchmarkRestrict", 24)),
+  __PH_SLACK_BOT__: join("xo", "xb-", "000000000001-000000000002-fakeBenchmarkSlack"),
+  __PH_GOOGLE__: join("AI", "za", fake("FakeBenchmarkGoogle", 35)),
+  __PH_PEM_RSA__: join(pemArmor("BEGIN", PRIVATE_KEY_LABEL), "\n", PEM_BODY, "\n", pemArmor("END", PRIVATE_KEY_LABEL)),
+  __PH_AWS_SHORT__: join("AK", "IA", fake("FAKEBENCH", 15)),
+  __PH_AWS_GLUED__: join("x", "AK", "IA", fake("FAKEBENCH", 16)),
+  __PH_ASIA_WORD__: join("AS", "IA", "PACIFICOPERATION"),
+  __PH_GITHUB_UPPER__: join("GH", "P_", fake("fakeBenchmarkGithub", 36)),
+  __PH_SLACK_XOXO__: join("xo", "xo-gossip-girl-fans-2024"),
+  __PH_GOOGLE_LONG__: join("AI", "za", fake("FakeBenchmarkGoogle", 36)),
+  __PH_PEM_HEADER_ONLY__: pemArmor("BEGIN", PRIVATE_KEY_LABEL),
+  __PH_PEM_ELIDED__: join(pemArmor("BEGIN", PRIVATE_KEY_LABEL), "\nMIIEvQIBADANBg...\n", pemArmor("END", PRIVATE_KEY_LABEL)),
+  __PH_PEM_PUBLIC__: join(pemArmor("BEGIN", "PUBLIC KEY"), "\n", PEM_BODY, "\n", pemArmor("END", "PUBLIC KEY")),
+};
+const PLACEHOLDERS = { __PAD_2500__: "a".repeat(2500), __PAD_9000__: "a".repeat(9000), ...PROVIDER_PLACEHOLDERS };
 const PLACEHOLDER_TOKEN = /__[A-Z0-9_]+__/g;
 
 /** Replaces every known placeholder; an unknown placeholder is an error, never left in place. */
@@ -74,7 +106,7 @@ export function validateCorpus(corpus) {
     if (fixture.payloadValue !== undefined && !["string", "number", "boolean"].includes(typeof fixture.payloadValue)) {
       errors.push(`${at}: payloadValue must be a string, number, or boolean`);
     }
-    for (const value of [fixture.text, fixture.payloadValue]) {
+    for (const value of [fixture.text, fixture.payloadValue, fixture.payloadKey]) {
       if (typeof value !== "string") continue;
       try {
         expand(value);
@@ -92,7 +124,7 @@ export function actionFor(baseAction, fixture) {
     return { ...baseAction, destination: expand(fixture.text) };
   }
   if (fixture.field === "payload") {
-    const key = fixture.payloadKey ?? "note";
+    const key = fixture.payloadKey === undefined ? "note" : expand(fixture.payloadKey);
     const raw = fixture.payloadValue ?? fixture.text;
     const value = typeof raw === "string" ? expand(raw) : raw;
     return { ...baseAction, payload: { [key]: value } };

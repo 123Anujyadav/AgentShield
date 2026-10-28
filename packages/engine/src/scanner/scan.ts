@@ -26,6 +26,39 @@ const WEAK_LABEL = "(?:secret|token)";
 const EMAIL_SOURCE = "(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b";
 
 /**
+ * Phase H provider credential formats. Prefixes are case-sensitive, and a
+ * prefix glued to a preceding letter, digit, or underscore (`my_ghp_...`) is
+ * not matched, the same rule as for `sk-` tokens. `accept` adds a digit check
+ * where the prefix also starts ordinary words: `ASIA...` (ASIAPACIFIC...) and
+ * Slack's `xox` (xoxo is excluded from the prefix set entirely).
+ */
+interface ProviderTokenFormat {
+  kind: string;
+  pattern: RegExp;
+  accept?: (token: string) => boolean;
+}
+
+const PROVIDER_TOKEN_FORMATS: ProviderTokenFormat[] = [
+  {
+    kind: "aws-access-key-id",
+    pattern: /(?<![A-Za-z0-9_])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9_])/g,
+    accept: (token) => token.startsWith("AKIA") || /\d/.test(token.slice(4)),
+  },
+  { kind: "github-token", pattern: /(?<![A-Za-z0-9_])(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})/g },
+  { kind: "gitlab-token", pattern: /(?<![A-Za-z0-9_])glpat-[A-Za-z0-9_-]{20,}/g },
+  { kind: "stripe-live-key", pattern: /(?<![A-Za-z0-9_])(?:sk|rk)_live_[A-Za-z0-9]{24,}/g },
+  { kind: "slack-token", pattern: /(?<![A-Za-z0-9_])xox[abprs]-[A-Za-z0-9-]{10,}/g, accept: (token) => /\d/.test(token.slice(5)) },
+  { kind: "google-api-key", pattern: /(?<![A-Za-z0-9_-])AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/g },
+];
+
+/**
+ * PEM private-key armor header for the RSA, EC, DSA, OPENSSH, ENCRYPTED, and
+ * plain PKCS#8 forms only. Public keys, certificates, and PGP key blocks are
+ * different armor labels and are not matched.
+ */
+const PEM_PRIVATE_KEY_HEADER = "-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----";
+
+/**
  * Evidence redaction. Uses the same label family as the outbound detector,
  * but redacts any labelled value regardless of shape: evidence is display
  * text, so over-redacting a count is harmless while leaking a value is not.
@@ -36,6 +69,14 @@ const EMAIL_SOURCE = "(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A
  * backslash (\\) before a quote leaves that quote terminating.
  */
 const SECRET_VALUE_PATTERNS: RegExp[] = [
+  // Phase H provider formats run first, so a labelled pattern below cannot
+  // split a private-key header (private_key=-----BEGIN ...) before it is seen.
+  // A private-key header is redacted through its END line, or to the end of
+  // the text when there is none, even when no key material follows (display
+  // text: over-redacting documentation is harmless). Token formats are
+  // redacted without the detector's digit checks for the same reason.
+  new RegExp(`${PEM_PRIVATE_KEY_HEADER}[\\s\\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)`, "g"),
+  ...PROVIDER_TOKEN_FORMATS.map((format) => format.pattern),
   // Backslash-escaped JSON form ({\"api_key\": \"...\"} as literal text).
   // The value runs to just before its escaped closing quote (or the end of
   // the text). The closing boundary is a lookahead, not consumed: consuming
@@ -494,6 +535,36 @@ function hasSkStyleSecret(text: string): boolean {
   return false;
 }
 
+/**
+ * A private-key header blocks only when key material follows it: after
+ * optional whitespace or literal \n / \r escapes (a key inside a JSON string),
+ * either a legacy encrypted-PEM `Proc-Type:` line or a run of 32+ base64
+ * characters mixing upper case, lower case, and a digit. A header on its own,
+ * or followed by an elided or placeholder body (`MIIEvQ...`, `<your key>`,
+ * `XXXX...`), is documentation and does not block.
+ */
+function hasPrivateKeyBlock(text: string): boolean {
+  for (const header of text.matchAll(new RegExp(PEM_PRIVATE_KEY_HEADER, "g"))) {
+    const rest = text.slice((header.index ?? 0) + header[0].length);
+    const body = rest.slice(/^(?:\s|\\[nr])*/.exec(rest)?.[0].length ?? 0);
+    if (body.startsWith("Proc-Type:")) return true;
+    const run = /^[A-Za-z0-9+/]{32,}/.exec(body)?.[0];
+    if (run && /[a-z]/.test(run) && /[A-Z]/.test(run) && /\d/.test(run)) return true;
+  }
+  return false;
+}
+
+/** The kind of the first provider credential format found, or null. */
+function providerCredentialKind(text: string): string | null {
+  if (hasPrivateKeyBlock(text)) return "private-key-block";
+  for (const format of PROVIDER_TOKEN_FORMATS) {
+    for (const match of text.matchAll(format.pattern)) {
+      if (!format.accept || format.accept(match[0])) return format.kind;
+    }
+  }
+  return null;
+}
+
 const SIMPLE_SECRET_DETECTORS: { kind: string; pattern: RegExp }[] = [
   { kind: "seeded-fake-secret", pattern: /\bFAKE_[A-Z0-9_]*SECRET[A-Z0-9_]*\b/ },
   { kind: "email-address", pattern: new RegExp(EMAIL_SOURCE) },
@@ -503,7 +574,9 @@ const SIMPLE_SECRET_DETECTORS: { kind: string; pattern: RegExp }[] = [
  * Secret-shaped patterns the outbound Data-Leak Guard can recognize: the
  * redactor's family plus labelled variants (access_token, client_secret,
  * auth_token, private_key, refresh_token, session_token, secret_key,
- * db_password, aws_secret_access_key, x-api-key, JSON-style quoted keys).
+ * db_password, aws_secret_access_key, x-api-key, JSON-style quoted keys), and
+ * since Phase H seven provider formats: PEM private-key blocks, AWS access key
+ * IDs, GitHub, GitLab, Stripe live, Slack, and Google API key tokens.
  * It is not comprehensive secret detection. Unlabelled high-entropy values,
  * split or encoded secrets, and formats outside this list are not recognized.
  */
@@ -534,6 +607,8 @@ export function detectOutboundSecret(field: string, text: unknown): OutboundSecr
   if (hasLabelledSecret(text)) return { kind: "labelled-secret-assignment", field };
   if (hasBearerSecret(text)) return { kind: "bearer-token", field };
   if (hasSkStyleSecret(text)) return { kind: "sk-style-token", field };
+  const providerKind = providerCredentialKind(text);
+  if (providerKind) return { kind: providerKind, field };
   for (const detector of SIMPLE_SECRET_DETECTORS) {
     if (detector.pattern.test(text)) return { kind: detector.kind, field };
   }
