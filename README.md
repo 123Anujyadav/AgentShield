@@ -20,7 +20,7 @@ for every decision. Nothing real ever executes; handlers are simulated.
 ```powershell
 npm install
 npm run build -w @agentshield/engine
-npm run dev:api   # terminal 1 -> http://localhost:4000
+npm run dev:api   # terminal 1 -> http://127.0.0.1:4000 (loopback only)
 npm run dev:web   # terminal 2 -> http://localhost:5173
 ```
 
@@ -97,6 +97,10 @@ Client-supplied findings, scores, decisions, or replacement actions are ignored.
 Simulated handlers are an explicit allowlist (`create_summary`, `read_document`, `create_report`)
 with no real side effects. Pending approvals and events reset when the API restarts.
 Production use would require authenticated, authorised user identity; this local demo has none.
+Since Phase J the API server listens on IPv4 loopback (`127.0.0.1`, set in
+`apps/api/src/host.ts`) instead of every network interface, so other machines cannot reach
+it. This reduces remote network exposure only: the API still has no authentication, and any
+process on the same machine can call every endpoint, including approve and reject.
 
 Intent Firewall: action types must be explicitly allowed, destinations must match
 `allowedDestinations` when present, and missing/empty permissions block conservatively.
