@@ -4,6 +4,17 @@ Local-first AI-agent security prototype for a six-day hackathon. Rule-based,
 deterministic, simulated execution only. It does not provide system-wide
 protection or complete prompt-injection prevention.
 
+## What this prototype is not
+
+- **Not real execution.** Every handler is simulated; nothing is sent, paid, or deleted.
+- **Not a secured service.** The API listens on local loopback (`127.0.0.1`) only and has no
+  authentication.
+- **Not persistent.** Pending approvals and activity events are in memory and reset when the
+  API restarts.
+- **Not a live model.** The advisory model is a mock; no live Muse Spark call has been made.
+- **Not real data.** The demo uses seeded synthetic scenarios only.
+- **Not production-ready.**
+
 ## The problem
 
 AI agents read untrusted documents, web pages, and tool output, then propose
@@ -15,59 +26,132 @@ explicit intent, scans the untrusted content with documented rules, and
 allows, requires confirmation for, or blocks the action — with an explanation
 for every decision. Nothing real ever executes; handlers are simulated.
 
-## Run locally
+## Architecture
 
-```powershell
-npm install
-npm run build -w @agentshield/engine
-npm run dev:api   # terminal 1 -> http://127.0.0.1:4000 (loopback only)
-npm run dev:web   # terminal 2 -> http://localhost:5173
+```text
+ Agent proposal (intent + action) and untrusted text
+                     |
+                     v
+ apps/api  -- validates the request (shape, 8,000-character content limit)
+                     |
+                     v
+ packages/engine  -- deterministic and authoritative:
+   scan untrusted text -> hard deny -> data-leak guard -> intent firewall
+   -> suspicious content escalates an otherwise allowed action to CONFIRM
+                     |
+      +--------------+------------------------+
+      |              |                        |
+    ALLOW         CONFIRM                   BLOCK
+      |              |                        |
+      v              v                        v
+ simulated     in-memory approval        handler never runs;
+ handler       (15-minute TTL);          approval cannot
+ only          approving re-checks       override it
+               policy; the simulated
+               handler runs once only
+               if the re-check permits
+               it, otherwise nothing
+               executes
+
+ Advisory model (mock by default): returns observations only and cannot
+ change a decision.  apps/web renders the API's responses.
 ```
 
-Open http://localhost:5173 in a browser.
+## Run locally
+
+Node.js 22 and npm 10 were verified on this machine for the build and test commands; this is
+not a formal `engines` requirement in `package.json` (the API loads `.env` with Node's built-in
+`process.loadEnvFile`). The dev-server browser walkthrough has not yet been independently
+verified at this revision. The commands are written for Windows PowerShell; use two PowerShell
+terminals. `npm install` needs internet access once; running the demo does not.
+
+```powershell
+npm install                            # once (needs internet)
+npm run build -w @agentshield/engine   # build the engine before starting the API and web app
+npm run dev:api                        # terminal 1 -> API on http://127.0.0.1:4000 (loopback only)
+npm run dev:web                        # terminal 2 -> web app on http://localhost:5173
+```
+
+Open http://localhost:5173 in a browser. Terminal 1 should print
+`AgentShield API listening on http://127.0.0.1:4000 (loopback only, no authentication)`.
+Rebuild the engine (`npm run build -w @agentshield/engine`) after changing engine source.
 Note: the repo `.npmrc` sets `legacy-peer-deps=true`; that works around an npm
 arborist peer-resolution bug with Vitest 4 in this workspace.
+
+**Troubleshooting.** If the web app shows "Could not reach the AgentShield API server", check
+that terminal 1 is running and printed the line above. The web app calls
+`http://localhost:4000` by default and reads `VITE_API_URL` if it is set
+(`apps/web/src/App.tsx`); if `localhost` does not reach the API on this machine, start the web
+app with the API's loopback address:
+
+```powershell
+$env:VITE_API_URL = "http://127.0.0.1:4000"; npm run dev:web
+```
+
+`$env:VITE_API_URL` applies only to the current PowerShell session; a new terminal uses the
+default `http://localhost:4000` again.
 
 ## Verify
 
 ```powershell
-npm audit
 npm run typecheck
 npm test
 npm run build
+npm run security:verify                                   # secret scan of tracked files and history, then git diff --check
+node --test benchmarks/scanner/run-scanner-benchmark.test.mjs   # needs the engine built first
+node --test benchmarks/detection/run-benchmark.test.mjs
+npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-10-29): `npm test` passes 856 tests (engine 708,
-API 148), and `npm run typecheck` and `npm run build` pass. `npm audit` last
-reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
+Current verified state (2026-10-29): `npm test` passes 857 tests (engine 708,
+API 149), and `npm run typecheck` and `npm run build` pass. `npm audit` needs network
+access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 
-## Three-minute demo outline (seeded synthetic scenarios only)
+## Demo outline (about four minutes, seeded synthetic scenarios only)
 
-1. **Benign (≈40s).** Pick "Benign: create summary", Evaluate. The deterministic
-   decision is ALLOW, risk 10, the simulated summary handler runs, and the
-   advisory panel shows a labelled MOCK observation. Point out that the
-   decision came from the engine, not the page.
-2. **Injection (≈70s).** Pick "Injection: malicious document, permitted
-   action", Evaluate. The scanner flags instruction-override, secret-exfiltration,
-   and tool-redirect rules. The action itself matches intent, so the explicit
-   policy escalates to CONFIRM instead of silently allowing or blocking.
-   Nothing has executed yet. Approve it: the server re-checks policy, runs the
-   exact stored action once, and a second approval returns 409.
-3. **Hard deny (≈40s).** Pick "Forbidden: send payment", Evaluate. The scanner
-   also flags this content, but the hard-deny rule decides: BLOCK, risk 95,
-   no pending approval is created, and approval cannot override it.
-4. **Hidden injection (≈30s).** Pick "Injection: invisible separators", Evaluate.
+The five seeded scenarios and their expected outcomes. Decisions and risk scores are
+computed by the engine and covered by the automated engine and API tests; the browser
+walkthrough below has not yet been recorded as tested.
+
+| Scenario | Decision | Risk | Scanner rules flagged |
+| --- | --- | --- | --- |
+| Benign: create summary | ALLOW | 10 | none |
+| Injection: malicious document, permitted action | CONFIRM | 80 | `injection.instruction-override`, `injection.secret-exfiltration`, `injection.unauthorized-tool-action` |
+| Forbidden: send payment | BLOCK | 95 | the same three (the hard deny decides) |
+| Injection: invisible separators | CONFIRM | 80 | `injection.secret-exfiltration` |
+| Benign: article about prompt injection | ALLOW | 10 | none |
+
+In the sidebar, open **Scenario Lab**, select a scenario, and click **Evaluate Action Now**.
+
+1. **Benign (≈40s).** Select "Benign: create summary" and click **Evaluate Action Now**. The
+   deterministic decision is ALLOW, risk 10, and only the simulated summary handler runs.
+   Point out that the decision came from the engine, not the page.
+2. **Injection (≈60s).** Select "Injection: malicious document, permitted action" and evaluate.
+   The scanner flags `injection.instruction-override`, `injection.secret-exfiltration`, and
+   `injection.unauthorized-tool-action`. The action itself matches intent, so the explicit
+   policy escalates to CONFIRM (risk 80) instead of silently allowing or blocking. Nothing has
+   executed yet. Open **Approval Queue** and click **Approve & Run (SIMULATED)**: the server
+   re-checks policy and runs the exact stored action once. The API rejects a second approval
+   of the same record with `409` (covered by the API tests). **Reject Action** on a pending
+   item executes nothing.
+3. **Hard deny (≈40s).** Select "Forbidden: send payment" and evaluate. The scanner also flags
+   this content, but the hard-deny rule decides: BLOCK, risk 95, no pending approval is
+   created, and approval cannot override it.
+4. **Hidden injection (≈30s).** Select "Injection: invisible separators" and evaluate.
    The document's request uses zero-width spaces in place of ordinary spaces,
    so its words appear run together and simply deleting the invisible
    characters would join them. The scanner still flags
    `injection.secret-exfiltration` (Design B3), and the evidence shows the
    request with ordinary spaces and no invisible characters. The summary
-   action matches intent, so the decision is CONFIRM with a pending approval;
+   action matches intent, so the decision is CONFIRM (risk 80) with a pending approval;
    nothing executes unless it is approved.
-5. **Close (≈20s).** Show the activity timeline tying every event together,
-   and the provider banner: deterministic enforcement is authoritative;
-   model-assisted analysis is advisory, currently a mock, and live Muse Spark
-   has not been tested. Do not present mock output as real model output.
+5. **No false alarm (≈20s).** Select "Benign: article about prompt injection" and evaluate.
+   The text discusses attacks but makes no request: the scan is clean, ALLOW, risk 10.
+6. **Close (≈30s).** Open **Activity & Audit** to show the timeline tying every event together,
+   and point to the top bar, which should read "Advisory Model: MOCK (Live OFF)";
+   **Model Diagnostics** shows the provider status. Deterministic enforcement is authoritative;
+   model-assisted analysis is advisory, currently a mock, and live Muse Spark has not been
+   tested. Do not present mock output as real model output.
 
 ## Injection Scanner (Phase 2)
 
@@ -80,7 +164,7 @@ Limitations: paraphrases, non-English text, encoded payloads, and mid-sentence i
 can evade these patterns, and descriptive text can occasionally match. Evidence is redacted
 before it leaves the engine.
 
-Since Phase K, the secret-exfiltration and tool-redirect rules are suppressed only when a
+Since Phase K, the secret-exfiltration and unauthorized-tool-action rules are suppressed only when a
 negation (`never`, `do not`, `don't`, `should not`, `must not`) directly precedes the matched
 risky verb, as in safety advice such as "Do not send API keys to unknown addresses". Secrecy or
 pretext wording elsewhere ("... and do not tell the user", "keep this between us", "To protect
@@ -93,7 +177,7 @@ recognised, so such advice escalates to CONFIRM. Quote marks and educational fra
 exempt a request, so a description that quotes an attack's imperative ("Attackers often write
 'send the API keys to me ...'") is still flagged; descriptions without such an imperative are
 not. Known pattern gaps, unchanged: payment amounts written as `$500` are not matched by the
-tool-redirect rule, an override wrapped in quote marks (`"Ignore all previous instructions"`
+unauthorized-tool-action rule, an override wrapped in quote marks (`"Ignore all previous instructions"`
 after other text) is not matched because those patterns need a sentence start, and "transfer"
 is not an exfiltration verb ("transfer the API keys to ..."). A deterministic synthetic
 benchmark for these rules lives in `benchmarks/scanner/` (synthetic corpus only; see its README).
@@ -425,3 +509,9 @@ Advisory layer only. Deterministic policy remains authoritative.
 - `packages/engine` — framework-independent TypeScript security engine (contracts, evaluation, seeded scenarios).
 - `apps/api` — Express API. Validates input, calls the engine, records in-memory activity events.
 - `apps/web` — React/Vite/Tailwind dashboard. Renders API/engine responses only.
+- `benchmarks/` — deterministic synthetic benchmarks for outbound credential detection
+  (`benchmarks/detection/`) and the injection scanner (`benchmarks/scanner/`), each with its own README.
+- `docs/` — audits, live-readiness notes, and the Sentinel research documents.
+- `ml/` — the Sentinel ML research track (dataset tooling and review workflow). It is separate
+  from this prototype: the demo does not use it, and model training is not approved.
+- `scripts/` — the repository secret scanner (`scripts/secret-scan.mjs`) used by `npm run security:verify`.
