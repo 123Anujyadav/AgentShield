@@ -37,8 +37,9 @@ npm test
 npm run build
 ```
 
-Current verified state (2026-10-26): 70 tests passing, `npm audit` reports
-0 vulnerabilities.
+Current verified state (2026-10-29): `npm test` passes 856 tests (engine 708,
+API 148), and `npm run typecheck` and `npm run build` pass. `npm audit` last
+reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 
 ## Three-minute demo outline (seeded synthetic scenarios only)
 
@@ -55,7 +56,15 @@ Current verified state (2026-10-26): 70 tests passing, `npm audit` reports
 3. **Hard deny (≈40s).** Pick "Forbidden: send payment", Evaluate. The scanner
    also flags this content, but the hard-deny rule decides: BLOCK, risk 95,
    no pending approval is created, and approval cannot override it.
-4. **Close (≈30s).** Show the activity timeline tying every event together,
+4. **Hidden injection (≈30s).** Pick "Injection: invisible separators", Evaluate.
+   The document's request uses zero-width spaces in place of ordinary spaces,
+   so its words appear run together and simply deleting the invisible
+   characters would join them. The scanner still flags
+   `injection.secret-exfiltration` (Design B3), and the evidence shows the
+   request with ordinary spaces and no invisible characters. The summary
+   action matches intent, so the decision is CONFIRM with a pending approval;
+   nothing executes unless it is approved.
+5. **Close (≈20s).** Show the activity timeline tying every event together,
    and the provider banner: deterministic enforcement is authoritative;
    model-assisted analysis is advisory, currently a mock, and live Muse Spark
    has not been tested. Do not present mock output as real model output.
