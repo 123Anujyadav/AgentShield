@@ -45,6 +45,11 @@ export const CATEGORIES = new Set([
   // legitimately contains them (directional marks, soft hyphens, a leading BOM).
   "obfuscated-attack",
   "obfuscated-benign",
+  // v4: requests whose spaces are replaced by invisible format characters, benign text
+  // with such characters, and the documented mixed intra-word plus separator gap.
+  "separator-attack",
+  "separator-benign",
+  "separator-gap",
 ]);
 const DECISIONS = new Set(["CONFIRM", "ALLOW"]);
 const FIXTURE_KEYS = new Set(["id", "category", "text", "expectedRules", "expectedDecision", "reason"]);
@@ -166,12 +171,22 @@ export function scoreCorpus(corpus, scan) {
  * that includes them (v3) says how many and names the gaps that remain.
  */
 function limitationsFor(corpus) {
-  const obfuscated = corpus.fixtures.filter((f) => f.category === "obfuscated-attack").length;
+  const count = (category) => corpus.fixtures.filter((f) => f.category === category).length;
+  const obfuscated = count("obfuscated-attack");
+  const separator = count("separator-attack");
+  // Each corpus keeps the wording its stored reports were written with: v1/v2 (no
+  // obfuscated attacks), v3 (obfuscated attacks only), and v4 onward (separator attacks too).
+  let coverage;
+  if (obfuscated === 0) {
+    coverage = "Only the rule-based scanner is measured. Obfuscated, encoded, non-English, paraphrased, and mid-sentence injections are documented gaps and are not represented here.";
+  } else if (separator === 0) {
+    coverage = `Only the rule-based scanner is measured. This corpus includes ${obfuscated} obfuscated attacks that hide a request with the approved invisible format characters (Phase L). Other obfuscation (look-alike letters, invisible characters outside the approved set, and approved characters used in place of spaces) and encoded, non-English, paraphrased, and mid-sentence injections are documented gaps and are not comprehensively represented here.`;
+  } else {
+    coverage = `Only the rule-based scanner is measured. This corpus includes ${obfuscated} obfuscated attacks with approved invisible format characters inside words (Phase L) and ${separator} attacks that use them in place of spaces (Design B3); ${count("separator-gap")} separator-gap attacks that combine both are a documented gap, expected CONFIRM and reported as false negatives when missed. Look-alike letters, invisible characters outside the approved set, and encoded, non-English, paraphrased, and mid-sentence injections are documented gaps and are not comprehensively represented here.`;
+  }
   return [
     "Synthetic hand-authored fixtures only; metrics describe agreement with the documented Phase K policy on similar synthetic text, not real-world detection accuracy.",
-    obfuscated === 0
-      ? "Only the rule-based scanner is measured. Obfuscated, encoded, non-English, paraphrased, and mid-sentence injections are documented gaps and are not represented here."
-      : `Only the rule-based scanner is measured. This corpus includes ${obfuscated} obfuscated attacks that hide a request with the approved invisible format characters (Phase L). Other obfuscation (look-alike letters, invisible characters outside the approved set, and approved characters used in place of spaces) and encoded, non-English, paraphrased, and mid-sentence injections are documented gaps and are not comprehensively represented here.`,
+    coverage,
     "The frozen ML test split and all ml/datasets/sentinel payloads are untouched by this benchmark.",
   ];
 }

@@ -737,21 +737,583 @@ function firstUnsuppressedMatch(text: string, rule: ScannerRule): RegExpMatchArr
   return null;
 }
 
-/** Character ranges of every secret-shaped span the redactor recognizes. */
-function secretSpans(text: string): [number, number][] {
-  const spans: [number, number][] = [...arrowValueSpans(text), ...credentialWordSpans(text)];
+/**
+ * Second matching text for invisible format characters used in place of
+ * spaces (Design B3). Deleting them (Phase L) joins "Ignore", a zero-width
+ * space, and "all" into "Ignoreall", which no rule matches. Here each run of
+ * approved invisible characters becomes one space when it sits between two
+ * visible characters, and is deleted at the start or end of the text or next
+ * to whitespace, so padding cannot move a sentence-start pattern off its
+ * anchor. `toRaw` maps each character of `text` to its index in the bounded
+ * raw input; the input itself is never modified.
+ */
+interface SeparatedText {
+  text: string;
+  toRaw: number[];
+}
+
+/** One character of the Phase L set (INVISIBLE_FORMAT_CHARACTERS without the global flag). */
+const INVISIBLE_FORMAT_CHARACTER = new RegExp(INVISIBLE_FORMAT_CHARACTERS.source);
+const WHITESPACE_CHARACTER = /\s/;
+
+function separateInvisibleRuns(bounded: string): SeparatedText {
+  const chars: string[] = [];
+  const toRaw: number[] = [];
+  let index = 0;
+  while (index < bounded.length) {
+    const char = bounded.charAt(index);
+    if (!INVISIBLE_FORMAT_CHARACTER.test(char)) {
+      chars.push(char);
+      toRaw.push(index);
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (end < bounded.length && INVISIBLE_FORMAT_CHARACTER.test(bounded.charAt(end))) end += 1;
+    const before = chars[chars.length - 1];
+    const after = bounded.charAt(end);
+    if (before !== undefined && after !== "" && !WHITESPACE_CHARACTER.test(before) && !WHITESPACE_CHARACTER.test(after)) {
+      chars.push(" ");
+      toRaw.push(index);
+    }
+    index = end;
+  }
+  return { text: chars.join(""), toRaw };
+}
+
+/** The last `length` visible characters of the raw input before `rawEnd`, with invisible characters removed. */
+function joinedTextBefore(bounded: string, rawEnd: number, length: number): string {
+  let out = "";
+  for (let index = rawEnd - 1; index >= 0 && out.length < length; index -= 1) {
+    const char = bounded.charAt(index);
+    if (!INVISIBLE_FORMAT_CHARACTER.test(char)) out = char + out;
+  }
+  return out;
+}
+
+/**
+ * The rule's first unsuppressed match in the separated text. Besides the
+ * Phase K guard on the separated text itself, a match is suppressed when the
+ * joined text (what a reader sees) shows the guard's negation directly before
+ * the same verb, so an invisible character inside "never", "not", or "ever"
+ * cannot turn safety advice into a finding. When the verb is preceded by an
+ * invisible run, that run is the separator, so the joined text is also tested
+ * with a space in its place ("Ne", word joiner, "ver", zero-width space, "send").
+ */
+function firstUnsuppressedSeparatedMatch(separated: SeparatedText, bounded: string, rule: ScannerRule): RegExpMatchArray | null {
+  const negation = rule.suppressIfVerbNegatedBy;
+  for (const pattern of rule.patterns) {
+    const all = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
+    for (const match of separated.text.matchAll(all)) {
+      if (!negation) return match;
+      if (isVerbNegated(separated.text, match, negation)) continue;
+      const verbStart = (match.index ?? 0) + (VERB_PREFIX.exec(match[0])?.[0].length ?? 0);
+      const rawVerbStart = separated.toRaw[verbStart] ?? bounded.length;
+      const joinedBefore = joinedTextBefore(bounded, rawVerbStart, NEGATION_WINDOW);
+      if (negation.test(joinedBefore)) continue;
+      if (INVISIBLE_FORMAT_CHARACTER.test(bounded.charAt(rawVerbStart - 1)) && negation.test(`${joinedBefore} `)) continue;
+      return match;
+    }
+  }
+  return null;
+}
+
+/**
+ * A secret-shaped span: start, end, and whether it is unanchored. An anchored
+ * span starts at something its format fixes (a label, a provider prefix, a
+ * key header); a credential-shaped word or an email address has no such
+ * start, so in text whose words are glued together it can run over them.
+ */
+type ClassifiedSpan = [start: number, end: number, unanchored: boolean];
+
+/** Every secret-shaped span the redactor recognizes, classified as above (only the anchored ones when `anchoredOnly`). */
+function classifiedSecretSpans(text: string, anchoredOnly = false): ClassifiedSpan[] {
+  const spans: ClassifiedSpan[] = arrowValueSpans(text).map(([s, e]): ClassifiedSpan => [s, e, false]);
+  if (!anchoredOnly) for (const [s, e] of credentialWordSpans(text)) spans.push([s, e, true]);
   for (const pattern of SECRET_VALUE_PATTERNS) {
+    const unanchored = pattern.source === EMAIL_SOURCE;
+    if (anchoredOnly && unanchored) continue;
     for (const m of text.matchAll(pattern)) {
       const at = m.index ?? 0;
-      spans.push([at, at + m[0].length]);
+      spans.push([at, at + m[0].length, unanchored]);
     }
   }
   return spans;
 }
 
-function evidenceAround(text: string, index: number, matchLength: number, spans: [number, number][]): string {
-  let start = Math.max(0, index - 30);
-  let end = Math.min(text.length, index + matchLength + 50);
+/** Character ranges of every secret-shaped span the redactor recognizes. */
+function secretSpans(text: string): [number, number][] {
+  return classifiedSecretSpans(text).map(([s, e]): [number, number] => [s, e]);
+}
+
+/** Evidence shows this many characters before and after a match. */
+const EVIDENCE_BEFORE = 30;
+const EVIDENCE_AFTER = 50;
+/**
+ * How far before the evidence window (in joined-text characters) a secret
+ * glued to the word before it, or a label split by an invisible character,
+ * is looked for. Larger than any value the evidence window can need from a
+ * nearer start, and fixed so the work per scan stays bounded.
+ */
+const SPLIT_SECRET_LOOKBACK = 1024;
+/** Length of each joined slice read from such a start; an anchored value reaching its end continues to the end of its word. */
+const SPLIT_SECRET_READ = 128;
+/**
+ * Longest joined slice between two ambiguous runs, for formats whose end is
+ * anchored (AWS key ids and Google API keys, 20 and 39 characters, and
+ * FAKE_..._SECRET seeds), which a word glued after them hides.
+ */
+const SPLIT_SECRET_PAIR = 64;
+/** Longest label read before a run taken as the whitespace a format requires (`Bearer`). */
+const SPLIT_SECRET_LABEL = 16;
+/** Length of a label reading: the label, the space, and enough of the value to recognize it (it then continues to the end of its word). */
+const SPLIT_SECRET_LABEL_READ = 32;
+/**
+ * A plain word: letters only, all lowercase, Capitalized, or all capitals.
+ * Released from the edges of an unanchored span (with surrounding punctuation
+ * in a word the raw bound cut); a piece with a digit, a symbol, or mixed case
+ * (QzvK) never is.
+ */
+const PLAIN_WORD = /^(?:[a-z]+|[A-Z][a-z]+|[A-Z]+)$/;
+const PLAIN_WORD_WITH_PUNCTUATION = /^["'(]?(?:[a-z]+|[A-Z][a-z]+|[A-Z]+)[.,;:!?'")\]]*$/;
+
+/** Raw index of each joined-text character (the bounded input without the Phase L set). */
+function joinedToRawIndex(bounded: string): number[] {
+  const joinedToRaw: number[] = [];
+  for (let index = 0; index < bounded.length; index += 1) {
+    if (!INVISIBLE_FORMAT_CHARACTER.test(bounded.charAt(index))) joinedToRaw.push(index);
+  }
+  return joinedToRaw;
+}
+
+/** First index of an increasing index array whose value is at least `value`. */
+function firstIndexAtOrAfter(values: number[], value: number): number {
+  let low = 0;
+  let high = values.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if ((values[mid] ?? Infinity) < value) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+}
+
+/** For each index of `text`, the index of the first whitespace at or after it (or the length). */
+function nextWhitespaceIndex(text: string, isWhitespace: (index: number) => boolean): number[] {
+  const next: number[] = new Array<number>(text.length + 1);
+  next[text.length] = text.length;
+  for (let index = text.length - 1; index >= 0; index -= 1) next[index] = isWhitespace(index) ? index : (next[index + 1] ?? text.length);
+  return next;
+}
+
+/**
+ * Secret patterns that need whitespace inside a match (`Bearer`, then a
+ * space): the only ones a space read into a label can complete.
+ */
+const WHITESPACE_SECRET_PATTERNS = SECRET_VALUE_PATTERNS.filter((pattern) => pattern.source.includes("\\s+"));
+/**
+ * Secret patterns anchored at their end (a lookahead or a closing word
+ * boundary: AWS key ids, Google API keys, FAKE_..._SECRET seeds), which a
+ * word glued after them hides. An email address ends in its own domain and
+ * is not one.
+ */
+const END_ANCHORED_SECRET_PATTERNS = SECRET_VALUE_PATTERNS.filter(
+  (pattern) => pattern.source !== EMAIL_SOURCE && (pattern.source.includes("(?!") || pattern.source.endsWith("\\b")),
+);
+
+/** Spans of the given patterns only (all anchored). */
+function patternSpans(text: string, patterns: RegExp[]): ClassifiedSpan[] {
+  const spans: ClassifiedSpan[] = [];
+  for (const pattern of patterns) {
+    for (const m of text.matchAll(pattern)) {
+      const at = m.index ?? 0;
+      spans.push([at, at + m[0].length, false]);
+    }
+  }
+  return spans;
+}
+
+/**
+ * Free-text gaps in the scanner rules. Every rule writes free text as
+ * [^.\n]{0,N}; every other part of a match is the rule's own words and
+ * punctuation (a test checks this).
+ */
+const RULE_GAP = /\[\^\.\\n\]\{0,\d+\}/g;
+const LETTERS_ONLY = /^[A-Za-z]+$/;
+const LETTERS_WITH_PUNCTUATION = /^["'(]?[A-Za-z]+[.,;:!?'")\]]*$/;
+
+/**
+ * The parts of a rule match outside its free-text gaps, in `text`
+ * coordinates. The rule matched them case-insensitively as its own words
+ * ("ReVeAl tHe PaSsWoRdS"), so they are request words in any case, while gap
+ * content can be anything, a secret included. The pattern is run again at the
+ * match, sticky and with each gap captured, which matches the same text.
+ */
+function ruleWordRanges(rule: ScannerRule, text: string, index: number, length: number): [number, number][] {
+  for (const pattern of rule.patterns) {
+    // Any failure (a pattern that cannot be rebuilt or run) releases no words:
+    // the evidence then keeps its conservative redaction, and scanning goes on.
+    try {
+      const ranges = patternWordRanges(pattern, text, index, length);
+      if (ranges) return ranges;
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+/**
+ * True when a rule's own words cannot be verified, so none are released:
+ * - a construct outside the free-text gaps that can match arbitrary letters:
+ *   an unescaped dot, \w \W \S \D, a Unicode property (\p{...}, \P{...}), or a
+ *   character class that is negated, holds a letter or digit range, several
+ *   letters, or any of those escapes (free text that is not a [^.\n]{0,N} gap);
+ * - a gap the match indices cannot map (hasUnmappableGap).
+ */
+function hasUnverifiedFreeText(source: string): boolean {
+  const rest = source.replace(RULE_GAP, "");
+  const classes = rest.match(/\[(?:\\.|[^\]\\])*\]/g) ?? [];
+  if (classes.some((cls) => /^\[\^|[A-Za-z0-9]-[A-Za-z0-9]|[a-zA-Z]{2,}|\\[pPwWSD]/.test(cls.replace(/\\[nrtfv]/g, "")))) return true;
+  if (/(^|[^\\])\.|\\[pPwWSD]/.test(rest.replace(/\[(?:\\.|[^\]\\])*\]/g, ""))) return true;
+  return hasUnmappableGap(source);
+}
+
+/**
+ * True when the match indices cannot show where a rule's free text lies:
+ * - a backreference outside a character class (\1 to \9, \k<name>), which
+ *   repeats captured text, a gap's included, outside the gap;
+ * - a gap inside a quantified group (*, +, ?, {n}, {n,m}), whose indices give
+ *   only the last iteration, so earlier iterations' gap text would read as the
+ *   rule's own words;
+ * - a gap inside a lookaround, whose text the rest of the match consumes.
+ * One pass over the source, tracking escapes, classes, and open groups.
+ */
+function hasUnmappableGap(source: string): boolean {
+  const gapStarts = [...source.matchAll(RULE_GAP)].map((match) => match.index ?? 0);
+  const groups: { start: number; lookaround: boolean }[] = [];
+  let inClass = false;
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source.charAt(i);
+    if (char === "\\") {
+      if (!inClass && /[1-9k]/.test(source.charAt(i + 1))) return true;
+      i += 1;
+    } else if (inClass) {
+      if (char === "]") inClass = false;
+    } else if (char === "[") {
+      inClass = true;
+    } else if (char === "(") {
+      groups.push({ start: i, lookaround: /^\(\?<?[=!]/.test(source.slice(i, i + 4)) });
+    } else if (char === ")") {
+      const group = groups.pop();
+      if (!group) continue;
+      const holdsGap = gapStarts.some((gapStart) => gapStart > group.start && gapStart < i);
+      if (holdsGap && (group.lookaround || /^(?:[*+?]|\{\d+(?:,\d*)?\})/.test(source.slice(i + 1)))) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The rule's own words for one pattern: null when the pattern does not match
+ * the same text at `index`, [] when it does but its words cannot be verified.
+ * Gap groups get a name prefix found nowhere in the pattern, so they never
+ * collide with its own named groups, and only those groups are read back. The
+ * flags are the pattern's, without d, g, or y, plus d and y once each.
+ */
+function patternWordRanges(pattern: RegExp, text: string, index: number, length: number): [number, number][] | null {
+  let prefix = "b3gap";
+  while (pattern.source.includes(prefix)) prefix = `${prefix}_`;
+  let gaps = 0;
+  const source = pattern.source.replace(RULE_GAP, (gap) => `(?<${prefix}${gaps++}>${gap})`);
+  const flags = `${[...new Set(pattern.flags.replace(/[dgy]/g, ""))].join("")}dy`;
+  const sticky = new RegExp(source, flags);
+  sticky.lastIndex = index;
+  const match = sticky.exec(text);
+  if (!match || match[0].length !== length) return null;
+  if (hasUnverifiedFreeText(pattern.source)) return [];
+  const gapRanges = Object.entries(match.indices?.groups ?? {})
+    .filter((entry): entry is [string, [number, number]] => entry[0].startsWith(prefix) && entry[1] !== undefined)
+    .map(([, range]) => range)
+    .sort((a, b) => a[0] - b[0]);
+  const ranges: [number, number][] = [];
+  let at = index;
+  for (const [start, end] of gapRanges) {
+    if (start > at) ranges.push([at, start]);
+    at = Math.max(at, end);
+  }
+  if (index + length > at) ranges.push([at, index + length]);
+  return ranges;
+}
+
+/** Per-scan state for separated-text evidence (Design B3); built once, shared by every finding. */
+interface SplitSecretContext {
+  bounded: string;
+  joined: string;
+  separated: SeparatedText;
+  joinedToRaw: number[];
+  /** Joined index of the next whitespace at or after each joined index. */
+  joinedWordEnd: number[];
+  /** Per joined index: 1 an ambiguous run sits before it, 2 a word starts at it, 4 a word ends at it. */
+  boundaries: Uint8Array;
+  /** Secret spans of the whole joined text. */
+  joinedSpans: ClassifiedSpan[];
+  /** Spans read from each start (joined coordinates), shared by overlapping windows. */
+  readings: Map<number, ClassifiedSpan[]>;
+  /** Each unanchored span narrowed (keyed by start and end, plus the request's words when they apply). */
+  narrowed: Map<string, [number, number]>;
+  /** Anchored spans of the separated text that stop at an invisible run, extended to the end of their word. */
+  separatedValues: [number, number][];
+}
+
+const AMBIGUOUS = 1;
+const WORD_START = 2;
+const WORD_END = 4;
+
+function splitSecretContext(bounded: string, joined: string, separated: SeparatedText): SplitSecretContext {
+  const text = separated.text;
+  // A space the separated text inserted for an invisible run, not one the input held.
+  const inserted = (index: number): boolean => text.charAt(index) === " " && INVISIBLE_FORMAT_CHARACTER.test(bounded.charAt(separated.toRaw[index] ?? -1));
+  const separatedWordEnd = nextWhitespaceIndex(text, (index) => WHITESPACE_CHARACTER.test(text.charAt(index)) && !inserted(index));
+  // A value the separated text ends at an invisible run (`Bearer QzvKw`, then a
+  // zero-width space, then the rest) may continue past it: to the end of its
+  // word, however far from the evidence window its label is.
+  const separatedValues: [number, number][] = [];
+  for (const [s, e, unanchored] of classifiedSecretSpans(text)) {
+    if (!unanchored && inserted(e)) separatedValues.push([s, separatedWordEnd[e] ?? text.length]);
+  }
+  const joinedToRaw = joinedToRawIndex(bounded);
+  const length = joined.length;
+  const blank = (index: number): boolean => index < 0 || index >= length || WHITESPACE_CHARACTER.test(joined.charAt(index));
+  const boundaries = new Uint8Array(length + 1);
+  for (let j = 0; j <= length; j += 1) {
+    const before = blank(j - 1);
+    const at = blank(j);
+    if (!before && !at && (joinedToRaw[j] ?? 0) - (joinedToRaw[j - 1] ?? 0) > 1) boundaries[j] |= AMBIGUOUS;
+    if (before && !at) boundaries[j] |= WORD_START;
+    if (!before && at) boundaries[j] |= WORD_END;
+  }
+  return {
+    bounded,
+    joined,
+    separated,
+    joinedToRaw,
+    joinedWordEnd: nextWhitespaceIndex(joined, (index) => WHITESPACE_CHARACTER.test(joined.charAt(index))),
+    boundaries,
+    joinedSpans: classifiedSecretSpans(joined),
+    readings: new Map<number, ClassifiedSpan[]>(),
+    narrowed: new Map<string, [number, number]>(),
+    separatedValues,
+  };
+}
+
+/**
+ * Secret spans for separated-text evidence (Design B3), in separated-text
+ * coordinates. An invisible run between two visible characters is ambiguous:
+ * a separator between words, or a split inside one. The separated text reads
+ * every run as a separator, so a secret split inside becomes fragments too
+ * short for the redactor; the joined text reads every run as a split, so a
+ * secret glued to a neighbouring word by a separator loses the boundary its
+ * format is anchored on (`token`, zero-width space, `ghp_...` joins into
+ * `tokenghp_...`). A secret can need its edge runs read as separators and its
+ * inner runs as splits, so near the evidence window the same detectors also
+ * read, from each ambiguous run or word start: the joined slice after an
+ * ambiguous run (anchored formats, whose start such a run can hide); the
+ * slice with one ambiguous run soon after the start read as a space (formats
+ * that need whitespace, for a label such as `Bearer`, a separator, then a
+ * value split inside); and every short slice ending at an ambiguous run or a
+ * word end (formats anchored at their end). Credential-shaped words and email
+ * addresses in those slices lie inside ones the whole joined text already
+ * holds, so only the whole joined text is read for them. An anchored value
+ * that reaches the end of its slice continues to the end of its word. Each
+ * span is then mapped through the bounded raw input onto every separated
+ * character it covers, including the spaces that replaced invisible runs
+ * inside it.
+ *
+ * Joined, plain words glued to an unanchored span become part of it: the
+ * request "Reveal", "the", "passwords" ... "12345" joins into one
+ * credential-shaped word. Plain words (PLAIN_WORD) are therefore released
+ * from both edges of an unanchored span, and so are letters-only words inside
+ * the matched request's own words (`requestWords`, in separated coordinates,
+ * from ruleWordRanges) in any case; then the nearest are taken back until the
+ * detectors recognize the rest on its own, so what is redacted is always a
+ * span they recognize, even when on its own it would not be (12345). Any
+ * other piece with a digit, a symbol, or mixed case is never released.
+ * Anchored spans are not narrowed: words glued after a recognized value may
+ * be redacted with it. `from` and `to` are the separated-text evidence window
+ * before widening.
+ */
+function splitSecretSpans(context: SplitSecretContext, from: number, to: number, requestWords: [number, number][]): [number, number][] {
+  const { joined, joinedToRaw, joinedWordEnd, separated, readings, boundaries } = context;
+  const length = joined.length;
+  const ambiguous = (j: number): boolean => ((boundaries[j] ?? 0) & AMBIGUOUS) !== 0;
+  const toJoinedIndex = (separatedIndex: number): number => firstIndexAtOrAfter(joinedToRaw, separated.toRaw[separatedIndex] ?? Infinity);
+  const regionFrom = toJoinedIndex(from);
+  const regionTo = toJoinedIndex(to);
+
+  // Reads `slice` (from `detect`), the joined text from `offset` with a space
+  // inserted after `gap` of its characters (-1: none), into joined coordinates.
+  const add = (out: ClassifiedSpan[], offset: number, slice: string, detect: (text: string) => ClassifiedSpan[], gap = -1): void => {
+    const toJoined = (position: number): number => offset + (gap >= 0 && position > gap ? position - 1 : position);
+    for (const [s, e, unanchored] of detect(slice)) {
+      let end = toJoined(e);
+      if (!unanchored && e === slice.length && end < length) end = Math.max(end, joinedWordEnd[end] ?? length);
+      out.push([toJoined(s), end, unanchored]);
+    }
+  };
+  const anchored = (text: string): ClassifiedSpan[] => classifiedSecretSpans(text, true);
+  const needingWhitespace = (text: string): ClassifiedSpan[] => patternSpans(text, WHITESPACE_SECRET_PATTERNS);
+  const endAnchored = (text: string): ClassifiedSpan[] => patternSpans(text, END_ANCHORED_SECRET_PATTERNS);
+  // Long readings are keyed by start; short (pair) readings by -(start + 1).
+  const read = (key: number, compute: (out: ClassifiedSpan[]) => void): ClassifiedSpan[] => {
+    let out = readings.get(key);
+    if (!out) {
+      out = [];
+      compute(out);
+      readings.set(key, out);
+    }
+    return out;
+  };
+  const found: ClassifiedSpan[] = [...context.joinedSpans];
+  for (let j = Math.max(0, regionFrom - SPLIT_SECRET_LOOKBACK); j < regionTo; j += 1) {
+    const flags = boundaries[j] ?? 0;
+    const split = (flags & AMBIGUOUS) !== 0;
+    if (!split && (flags & WORD_START) === 0) continue;
+    found.push(
+      ...read(j, (out) => {
+        if (split) add(out, j, joined.slice(j, j + SPLIT_SECRET_READ), anchored);
+        // A label that needs whitespace before its value ends in a letter (`Bearer`).
+        for (let r = j + 1; r <= Math.min(length - 1, j + SPLIT_SECRET_LABEL); r += 1) {
+          if (ambiguous(r) && /[A-Za-z]/.test(joined.charAt(r - 1))) {
+            add(out, j, `${joined.slice(j, r)} ${joined.slice(r, j + SPLIT_SECRET_LABEL_READ)}`, needingWhitespace, r - j);
+          }
+        }
+      }),
+    );
+    if (j < regionFrom - SPLIT_SECRET_PAIR) continue;
+    found.push(
+      ...read(-(j + 1), (out) => {
+        for (let end = j + 1; end <= Math.min(length, j + SPLIT_SECRET_PAIR); end += 1) {
+          // A slice from a word start to a word end is what the joined text already read.
+          const endFlags = boundaries[end] ?? 0;
+          if ((endFlags & AMBIGUOUS) !== 0 || (split && (endFlags & WORD_END) !== 0)) add(out, j, joined.slice(j, end), endAnchored);
+        }
+      }),
+    );
+  }
+
+  // The request's own words, in joined coordinates.
+  const words = requestWords.map(([a, b]): [number, number] => [toJoinedIndex(a), toJoinedIndex(b)]);
+  const wordsKey = words.map(([a, b]) => `${a}-${b}`).join(";");
+  const plain = (a: number, b: number): boolean => PLAIN_WORD.test(joined.slice(a, b));
+  const plainOrRequestWord = (a: number, b: number): boolean =>
+    plain(a, b) || (LETTERS_ONLY.test(joined.slice(a, b)) && words.some(([ws, we]) => a >= ws && b <= we));
+  // The detectors still recognize all of joined[start, end) as one unanchored span.
+  const recognized = (start: number, end: number): boolean => {
+    const piece = joined.slice(start, end);
+    return classifiedSecretSpans(piece).some(([s, e, unanchored]) => unanchored && s === 0 && e === piece.length);
+  };
+  // Releases pieces `release` allows from both edges of an unanchored span,
+  // then takes the nearest back (left first, then alternating) until the
+  // detectors recognize the rest on its own.
+  const narrow = (s: number, e: number, release: (a: number, b: number) => boolean): [number, number] => {
+    let start = s;
+    let end = e;
+    for (let k = start + 1; k < end; k += 1) {
+      if (!ambiguous(k)) continue;
+      if (!release(start, k)) break;
+      start = k;
+    }
+    for (let k = end - 1; k > start; k -= 1) {
+      if (!ambiguous(k)) continue;
+      if (!release(k, end)) break;
+      end = k;
+    }
+    for (let left = true; !recognized(start, end) && (start > s || end < e); left = !left) {
+      if (left ? start > s : end >= e) {
+        do start -= 1;
+        while (start > s && !ambiguous(start));
+      } else {
+        do end += 1;
+        while (end < e && !ambiguous(end));
+      }
+    }
+    return [start, end];
+  };
+  const narrowed = (s: number, e: number): [number, number] => {
+    // The request's words only matter for a span that overlaps them.
+    const overlaps = words.some(([ws, we]) => s < we && e > ws);
+    const key = overlaps ? `${s},${e},${wordsKey}` : `${s},${e}`;
+    let result = context.narrowed.get(key);
+    if (!result) {
+      result = narrow(s, e, overlaps ? plainOrRequestWord : plain);
+      context.narrowed.set(key, result);
+    }
+    return result;
+  };
+  const spans: [number, number][] = [];
+  const seen = new Set<number>();
+  for (const [s0, e0, unanchored] of found) {
+    const key = (s0 * (length + 1) + e0) * 2 + (unanchored ? 1 : 0);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const [s, e] = unanchored ? narrowed(s0, e0) : [s0, e0];
+    const rawStart = joinedToRaw[s];
+    const rawLast = joinedToRaw[e - 1];
+    if (e <= s || rawStart === undefined || rawLast === undefined) continue;
+    spans.push([firstIndexAtOrAfter(separated.toRaw, rawStart), firstIndexAtOrAfter(separated.toRaw, rawLast + 1)]);
+  }
+  return spans;
+}
+
+/**
+ * When the raw bound cuts the input inside a word, that last word is only a
+ * fragment: a secret cut short may be too short for any detector, in either
+ * text, so no secret span can be mapped for it. For separated-text evidence it
+ * is redacted rather than shown, from the last raw whitespace so every
+ * invisible-split chunk of it is covered. Only words inside the matched
+ * request (`matchEnd` is its end in the separated text) are released: plain
+ * words, and letters-only words of any case inside the request's own words
+ * (`requestWords`); anything after the match may belong to the fragment. Its
+ * last piece, the one the bound cut, is always redacted.
+ */
+function cutWordOnSeparated(
+  input: string,
+  bounded: string,
+  separated: SeparatedText,
+  matchEnd: number,
+  requestWords: [number, number][],
+): [number, number][] {
+  if (input.length <= bounded.length || WHITESPACE_CHARACTER.test(input.charAt(bounded.length))) return [];
+  let rawStart = bounded.length;
+  while (rawStart > 0 && !WHITESPACE_CHARACTER.test(bounded.charAt(rawStart - 1))) rawStart -= 1;
+  const text = separated.text;
+  let start = firstIndexAtOrAfter(separated.toRaw, rawStart);
+  // The cut word holds no input whitespace, so each space in it replaced an invisible run.
+  for (let k = start; k < text.length && k <= matchEnd; k += 1) {
+    if (text.charAt(k) !== " ") continue;
+    const piece = text.slice(start, k);
+    const requestWord = LETTERS_WITH_PUNCTUATION.test(piece) && requestWords.some(([ws, we]) => start >= ws && k <= we);
+    if (!PLAIN_WORD_WITH_PUNCTUATION.test(piece) && !requestWord) break;
+    start = k + 1;
+  }
+  return start < text.length ? [[start, text.length]] : [];
+}
+
+/**
+ * `spans` widen the window so no secret-shaped span is cut in half; the part
+ * of each `forced` span inside the window is redacted whether or not the
+ * redactor recognizes it there, for secrets found in another representation.
+ */
+function evidenceAround(
+  text: string,
+  index: number,
+  matchLength: number,
+  spans: [number, number][],
+  forced: [number, number][] = [],
+): string {
+  let start = Math.max(0, index - EVIDENCE_BEFORE);
+  let end = Math.min(text.length, index + matchLength + EVIDENCE_AFTER);
   // Never cut a secret-shaped span in half: a window edge inside a span is
   // widened to cover it, so the redactor sees the whole label and value.
   let widened = true;
@@ -768,7 +1330,10 @@ function evidenceAround(text: string, index: number, matchLength: number, spans:
       }
     }
   }
-  return redactEvidence(text.slice(start, end));
+  const inWindow = forced
+    .filter(([s, e]) => s < end && e > start)
+    .map(([s, e]): [number, number] => [Math.max(s, start) - start, Math.min(e, end) - start]);
+  return redactEvidence(redactSpans(text.slice(start, end), inWindow));
 }
 
 /**
@@ -787,10 +1352,43 @@ export function scanUntrustedContent(input: unknown): ScannerResult {
   const text = bounded.replace(INVISIBLE_FORMAT_CHARACTERS, "");
   const findings: Finding[] = [];
   let spans: [number, number][] | null = null;
+  // Built only when a rule finds nothing in the joined text and the input
+  // contains invisible characters (Design B3).
+  let separated: SeparatedText | null = null;
+  let separatedSpans: [number, number][] | null = null;
+  let splitContext: SplitSecretContext | null = null;
 
   for (const rule of SCANNER_RULES) {
+    // The joined text is matched first, so every existing finding and its
+    // evidence are unchanged; the separated text is a fallback per rule.
+    let evidence: string | null = null;
     const matched = firstUnsuppressedMatch(text, rule);
-    if (!matched) continue;
+    if (matched) {
+      evidence = evidenceAround(text, matched.index ?? 0, matched[0].length, (spans ??= secretSpans(text)));
+    } else if (text !== bounded) {
+      separated ??= separateInvisibleRuns(bounded);
+      const fallback = separated.text === text ? null : firstUnsuppressedSeparatedMatch(separated, bounded, rule);
+      if (fallback) {
+        // Secrets split or glued by invisible characters are found by reading
+        // the joined text around the window, and redacted in it; so are values
+        // the separated text stops at an invisible run, and a word the raw
+        // bound cut short.
+        const separatedText = separated.text;
+        const index = fallback.index ?? 0;
+        const from = Math.max(0, index - EVIDENCE_BEFORE);
+        const to = Math.min(separatedText.length, index + fallback[0].length + EVIDENCE_AFTER);
+        splitContext ??= splitSecretContext(bounded, text, separated);
+        const requestWords = ruleWordRanges(rule, separatedText, index, fallback[0].length);
+        const forced = [
+          ...splitSecretSpans(splitContext, from, to, requestWords),
+          ...splitContext.separatedValues,
+          ...cutWordOnSeparated(input, bounded, separated, index + fallback[0].length, requestWords),
+        ];
+        separatedSpans ??= secretSpans(separatedText);
+        evidence = evidenceAround(separatedText, index, fallback[0].length, separatedSpans, forced);
+      }
+    }
+    if (evidence === null) continue;
 
     findings.push({
       ruleId: rule.ruleId,
@@ -798,7 +1396,7 @@ export function scanUntrustedContent(input: unknown): ScannerResult {
       severity: rule.severity,
       title: rule.title,
       explanation: `${rule.explanation} (rule-based matching, not an ML classifier)`,
-      evidence: evidenceAround(text, matched.index ?? 0, matched[0].length, (spans ??= secretSpans(text))),
+      evidence,
     });
   }
 

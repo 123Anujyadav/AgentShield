@@ -37,7 +37,7 @@ const canonical = (corpus) =>
   `${[...JSON.stringify(corpus, null, 2)].map((c) => (isInvisible(c) ? `\\u${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}` : c)).join("")}\n`;
 
 test("every corpus version is stored in canonical JSON form with no raw invisible characters", () => {
-  for (const dir of ["v1", "v2", "v3"]) {
+  for (const dir of ["v1", "v2", "v3", "v4"]) {
     const raw = readFileSync(resolve(here, dir, "fixtures.json"), "utf8");
     assert.equal(raw, canonical(JSON.parse(raw)), dir);
     assert.ok(![...raw].some(isInvisible), `${dir} must not contain raw invisible characters`);
@@ -82,6 +82,65 @@ test("report limitations keep the v1/v2 wording and state the v3 obfuscated atta
   assert.match(v3, /includes 15 obfuscated attacks/);
   assert.doesNotMatch(v3, /Obfuscated, encoded/);
   assert.match(v3, /encoded, non-English, paraphrased, and mid-sentence injections are documented gaps and are not comprehensively represented/);
+  // The v3 wording is the one its stored reports were written with; v4 states its separator coverage.
+  assert.deepEqual(limitations("v3"), stored("post-l"));
+  const v4 = limitations("v4").join("\n");
+  assert.match(v4, /includes 15 obfuscated attacks .* and 28 attacks that use them in place of spaces \(Design B3\); 4 separator-gap attacks/);
+  assert.doesNotMatch(v4, /approved characters used in place of spaces\) and encoded/);
+});
+
+test("corpus v4 only appends to v3 and covers every rule, every code point as a separator, and the documented gap", () => {
+  const [v3, v4] = ["v3", "v4"].map(loadCorpus);
+  assert.deepEqual(validateCorpus(v4), []);
+  assert.equal(v4.version, "v4");
+  assert.deepEqual(v4.fixtures.slice(0, v3.fixtures.length), v3.fixtures);
+  const added = v4.fixtures.slice(v3.fixtures.length);
+  const of = (category) => added.filter((f) => f.category === category);
+  const attacks = of("separator-attack");
+  assert.ok(attacks.length >= 22 && attacks.every((f) => f.expectedDecision === "CONFIRM"));
+  for (const rule of ["injection.instruction-override", "injection.privilege-impersonation", ...AFFECTED_RULES]) {
+    assert.ok(attacks.some((f) => f.expectedRules.includes(rule)), `separator attacks cover ${rule}`);
+  }
+  // Every approved code point is the only invisible character, used as the separator, in some attack.
+  for (const [first, last = first] of INVISIBLE_GROUPS) {
+    for (let point = first; point <= last; point += 1) {
+      const sole = attacks.filter((f) => {
+        const used = [...f.text].filter(isInvisible);
+        return used.length > 0 && used.every((c) => c.codePointAt(0) === point) && !f.text.includes(" ");
+      });
+      assert.ok(sole.length > 0, `U+${point.toString(16).toUpperCase()} is the only separator in an attack`);
+    }
+  }
+  assert.ok(attacks.some((f) => isInvisible([...f.text][0])), "leading invisible padding is covered");
+  assert.ok(attacks.some((f) => f.text.includes(" ") && [...f.text].some(isInvisible)), "separators mixed with spaces are covered");
+  const benign = of("separator-benign");
+  assert.ok(benign.length >= 12 && benign.every((f) => f.expectedDecision === "ALLOW" && [...f.text].some(isInvisible)));
+  assert.ok(benign.some((f) => /^(never|do)\b/i.test(f.text)), "safety advice is covered");
+  const gaps = of("separator-gap");
+  assert.ok(gaps.length >= 3 && gaps.every((f) => f.expectedDecision === "CONFIRM"), "documented gaps expect CONFIRM, so a miss is a false negative");
+});
+
+test("with the built engine, separators instead of spaces never change a fixture's rules (Design B3)", async () => {
+  // Needs `npm run build -w @agentshield/engine` first, like the benchmark runner itself.
+  const engine = await import("../../packages/engine/dist/index.js").catch(() => {
+    throw new Error("packages/engine/dist is missing: run `npm run build -w @agentshield/engine` before these self-tests");
+  });
+  const rulesOf = (text) => engine.scanUntrustedContent(text).findings.map((f) => f.ruleId).join(",");
+  const fixtures = loadCorpus("v3").fixtures;
+  const plain = fixtures.filter((f) => !f.category.startsWith("obfuscated") && f.text.includes(" "));
+  // All 56 benign v1-v3 fixtures are covered: 43 plain ones here, the 13 obfuscated-benign ones below.
+  const benign = fixtures.filter((f) => f.expectedDecision === "ALLOW");
+  assert.equal(benign.length, 56);
+  assert.equal(plain.filter((f) => f.expectedDecision === "ALLOW").length, 43);
+  for (const f of plain) {
+    const want = rulesOf(f.text);
+    for (const [first, last = first] of INVISIBLE_GROUPS) {
+      for (let point = first; point <= last; point += 1) {
+        assert.equal(rulesOf(f.text.split(" ").join(String.fromCodePoint(point))), want, `${f.id} with U+${point.toString(16).toUpperCase()} separators`);
+      }
+    }
+  }
+  for (const f of fixtures.filter((x) => x.category === "obfuscated-benign")) assert.equal(rulesOf(f.text), "", f.id);
 });
 
 test("corpus v2 only appends to v1 and meets the remediation composition minimums", () => {
