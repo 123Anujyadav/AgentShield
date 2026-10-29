@@ -18,6 +18,14 @@ import { ModelAnalysisService } from "./model/analyze.js";
 import { loadModelConfig, type ModelConfig } from "./model/config.js";
 import { selectModelProvider } from "./model/live.js";
 import { failedAnalysis, redactSecretValue } from "@agentshield/engine";
+import { randomBytes } from "node:crypto";
+import { createApiAuth, createSessionStore, MIN_TOKEN_LENGTH, registerSessionRoutes } from "./security/auth.js";
+import { loadSecurityConfig, type SecurityConfig } from "./security/config.js";
+import { createRateLimiter } from "./security/rate-limit.js";
+import { hostCheck, originCheck } from "./security/request-guards.js";
+import { loadScanConfig } from "./scans/config.js";
+import { registerScanRoutes } from "./scans/routes.js";
+import { ScanService } from "./scans/service.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -92,6 +100,18 @@ export interface AppDeps {
   modelConfig?: ModelConfig;
   /** Injectable so tests can fault-inject event writes. Defaults to a fresh in-memory list. */
   events?: ActivityEvent[];
+  /**
+   * The local API token (see security/token.ts). Without one, a random token
+   * that nobody knows is used, so every protected route refuses access
+   * (fail closed) instead of running unauthenticated.
+   */
+  apiToken?: string;
+  /** Overrides for API safety settings; the rest come from the environment. */
+  security?: Partial<SecurityConfig>;
+  /** Clock for sessions and rate limits (milliseconds). Injectable for tests. */
+  now?: () => number;
+  /** Website scanning (M1). Defaults to environment settings, which leave scanning off. */
+  scanService?: ScanService;
 }
 
 export function createApp(deps: AppDeps = {}) {
@@ -102,6 +122,21 @@ export function createApp(deps: AppDeps = {}) {
   const modelConfig = deps.modelConfig ?? loadModelConfig();
   const modelService =
     deps.modelService ?? new ModelAnalysisService(selectModelProvider(modelConfig), modelConfig);
+  const security: SecurityConfig = { ...loadSecurityConfig(), ...deps.security };
+  if (deps.apiToken !== undefined && deps.apiToken.length < MIN_TOKEN_LENGTH) {
+    throw new Error(`The API token must be at least ${MIN_TOKEN_LENGTH} characters.`);
+  }
+  const apiToken = deps.apiToken ?? randomBytes(32).toString("base64url");
+  const now = deps.now ?? Date.now;
+  const sessions = createSessionStore({
+    absoluteMs: security.sessionAbsoluteMs,
+    idleMs: security.sessionIdleMs,
+    maxSessions: security.maxSessions,
+    now,
+  });
+  const auth = createApiAuth(apiToken, sessions, security);
+  const limit = createRateLimiter({ windowMs: security.rateLimitWindowMs, now });
+  const scanService = deps.scanService ?? new ScanService({ config: loadScanConfig() });
   let nextId = 1;
 
   function recordEvent(
@@ -122,15 +157,28 @@ export function createApp(deps: AppDeps = {}) {
       ...safePartial,
     };
     events.push(event);
+    // Bounded retention: keep only the newest events, so the log cannot grow without limit.
+    if (events.length > security.maxEvents) events.splice(0, events.length - security.maxEvents);
     return event;
   }
 
-  app.use(cors({ origin: ["http://localhost:5173", "http://127.0.0.1:5173"] }));
+  // Order matters: Host and Origin checks first, then CORS, body parsing, the
+  // global rate limit, sign-in routes, and authentication for the rest of /api.
+  app.disable("x-powered-by");
+  app.use(hostCheck(security.allowedHostnames));
+  app.use(originCheck(security.allowedOrigins));
+  app.use(cors({ origin: [...security.allowedOrigins], credentials: true }));
   app.use(express.json({ limit: "32kb" }));
 
   app.get("/health", (_req, res) => {
     res.json({ status: "ok", service: "agentshield-api" });
   });
+
+  app.use("/api", limit("api", security.rateLimits.api));
+  registerSessionRoutes(app, { apiToken, auth, sessions, limit, config: security });
+  // Every /api route registered below, including future ones, requires authentication.
+  app.use("/api", auth.requireAuth);
+  registerScanRoutes(app, { service: scanService, limit });
 
   app.get("/api/scenarios", (_req, res) => {
     res.json({ scenarios: SCENARIOS });
@@ -158,7 +206,7 @@ export function createApp(deps: AppDeps = {}) {
     res.json({ events: [...events].reverse() });
   });
 
-  app.post("/api/evaluate", async (req, res, next) => {
+  app.post("/api/evaluate", limit("evaluate", security.rateLimits.evaluate), async (req, res, next) => {
     try {
     const body: unknown = req.body;
     if (!isRecord(body)) {
@@ -309,7 +357,7 @@ export function createApp(deps: AppDeps = {}) {
     return true;
   }
 
-  app.post("/api/approvals/:id/approve", (req, res) => {
+  app.post("/api/approvals/:id/approve", limit("approval-action", security.rateLimits.approvalAction), (req, res) => {
     const id = approvalIdParam(req, res);
     if (!id || !hasValidBody(req, res)) return;
     // Any client-supplied action/findings/score in the body is ignored on purpose.
@@ -367,7 +415,7 @@ export function createApp(deps: AppDeps = {}) {
     res.json({ approval: outcome.approval, execution, executed: execution.executed });
   });
 
-  app.post("/api/approvals/:id/reject", (req, res) => {
+  app.post("/api/approvals/:id/reject", limit("approval-action", security.rateLimits.approvalAction), (req, res) => {
     const id = approvalIdParam(req, res);
     if (!id || !hasValidBody(req, res)) return;
     const outcome = processRejection(approvalStore, id);

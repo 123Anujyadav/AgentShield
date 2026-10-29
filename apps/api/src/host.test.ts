@@ -90,12 +90,27 @@ describe("Phase J: the API listens on IPv4 loopback only", () => {
     expect(names).toEqual([["address", "address"], ["port", "boundPort"]]);
 
     const logs = nodesOf(source, isCallTo("log"));
-    expect(logs).toHaveLength(1);
-    const message = logs[0]!.arguments[0];
+    const message = logs[0]?.arguments[0];
     if (!message || !ts.isTemplateExpression(message)) throw new Error("startup log is not a template string");
     expect(message.head.text).toBe("AgentShield API listening on http://");
     expect(message.templateSpans.map((span) => (ts.isIdentifier(span.expression) ? span.expression.text : null))).toEqual(["address", "boundPort"]);
-    expect(message.templateSpans.map((span) => span.literal.text)).toEqual([":", " (loopback only, no authentication)"]);
+    expect(message.templateSpans.map((span) => span.literal.text)).toEqual([":", " (loopback only, API token required)"]);
+  });
+
+  it("M0: the startup logs name the token file's path but can never print the token", () => {
+    const source = parse("./server.ts");
+    const logs = nodesOf(source, isCallTo("log"));
+    expect(logs).toHaveLength(3);
+    const accessed = logs.flatMap((log) =>
+      nodesOf(log, ts.isPropertyAccessExpression).map((access) => access.getText(source)),
+    );
+    expect(accessed).toContain("tokenFile.path");
+    expect(accessed.filter((text) => /\btoken\b/.test(text.split(".").pop() ?? ""))).toEqual([]);
+    // The token reaches only createApp.
+    const tokenReads = nodesOf(source, ts.isPropertyAccessExpression).filter((access) => access.name.text === "token");
+    expect(tokenReads.map((access) => access.parent && ts.isPropertyAssignment(access.parent) ? access.parent.name.getText(source) : null)).toEqual([
+      "apiToken",
+    ]);
   });
 
   it("the host module imports nothing and reads no configuration or secrets", () => {

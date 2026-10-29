@@ -18,8 +18,12 @@ import ApprovalQueueView from "./components/views/ApprovalQueueView.js";
 import ModelDiagnosticsView from "./components/views/ModelDiagnosticsView.js";
 import ToolTrustView from "./components/views/ToolTrustView.js";
 import ActivityAuditView from "./components/views/ActivityAuditView.js";
+import WebsiteScansView from "./components/views/WebsiteScansView.js";
+import LoginView from "./components/LoginView.js";
+import { apiFetch, hasSession, logout, UnauthorizedError } from "./api.js";
+import type { ScanSwitches } from "./scan-state.js";
 
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+type AuthState = "checking" | "signed-out" | "signed-in";
 
 function getInitialView(): View {
   if (typeof window !== "undefined" && window.location.hash) {
@@ -39,12 +43,21 @@ export default function App() {
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
+  const [scanSwitches, setScanSwitches] = useState<ScanSwitches | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [actingId, setActingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
+  const [auth, setAuth] = useState<AuthState>("checking");
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
+
+  // A 401 from any call means the session ended: return to the sign-in screen.
+  const onUnauthorized = useCallback(() => {
+    setAuth("signed-out");
+    setAuthNotice("Your session ended. Sign in again.");
+  }, []);
 
   // Sync view with browser location hash
   const setView = useCallback((newView: View) => {
@@ -70,8 +83,8 @@ export default function App() {
     setIsRefreshing(true);
     try {
       const [eventsRes, approvalsRes] = await Promise.all([
-        fetch(`${API_URL}/api/events`),
-        fetch(`${API_URL}/api/approvals`),
+        apiFetch("/api/events"),
+        apiFetch("/api/approvals"),
       ]);
       if (!eventsRes.ok || !approvalsRes.ok) throw new Error("API refresh failed");
       const eventsData = (await eventsRes.json()) as { events: ActivityEvent[] };
@@ -79,48 +92,84 @@ export default function App() {
       setEvents(eventsData.events);
       setApprovals(approvalsData.approvals);
       setApiOnline(true);
-    } catch {
-      setApiOnline(false);
+    } catch (error) {
+      if (error instanceof UnauthorizedError) onUnauthorized();
+      else setApiOnline(false);
     } finally {
       setIsRefreshing(false);
     }
-  }, []);
+  }, [onUnauthorized]);
 
   // Fetch model status independently
   const refreshModelStatus = useCallback(async () => {
     try {
-      const statusRes = await fetch(`${API_URL}/api/model/status`);
+      const statusRes = await apiFetch("/api/model/status");
       if (statusRes.ok) {
         setModelStatus((await statusRes.json()) as ModelStatus);
       }
-    } catch {
+    } catch (error) {
       // Model status fetch failure is non-destructive
+      if (error instanceof UnauthorizedError) onUnauthorized();
     }
-  }, []);
+  }, [onUnauthorized]);
+
+  // The server's website-scanning switches, for the top bar. Unknown (null) on any failure.
+  const refreshScanSwitches = useCallback(async () => {
+    try {
+      const res = await apiFetch("/api/targets");
+      const body = res.ok ? ((await res.json()) as { settings?: ScanSwitches }) : null;
+      setScanSwitches(body?.settings ?? null);
+    } catch (error) {
+      setScanSwitches(null);
+      if (error instanceof UnauthorizedError) onUnauthorized();
+    }
+  }, [onUnauthorized]);
 
   // Load initial app data
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/scenarios`);
+      const res = await apiFetch("/api/scenarios");
       if (!res.ok) throw new Error(`API ${res.status}`);
       const data = (await res.json()) as { scenarios: Scenario[] };
       setScenarios(data.scenarios);
       setSelectedId((current) => current || data.scenarios[0]?.id || "");
-      await Promise.all([refreshModelStatus(), refresh()]);
+      await Promise.all([refreshModelStatus(), refresh(), refreshScanSwitches()]);
       setApiOnline(true);
       setError(null);
-    } catch {
+    } catch (error) {
+      if (error instanceof UnauthorizedError) {
+        onUnauthorized();
+        return;
+      }
       setApiOnline(false);
       setError("Could not reach the AgentShield API server. Please ensure it is running on http://localhost:4000 (npm run dev:api)");
     } finally {
       setLoading(false);
     }
-  }, [refresh, refreshModelStatus]);
+  }, [refresh, refreshModelStatus, refreshScanSwitches, onUnauthorized]);
+
+  // On startup, check for an existing session before loading any data.
+  useEffect(() => {
+    let cancelled = false;
+    hasSession()
+      .then((signedIn) => {
+        if (!cancelled) setAuth(signedIn ? "signed-in" : "signed-out");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setApiOnline(false);
+        setAuth("signed-out");
+        setAuthNotice("Could not reach the AgentShield API on http://localhost:4000.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
-    void loadAll();
-  }, [loadAll]);
+    if (auth === "signed-in") void loadAll();
+  }, [auth, loadAll]);
 
   const pendingCount = useMemo(() => approvals.filter((a) => a.status === "PENDING").length, [approvals]);
 
@@ -130,7 +179,7 @@ export default function App() {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`${API_URL}/api/evaluate`, {
+      const res = await apiFetch("/api/evaluate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ scenarioId: selectedId }),
@@ -139,7 +188,11 @@ export default function App() {
       const evalData = (await res.json()) as EvaluateResponse;
       setResult(evalData);
       await refresh();
-    } catch {
+    } catch (error) {
+      if (error instanceof UnauthorizedError) {
+        onUnauthorized();
+        return;
+      }
       setError("Evaluation failed. Please verify that the API is running on http://localhost:4000.");
     } finally {
       setBusy(false);
@@ -151,7 +204,7 @@ export default function App() {
     setActingId(approval.id);
     setError(null);
     try {
-      const res = await fetch(`${API_URL}/api/approvals/${approval.id}/${verb}`, {
+      const res = await apiFetch(`/api/approvals/${approval.id}/${verb}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
@@ -161,11 +214,40 @@ export default function App() {
         setError(data.error ?? `Approval action failed with status ${res.status}. Session state refreshed.`);
       }
       await refresh();
-    } catch {
+    } catch (error) {
+      if (error instanceof UnauthorizedError) {
+        onUnauthorized();
+        return;
+      }
       setError("Approval request failed. Please check backend connection.");
     } finally {
       setActingId(null);
     }
+  }
+
+  async function onSignOut() {
+    await logout();
+    setResult(null);
+    setEvents([]);
+    setApprovals([]);
+    setAuthNotice(null);
+    setAuth("signed-out");
+  }
+
+  if (auth !== "signed-in") {
+    return auth === "checking" ? (
+      <div className="flex min-h-screen items-center justify-center" style={{ backgroundColor: "var(--bg)" }} aria-label="Checking session">
+        <div className="skeleton w-64" />
+      </div>
+    ) : (
+      <LoginView
+        notice={authNotice}
+        onSignedIn={() => {
+          setAuthNotice(null);
+          setAuth("signed-in");
+        }}
+      />
+    );
   }
 
   return (
@@ -188,6 +270,8 @@ export default function App() {
           modelStatus={modelStatus}
           onRefresh={() => void refresh()}
           isRefreshing={isRefreshing}
+          onSignOut={() => void onSignOut()}
+          scanSwitches={scanSwitches}
         />
 
         <main className="mx-auto w-full max-w-[1540px] p-3 sm:p-5 flex-1">
@@ -281,6 +365,9 @@ export default function App() {
           ) : view === "tool-trust" ? (
             /* Screen 7: Tool Trust Preview */
             <ToolTrustView />
+          ) : view === "scans" ? (
+            /* Website Scans (M1) */
+            <WebsiteScansView onUnauthorized={onUnauthorized} />
           ) : (
             /* Screen 8: Activity & Audit */
             <ActivityAuditView

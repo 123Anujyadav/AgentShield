@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import request from "supertest";
-import { createApp } from "../app.js";
+import { createTestApp as createApp, request } from "../test-support.js";
 import { createSimulator } from "../simulator.js";
 import { ModelAnalysisService } from "./analyze.js";
 import { loadModelConfig } from "./config.js";
@@ -149,7 +148,7 @@ describe("mock provider and analysis service (offline)", () => {
     expect(body.model).toBe("muse-spark-1.3");
     expect(body.messages).toHaveLength(2);
     expect(body.response_format?.type).toBe("json_schema");
-    expect(body.max_completion_tokens).toBe(600);
+    expect(body.max_completion_tokens).toBe(1500);
     expect(req.init.headers.Authorization).toBe("Bearer TEST_KEY_NOT_REAL");
     expect(parseMetaChatContent({ choices: [{ message: { content: JSON.stringify(validOutput) } }] })).toEqual(validOutput);
     expect(() => parseMetaChatContent({ choices: [] })).toThrowError(ModelProviderError);

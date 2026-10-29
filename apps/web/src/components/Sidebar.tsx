@@ -4,6 +4,7 @@ import {
   CheckBadgeIcon,
   CpuIcon,
   FlaskIcon,
+  GlobeIcon,
   GridIcon,
   ScaleIcon,
   SearchIcon,
@@ -22,7 +23,8 @@ interface SidebarProps {
 export const NAVIGATION_ITEMS: Array<{
   id: View;
   label: string;
-  stitchScreenId: string;
+  /** Design reference; screens added after the original design have none. */
+  stitchScreenId?: string;
   Icon: typeof GridIcon;
   badge?: string;
 }> = [
@@ -33,6 +35,7 @@ export const NAVIGATION_ITEMS: Array<{
   { id: "approvals", label: "Approval Queue", stitchScreenId: "bf85f313e08147968891d5ffc7e7b6b7", Icon: CheckBadgeIcon },
   { id: "diagnostics", label: "Model Diagnostics", stitchScreenId: "74d6cc7c6579466dba28cb67b6594e5b", Icon: CpuIcon },
   { id: "tool-trust", label: "Tool Trust Preview", stitchScreenId: "d5a7bc8590c0475fb84f026dd46329e6", Icon: ToolIcon, badge: "PREVIEW" },
+  { id: "scans", label: "Website Scans", Icon: GlobeIcon },
   { id: "activity", label: "Activity & Audit", stitchScreenId: "09d4c88ac5274d37b0943f4192216a0c", Icon: ActivityIcon },
 ];
 

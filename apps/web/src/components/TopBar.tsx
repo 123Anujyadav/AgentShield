@@ -1,6 +1,7 @@
 import type { ModelStatus, View } from "../types.js";
 import { NAVIGATION_ITEMS } from "./Sidebar.js";
 import { RefreshIcon, ShieldIcon } from "./icons.js";
+import { scanningStateLabel, TOP_BAR_TAGLINE_PREFIX, type ScanSwitches } from "../scan-state.js";
 
 interface TopBarProps {
   currentView: View;
@@ -9,6 +10,9 @@ interface TopBarProps {
   modelStatus: ModelStatus | null;
   onRefresh: () => void;
   isRefreshing: boolean;
+  onSignOut: () => void;
+  /** The server's website-scanning switches; null while unknown. */
+  scanSwitches: ScanSwitches | null;
 }
 
 export default function TopBar({
@@ -18,6 +22,8 @@ export default function TopBar({
   modelStatus,
   onRefresh,
   isRefreshing,
+  onSignOut,
+  scanSwitches,
 }: TopBarProps) {
   const currentItem = NAVIGATION_ITEMS.find((n) => n.id === currentView) ?? NAVIGATION_ITEMS[0];
 
@@ -40,20 +46,22 @@ export default function TopBar({
             <h1 className="text-base sm:text-lg font-bold tracking-tight" style={{ color: "var(--text-bright)" }}>
               {currentItem.label}
             </h1>
-            <span
-              className="hidden sm:inline-flex text-[10px] font-mono px-2 py-0.5 rounded"
-              style={{
-                background: "rgba(16, 35, 41, 0.9)",
-                border: "1px solid var(--border)",
-                color: "var(--muted)",
-              }}
-              title={`Stitch Screen ID: ${currentItem.stitchScreenId}`}
-            >
-              Stitch Screen: {currentItem.stitchScreenId.slice(0, 8)}…
-            </span>
+            {currentItem.stitchScreenId && (
+              <span
+                className="hidden sm:inline-flex text-[10px] font-mono px-2 py-0.5 rounded"
+                style={{
+                  background: "rgba(16, 35, 41, 0.9)",
+                  border: "1px solid var(--border)",
+                  color: "var(--muted)",
+                }}
+                title={`Stitch Screen ID: ${currentItem.stitchScreenId}`}
+              >
+                Stitch Screen: {currentItem.stitchScreenId.slice(0, 8)}…
+              </span>
+            )}
           </div>
           <p className="text-[11px] hidden sm:block" style={{ color: "var(--muted)" }}>
-            Deterministic AI Runtime Firewall · Zero Live Side Effects
+            {TOP_BAR_TAGLINE_PREFIX} · {scanningStateLabel(scanSwitches)}
           </p>
         </div>
       </div>
@@ -114,6 +122,11 @@ export default function TopBar({
         >
           <RefreshIcon className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
           <span className="hidden sm:inline">Refresh</span>
+        </button>
+
+        {/* Sign Out: ends the API session */}
+        <button type="button" onClick={onSignOut} className="btn-ghost" title="Sign out of this AgentShield session">
+          <span>Sign out</span>
         </button>
       </div>
 

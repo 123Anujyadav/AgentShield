@@ -17,6 +17,7 @@ export type View =
   | "approvals"
   | "diagnostics"
   | "tool-trust"
+  | "scans"
   | "activity";
 
 export interface ModelStatus {

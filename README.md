@@ -6,12 +6,20 @@ protection or complete prompt-injection prevention.
 
 ## What this prototype is not
 
-- **Not real execution.** Every handler is simulated; nothing is sent, paid, or deleted.
-- **Not a secured service.** The API listens on local loopback (`127.0.0.1`) only and has no
-  authentication.
+- **Not real execution.** Every agent action handler is simulated; nothing is sent, paid, or deleted.
+- **Not a vulnerability scanner.** Website scanning (M1) makes three passive configuration checks
+  of host names whose ownership is proved by DNS TXT. It is off by default
+  (`SCAN_NETWORK_ENABLED`), has been tested offline only, and has not scanned a real site; see
+  [`docs/scanning.md`](docs/scanning.md).
+- **Not a secured service.** The API listens on local loopback (`127.0.0.1`) only. Every `/api`
+  route requires a single local API token (or a browser session created with it); there are no
+  user accounts or roles, and it is not hardened for exposure beyond this machine.
 - **Not persistent.** Pending approvals and activity events are in memory and reset when the
   API restarts.
-- **Not a live model.** The advisory model is a mock; no live Muse Spark call has been made.
+- **Not a live model.** The advisory model is a mock by default. Two separately authorized,
+  one-request live Muse Spark smoke tests were run on 2026-10-29: the first returned an unusable
+  (cut-off) answer, the second a valid advisory answer. Live mode is off again; see
+  [`docs/live-readiness.md`](docs/live-readiness.md).
 - **Not real data.** The demo uses seeded synthetic scenarios only.
 - **Not production-ready.**
 
@@ -73,7 +81,19 @@ npm run dev:web                        # terminal 2 -> web app on http://localho
 ```
 
 Open http://localhost:5173 in a browser. Terminal 1 should print
-`AgentShield API listening on http://127.0.0.1:4000 (loopback only, no authentication)`.
+`AgentShield API listening on http://127.0.0.1:4000 (loopback only, API token required)` and the
+path of the API token file. On first start the API creates a random token in
+`%LOCALAPPDATA%\AgentShield\api-token` (outside the repository) and never prints it. To sign in,
+copy it to the clipboard without displaying it and paste it into the sign-in screen:
+
+```powershell
+Get-Content -Raw "$env:LOCALAPPDATA\AgentShield\api-token" | Set-Clipboard
+```
+
+Signing in sets an HttpOnly session cookie (30 idle minutes, 8 hours at most). Scripts call the
+API with `Authorization: Bearer <token>` instead. Open the web app at `localhost`, the same host
+name the web app uses for the API, so the browser sends the session cookie. To replace the token,
+stop the API, delete the file, and start the API again.
 Rebuild the engine (`npm run build -w @agentshield/engine`) after changing engine source.
 Note: the repo `.npmrc` sets `legacy-peer-deps=true`; that works around an npm
 arborist peer-resolution bug with Vitest 4 in this workspace.
@@ -81,15 +101,20 @@ arborist peer-resolution bug with Vitest 4 in this workspace.
 **Troubleshooting.** If the web app shows "Could not reach the AgentShield API server", check
 that terminal 1 is running and printed the line above. The web app calls
 `http://localhost:4000` by default and reads `VITE_API_URL` if it is set
-(`apps/web/src/App.tsx`); if `localhost` does not reach the API on this machine, start the web
-app with the API's loopback address:
+(`apps/web/src/api.ts`); if `localhost` does not reach the API on this machine, start the web
+app with the API's loopback address, listening on `127.0.0.1` too (by default Vite may listen
+on IPv6 `::1` only, where `127.0.0.1:5173` would not connect):
 
 ```powershell
-$env:VITE_API_URL = "http://127.0.0.1:4000"; npm run dev:web
+$env:VITE_API_URL = "http://127.0.0.1:4000"; npm run dev -w @agentshield/web -- --host 127.0.0.1
 ```
 
-`$env:VITE_API_URL` applies only to the current PowerShell session; a new terminal uses the
-default `http://localhost:4000` again.
+Then open the web app at **http://127.0.0.1:5173**, not `localhost:5173`. The session cookie is
+`SameSite=Strict`, so the browser sends it only when the web app and the API use the same host
+name; with the app on `localhost` and the API on `127.0.0.1`, sign-in appears to succeed and then
+returns to the sign-in screen. `$env:VITE_API_URL` applies only to the current PowerShell
+session; a new terminal uses the default `http://localhost:4000` again, so open the web app at
+`http://localhost:5173` as usual.
 
 ## Verify
 
@@ -103,8 +128,8 @@ node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-10-29): `npm test` passes 857 tests (engine 708,
-API 149), and `npm run typecheck` and `npm run build` pass. `npm audit` needs network
+Current verified state (2026-10-29): `npm test` passes 1,204 tests (engine 708,
+websec 236, API 258, web 2), and `npm run typecheck` and `npm run build` pass. `npm audit` needs network
 access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 
 ## Demo outline (about four minutes, seeded synthetic scenarios only)
@@ -150,8 +175,9 @@ In the sidebar, open **Scenario Lab**, select a scenario, and click **Evaluate A
 6. **Close (≈30s).** Open **Activity & Audit** to show the timeline tying every event together,
    and point to the top bar, which should read "Advisory Model: MOCK (Live OFF)";
    **Model Diagnostics** shows the provider status. Deterministic enforcement is authoritative;
-   model-assisted analysis is advisory, currently a mock, and live Muse Spark has not been
-   tested. Do not present mock output as real model output.
+   model-assisted analysis is advisory and a mock in this demo; live Muse Spark has only been
+   smoke-tested with two single requests (see `docs/live-readiness.md`). Do not present mock
+   output as real model output.
 
 ## Injection Scanner (Phase 2)
 
@@ -306,8 +332,14 @@ with no real side effects. Pending approvals and events reset when the API resta
 Production use would require authenticated, authorised user identity; this local demo has none.
 Since Phase J the API server listens on IPv4 loopback (`127.0.0.1`, set in
 `apps/api/src/host.ts`) instead of every network interface, so other machines cannot reach
-it. This reduces remote network exposure only: the API still has no authentication, and any
-process on the same machine can call every endpoint, including approve and reject.
+it. Since M0, every `/api` route requires the local API token (Bearer header) or a browser
+session created with it; `/health` is the only unauthenticated route. Requests whose `Host`
+header is not `localhost`, `127.0.0.1` or `[::1]` are refused (DNS-rebinding defence), as are
+requests from any browser origin other than the web app; cookie-authenticated writes must carry
+the web app's `Origin`. Requests are rate limited per minute (all `/api` 600, sign-in 10,
+evaluate 60, approve/reject 60), and only the newest 1,000 events are kept in memory; each limit
+is configurable in `.env.example`. Limits: there is one shared credential, no user identity, and
+any process running as your Windows user can read the token file.
 
 Intent Firewall: action types must be explicitly allowed, destinations must match
 `allowedDestinations` when present, and missing/empty permissions block conservatively.
@@ -477,15 +509,18 @@ synthetic corpus only; see its README). Malformed
 payloads (nested objects, arrays, null values) are rejected with HTTP 400 at the
 API boundary.
 
-## Model-assisted analysis (Phase 4, mock only)
+## Model-assisted analysis (Phase 4, mock by default)
 
 Advisory layer only. Deterministic policy remains authoritative.
 
 - Config: see `.env.example` (`MODEL_API_KEY`, `MODEL_PROVIDER_MODE`, `MODEL_BASE_URL`,
   `MODEL_NAME=muse-spark-1.3`, timeout/limit/budget variables). Real `.env` files are git-ignored.
 - Effective mode is `mock` by default. A real live provider exists behind the
-  `MODEL_LIVE_ENABLED=true` plus key-presence gate (Phase 6), but live mode has
-  never been enabled or called in this project, and no credits were used.
+  `MODEL_LIVE_ENABLED=true` plus key-presence gate (Phase 6). Live mode has been
+  enabled only for two authorized one-request smoke tests on 2026-10-29 (reported
+  usage: 856 and 1,303 total tokens; the first answer was cut off at the then
+  600-token cap, the second succeeded) and was switched off after each. The credit
+  or billing change for these calls is not recorded in this repository.
 - Phase 5 verified the official contract at dev.meta.ai (base URL, `muse-spark-1.3`,
   Bearer auth, `POST /chat/completions`, response and error shapes, pricing and rate
   limits) and corrected the offline builder/parser. See `docs/live-readiness.md`.
@@ -504,9 +539,25 @@ Advisory layer only. Deterministic policy remains authoritative.
 - Only seeded synthetic scenario text is analysed. Do not send user documents or personal
   data to an external provider without explicit consent.
 
+## Website scanning (M1, off by default)
+
+The **Website Scans** screen registers host names you own, verifies ownership with a DNS TXT
+record (`_agentshield-verification.<host>`, checked again before every scan, valid 30 days), and
+runs passive checks: TLS certificate, HTTP-to-HTTPS redirect, security headers, CORS, cookie flags
+and `security.txt`. Every request goes through one guarded fetcher that refuses private,
+loopback, link-local, metadata and other special-purpose addresses, pins the connection to the
+checked address, follows at most five same-host redirects, and stops at 30 requests per scan.
+Nothing is sent to any website unless `SCAN_NETWORK_ENABLED=true` is set in `.env`; a separate
+`SCAN_LAB_MODE` allows only the exact loopback origins of the local lab in `labs/passive-scan/`.
+Targets, scans and the scan audit log are in memory and reset when the API restarts.
+Setup, safety controls, report semantics and limitations: [`docs/scanning.md`](docs/scanning.md).
+
 ## Layout
 
 - `packages/engine` — framework-independent TypeScript security engine (contracts, evaluation, seeded scenarios).
+- `packages/websec` — passive website-scanning library (M1): target rules, SSRF address guard,
+  guarded fetcher, passive checks, findings and reports. Network access is injected.
+- `labs/passive-scan` — local nginx lab (good and bad sites on loopback) for M1; prepared, not run.
 - `apps/api` — Express API. Validates input, calls the engine, records in-memory activity events.
 - `apps/web` — React/Vite/Tailwind dashboard. Renders API/engine responses only.
 - `benchmarks/` — deterministic synthetic benchmarks for outbound credential detection

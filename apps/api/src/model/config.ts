@@ -15,6 +15,7 @@ export interface ModelConfig {
   liveEnabled: boolean;
   timeoutMs: number;
   maxInputLength: number;
+  /** Upper bound, in characters, for a successful provider response body and for the answer inside it. */
   maxOutputLength: number;
   maxRequests: number;
   maxRetries: number;
@@ -41,7 +42,12 @@ export function loadModelConfig(env: NodeJS.ProcessEnv = process.env): ModelConf
     liveEnabled,
     timeoutMs: parseBoundedInt(env.MODEL_TIMEOUT_MS, 5000, 100, 30000),
     maxInputLength: parseBoundedInt(env.MODEL_MAX_INPUT_CHARS, 4000, 100, 20000),
-    maxOutputLength: parseBoundedInt(env.MODEL_MAX_OUTPUT_CHARS, 4000, 100, 20000),
+    // Bounds the provider's whole response body, not only the answer. A
+    // schema-maximal answer in a full chat.completion envelope measures 4,017
+    // characters as compact ASCII JSON and up to about 18,000 when quotes or
+    // non-ASCII text are escaped; the former 4,000 default rejected all of them.
+    // 20,000 (the existing maximum) fits every such case (see live.test.ts).
+    maxOutputLength: parseBoundedInt(env.MODEL_MAX_OUTPUT_CHARS, 20000, 100, 20000),
     maxRequests: parseBoundedInt(env.MODEL_MAX_REQUESTS, 50, 1, 1000),
     maxRetries: parseBoundedInt(env.MODEL_MAX_RETRIES, 2, 0, 3),
   };

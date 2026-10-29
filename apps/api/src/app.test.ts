@@ -1,7 +1,6 @@
-import request from "supertest";
 import { describe, expect, it } from "vitest";
 import type { ActivityEvent } from "@agentshield/engine";
-import { createApp } from "./app.js";
+import { createTestApp as createApp, request } from "./test-support.js";
 import { createApprovalStore } from "./approvals.js";
 import { createSimulator } from "./simulator.js";
 

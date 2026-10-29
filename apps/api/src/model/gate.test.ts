@@ -1,6 +1,5 @@
-import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
-import { createApp } from "../app.js";
+import { createTestApp as createApp, request } from "../test-support.js";
 import { loadModelConfig } from "./config.js";
 import { MetaLiveProvider, selectModelProvider, type HttpTransport } from "./live.js";
 import { MockModelProvider } from "./provider.js";
