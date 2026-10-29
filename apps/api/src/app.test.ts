@@ -129,6 +129,55 @@ describe("approval lifecycle and guarded execution", () => {
     expect(simulator.invocationCount).toBe(1);
   });
 
+  it("seeded approve, reject and hard-deny flows record their outcomes and audit events; a duplicate approval adds none", async () => {
+    const { app, simulator, res } = await confirmScenario();
+    const approvedId = res.body.pendingApproval.id as string;
+    expect([res.body.evaluation.decision, res.body.evaluation.riskScore, res.body.pendingApproval.status]).toEqual(["CONFIRM", 80, "PENDING"]);
+    expect(res.body.event.lifecycle).toBe("PENDING_CONFIRMATION");
+
+    const blocked = await request(app).post("/api/evaluate").send({ scenarioId: "forbidden-payment" });
+    expect([blocked.body.evaluation.decision, blocked.body.evaluation.riskScore, blocked.body.executed]).toEqual(["BLOCK", 95, false]);
+    expect(blocked.body.pendingApproval).toBeNull();
+    expect(blocked.body.event.lifecycle).toBe("BLOCKED");
+    expect(simulator.invocationCount).toBe(0);
+
+    const approved = await request(app).post(`/api/approvals/${approvedId}/approve`).send({});
+    expect(approved.status).toBe(200);
+    expect(approved.body.approval.status).toBe("EXECUTED");
+    expect(approved.body.execution.result).toContain("No file was written.");
+    expect(simulator.invocationCount).toBe(1);
+
+    const toReject = await request(app).post("/api/evaluate").send({ scenarioId: "hidden-injection-invisible-separators" });
+    expect([toReject.body.evaluation.decision, toReject.body.evaluation.riskScore, toReject.body.pendingApproval.status]).toEqual(["CONFIRM", 80, "PENDING"]);
+    const rejectedId = toReject.body.pendingApproval.id as string;
+    const rejected = await request(app).post(`/api/approvals/${rejectedId}/reject`).send({});
+    expect(rejected.status).toBe(200);
+    expect([rejected.body.approval.status, rejected.body.executed]).toEqual(["REJECTED", false]);
+    expect(simulator.invocationCount).toBe(1);
+
+    const before = (await request(app).get("/api/events")).body.events as ActivityEvent[];
+    const duplicate = await request(app).post(`/api/approvals/${approvedId}/approve`).send({});
+    expect([duplicate.status, duplicate.body.executed]).toEqual([409, false]);
+    const after = (await request(app).get("/api/events")).body.events as ActivityEvent[];
+    expect(after).toEqual(before);
+    expect(simulator.invocations).toEqual(["create_summary"]);
+
+    // Only the two CONFIRM evaluations created approval records; the BLOCK created none.
+    const approvals = (await request(app).get("/api/approvals")).body.approvals as { id: string; status: string }[];
+    expect(approvals.map((a) => [a.id, a.status])).toEqual([[rejectedId, "REJECTED"], [approvedId, "EXECUTED"]]);
+
+    // Newest first.
+    expect(after.map((e) => [e.lifecycle, e.decision, e.approvalId])).toEqual([
+      ["REJECTED", "CONFIRM", rejectedId],
+      ["PENDING_CONFIRMATION", "CONFIRM", rejectedId],
+      ["SIMULATED_EXECUTED", "CONFIRM", approvedId],
+      ["BLOCKED", "BLOCK", undefined],
+      ["PENDING_CONFIRMATION", "CONFIRM", approvedId],
+    ]);
+    expect(after[0]?.explanation).toBe("Rejected by user. No handler invoked.");
+    expect(after[2]?.explanation).toBe("Approved after policy recheck. Simulated handler executed exactly once.");
+  });
+
   it("client-supplied action modification cannot change the approved action", async () => {
     const { app, simulator, res } = await confirmScenario();
     const id = res.body.pendingApproval.id as string;
