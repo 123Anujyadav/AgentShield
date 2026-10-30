@@ -1,5 +1,20 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { apiFetch, UnauthorizedError } from "../../api.js";
+import {
+  BASELINE_OUTCOME_LABELS,
+  EXPOSURE_OPT_IN_LABEL,
+  EXPOSURE_OUTCOME_LABELS,
+  exposureAvailability,
+  exposureOptInHelp,
+  exposureOutcomeTone,
+  exposureRequestLabel,
+  groupChecks,
+  NOT_REQUESTED_LABEL,
+  scanRequestBody,
+  scanStateLabel,
+  type ExposureCapability,
+  type ExposureOutcome,
+} from "../../exposure-ui.js";
 import { AlertTriangleIcon, CopyIcon, GlobeIcon, InfoIcon, LockIcon, RefreshIcon } from "../icons.js";
 
 /**
@@ -27,7 +42,20 @@ interface CheckResult {
   status: "pass" | "fail" | "error" | "not-applicable";
   summary: string;
   findings: Finding[];
+  group?: "passive" | "exposure" | "exposure-baseline";
 }
+
+/** As computed by the server for GET /api/scans/:id (the same reading its reports use). */
+type ExposureSection =
+  | { requested: false; state: "not-requested" }
+  | {
+      requested: true;
+      state: "completed" | "not-run";
+      baseline: { outcome: keyof typeof BASELINE_OUTCOME_LABELS; summary: string };
+      paths: Array<{ path: string; checkId: string; title: string; outcome: ExposureOutcome; status: CheckResult["status"]; summary: string; findings: Finding[] }>;
+      counts: Record<ExposureOutcome, number>;
+      incomplete: { reason: "time-limit" | "request-budget" | "stopped"; summary: string } | null;
+    };
 
 interface Target {
   id: string;
@@ -55,8 +83,12 @@ interface Scan {
   finishedAt: string | null;
   requestsUsed: number;
   requestBudget: number;
+  options?: { exposureChecks: boolean };
+  exposureIncomplete?: boolean;
+  exposureIncompleteReason?: "time-limit" | "request-budget" | "stopped" | null;
   summary: Record<Severity, number>;
   checks?: CheckResult[];
+  exposure?: ExposureSection;
 }
 
 interface Settings {
@@ -65,6 +97,7 @@ interface Settings {
   labOrigins: string[];
   verificationValidityDays: number;
   requestBudget: number;
+  exposureChecks?: ExposureCapability;
 }
 
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low", "info"];
@@ -75,6 +108,8 @@ const SEVERITY_COLOR: Record<Severity, string> = {
   low: "var(--accent-blue)",
   info: "var(--muted)",
 };
+const TONE_COLOR = { block: "var(--block)", allow: "var(--allow)", confirm: "var(--confirm)" } as const;
+
 const STATUS_COLOR: Record<string, string> = {
   verified: "var(--allow)",
   completed: "var(--allow)",
@@ -106,6 +141,47 @@ async function readJson<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
+function CheckRow({ check, label, color }: { check: CheckResult; label?: string; color?: string }) {
+  return (
+    <div className="border rounded-lg p-3 space-y-2" style={{ borderColor: "var(--border)" }}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-semibold" style={{ color: "var(--text-bright)" }}>
+          {check.title}
+        </span>
+        <Badge label={label ?? check.status} color={color ?? STATUS_COLOR[check.status] ?? "var(--muted)"} />
+      </div>
+      <p className="text-[11px]" style={{ color: "var(--muted)" }}>
+        {check.summary}
+      </p>
+      {check.findings.map((finding) => (
+        <div key={finding.findingId} className="pl-3 border-l-2 space-y-1 text-xs" style={{ borderColor: SEVERITY_COLOR[finding.severity] }}>
+          <p className="flex flex-wrap items-center gap-2">
+            <Badge label={finding.severity} color={SEVERITY_COLOR[finding.severity]} />
+            <strong style={{ color: "var(--text-bright)" }}>{finding.title}</strong>
+            <span className="text-[10px]" style={{ color: "var(--muted)" }}>
+              confidence {finding.confidence}
+            </span>
+          </p>
+          <p>{finding.explanation}</p>
+          <p>
+            <span style={{ color: "var(--muted)" }}>Evidence: </span>
+            <code className="break-all">{finding.evidence}</code>
+          </p>
+          <p>
+            <span style={{ color: "var(--muted)" }}>Remediation: </span>
+            {finding.remediation}
+          </p>
+          {finding.references.length > 0 && (
+            <p className="text-[10px]" style={{ color: "var(--muted)" }}>
+              {finding.references.join(" · ")}
+            </p>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function WebsiteScansView({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [targets, setTargets] = useState<Target[]>([]);
   const [scans, setScans] = useState<Scan[]>([]);
@@ -113,6 +189,8 @@ export default function WebsiteScansView({ onUnauthorized }: { onUnauthorized: (
   const [selected, setSelected] = useState<Scan | null>(null);
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  // Per target, unticked unless the user ticks it; cleared after every scan request.
+  const [exposureOptIn, setExposureOptIn] = useState<Record<string, boolean>>({});
   const [notice, setNotice] = useState<{ tone: "error" | "info"; text: string } | null>(null);
 
   const handle = useCallback(
@@ -224,6 +302,14 @@ export default function WebsiteScansView({ onUnauthorized }: { onUnauthorized: (
     target.verification.status === "verified" &&
     (target.kind === "dns" ? settings?.outboundScanningEnabled === true : settings?.labModeEnabled === true);
 
+  const exposure = exposureAvailability(settings);
+
+  async function onStartScan(target: Target) {
+    const body = scanRequestBody(target.id, exposureOptIn[target.id] === true, exposure);
+    setExposureOptIn((current) => ({ ...current, [target.id]: false }));
+    await post("/api/scans", body, `scan-${target.id}`);
+  }
+
   return (
     <div className="space-y-4">
       <div className="panel p-4 flex flex-wrap items-center justify-between gap-3">
@@ -236,6 +322,8 @@ export default function WebsiteScansView({ onUnauthorized }: { onUnauthorized: (
             <p className="text-xs" style={{ color: "var(--muted)" }}>
               Passive checks of sites you own: TLS, HTTPS redirect, security headers, CORS, cookie flags and security.txt.
               Three requests per scan, no crawling, no attack payloads.
+              {exposure === "enabled" && " Optional exposure checks, ticked per scan, add up to ten more."}
+              {exposure === "disabled" && " Exposure checks are disabled on this server."}
             </p>
           </div>
         </div>
@@ -308,7 +396,7 @@ export default function WebsiteScansView({ onUnauthorized }: { onUnauthorized: (
                   className="btn-primary text-xs"
                   disabled={busy !== null || !canScan(target)}
                   title={canScan(target) ? "Start a passive scan" : "Requires verified ownership and scanning enabled"}
-                  onClick={() => void post("/api/scans", { targetId: target.id }, `scan-${target.id}`)}
+                  onClick={() => void onStartScan(target)}
                 >
                   Start scan
                 </button>
@@ -317,6 +405,20 @@ export default function WebsiteScansView({ onUnauthorized }: { onUnauthorized: (
                 </button>
               </div>
             </div>
+            {exposure === "enabled" && settings?.exposureChecks && (
+              <label className="flex items-start gap-2 text-[11px]" style={{ color: "var(--muted)" }}>
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={exposureOptIn[target.id] === true}
+                  disabled={busy !== null || !canScan(target)}
+                  onChange={(event) => setExposureOptIn((current) => ({ ...current, [target.id]: event.target.checked }))}
+                />
+                <span>
+                  <strong style={{ color: "var(--text)" }}>{EXPOSURE_OPT_IN_LABEL}</strong> (this scan only). {exposureOptInHelp(settings.exposureChecks.paths)}
+                </span>
+              </label>
+            )}
             <p className="text-[11px]" style={{ color: "var(--muted)" }}>
               {target.verification.status === "verified"
                 ? `Verified ${when(target.verification.verifiedAt)}; expires ${when(target.verification.expiresAt)}. The DNS record is checked again before every scan.`
@@ -369,7 +471,10 @@ export default function WebsiteScansView({ onUnauthorized }: { onUnauthorized: (
                 {scan.id}
               </span>
               <span>{scan.displayHostname}</span>
-              <Badge label={scan.status} color={STATUS_COLOR[scan.status] ?? "var(--muted)"} />
+              <Badge label={scanStateLabel(scan)} color={scan.exposureIncomplete === true ? "var(--confirm)" : (STATUS_COLOR[scan.status] ?? "var(--muted)")} />
+              <span className="text-[10px]" style={{ color: "var(--muted)" }}>
+                {exposureRequestLabel(scan)}
+              </span>
             </span>
             <span className="text-[11px] font-mono" style={{ color: "var(--muted)" }}>
               {scan.status === "completed"
@@ -384,7 +489,7 @@ export default function WebsiteScansView({ onUnauthorized }: { onUnauthorized: (
         <section className="panel p-4 space-y-3" aria-labelledby="scan-detail-title">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 id="scan-detail-title" className="panel-title">
-              {selected.id} · {selected.displayHostname} · {selected.status}
+              {selected.id} · {selected.displayHostname} · {scanStateLabel(selected)}
             </h3>
             <div className="flex gap-2">
               <button type="button" className="btn-ghost text-xs" onClick={() => void download(selected, "json")}>
@@ -397,51 +502,69 @@ export default function WebsiteScansView({ onUnauthorized }: { onUnauthorized: (
           </div>
           <p className="text-[11px]" style={{ color: "var(--muted)" }}>
             Requested {when(selected.requestedAt)} · finished {when(selected.finishedAt)} · {selected.requestsUsed} of {selected.requestBudget} requests used.
-            {selected.message ? ` ${selected.message}` : ""}
+            {selected.message ? ` ${selected.message}` : ""} {exposureRequestLabel(selected)}.
           </p>
           {selected.status !== "completed" ? (
             <p className="text-xs flex items-center gap-1" style={{ color: "var(--confirm)" }}>
               <AlertTriangleIcon className="h-4 w-4" /> No checks ran for this scan.
             </p>
           ) : (
-            (selected.checks ?? []).map((check) => (
-              <div key={check.checkId} className="border rounded-lg p-3 space-y-2" style={{ borderColor: "var(--border)" }}>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-semibold" style={{ color: "var(--text-bright)" }}>
-                    {check.title}
-                  </span>
-                  <Badge label={check.status} color={STATUS_COLOR[check.status] ?? "var(--muted)"} />
-                </div>
-                <p className="text-[11px]" style={{ color: "var(--muted)" }}>
-                  {check.summary}
-                </p>
-                {check.findings.map((finding) => (
-                  <div key={finding.findingId} className="pl-3 border-l-2 space-y-1 text-xs" style={{ borderColor: SEVERITY_COLOR[finding.severity] }}>
-                    <p className="flex flex-wrap items-center gap-2">
-                      <Badge label={finding.severity} color={SEVERITY_COLOR[finding.severity]} />
-                      <strong style={{ color: "var(--text-bright)" }}>{finding.title}</strong>
-                      <span className="text-[10px]" style={{ color: "var(--muted)" }}>
-                        confidence {finding.confidence}
-                      </span>
-                    </p>
-                    <p>{finding.explanation}</p>
-                    <p>
-                      <span style={{ color: "var(--muted)" }}>Evidence: </span>
-                      <code className="break-all">{finding.evidence}</code>
-                    </p>
-                    <p>
-                      <span style={{ color: "var(--muted)" }}>Remediation: </span>
-                      {finding.remediation}
-                    </p>
-                    {finding.references.length > 0 && (
-                      <p className="text-[10px]" style={{ color: "var(--muted)" }}>
-                        {finding.references.join(" · ")}
+            (() => {
+              const groups = groupChecks(selected.checks ?? []);
+              const section = selected.exposure;
+              return (
+                <>
+                  {groups.passive.map((check) => (
+                    <CheckRow key={check.checkId} check={check} />
+                  ))}
+                  <h4 className="panel-title pt-1">Exposure checks</h4>
+                  {selected.options?.exposureChecks !== true ? (
+                    selected.options?.exposureChecks === false ? (
+                      <p className="text-xs flex items-center gap-2" style={{ color: "var(--muted)" }}>
+                        <Badge label={NOT_REQUESTED_LABEL} color="var(--muted)" /> Not requested for this scan.
                       </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ))
+                    ) : (
+                      <p className="text-xs" style={{ color: "var(--muted)" }}>
+                        Whether exposure checks were requested was not recorded for this scan.
+                      </p>
+                    )
+                  ) : !section?.requested ? (
+                    <p className="text-xs" style={{ color: "var(--confirm)" }}>
+                      Exposure checks were requested, but no exposure results were returned.
+                    </p>
+                  ) : (
+                    <>
+                      {section.incomplete && (
+                        <p role="status" className="text-xs flex items-center gap-2" style={{ color: "var(--confirm)" }}>
+                          <AlertTriangleIcon className="h-4 w-4" /> {section.incomplete.summary} The paths marked not checked were not tested.
+                        </p>
+                      )}
+                      <p className="text-[11px]" style={{ color: "var(--muted)" }}>
+                        {(Object.keys(EXPOSURE_OUTCOME_LABELS) as ExposureOutcome[])
+                          .map((outcome) => `${EXPOSURE_OUTCOME_LABELS[outcome]} ${section.counts[outcome]}`)
+                          .join(" · ")}
+                      </p>
+                      <p className="text-[11px] flex flex-wrap items-center gap-2" style={{ color: "var(--muted)" }}>
+                        Baseline diagnostic (a random missing path, used only for comparison; never a finding):
+                        <Badge
+                          label={BASELINE_OUTCOME_LABELS[section.baseline.outcome]}
+                          color={section.baseline.outcome === "inconclusive" || section.baseline.outcome === "not-checked" ? "var(--confirm)" : "var(--muted)"}
+                        />
+                        {section.baseline.summary}
+                      </p>
+                      {section.paths.map((row) => (
+                        <CheckRow
+                          key={row.checkId}
+                          check={{ checkId: row.checkId, title: row.path, status: row.status, summary: row.summary, findings: row.findings }}
+                          label={EXPOSURE_OUTCOME_LABELS[row.outcome]}
+                          color={TONE_COLOR[exposureOutcomeTone(row.outcome)]}
+                        />
+                      ))}
+                    </>
+                  )}
+                </>
+              );
+            })()
           )}
           <p className="text-[10px]" style={{ color: "var(--muted)" }}>
             Findings are evidence of weaker configuration, not proof of exploitability. A clean result is not a certification.

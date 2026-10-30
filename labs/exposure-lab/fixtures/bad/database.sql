@@ -1,0 +1,3 @@
+-- MySQL dump 10.13  Distrib 8.0.0, for lab (synthetic fixture)
+--
+-- LAB_SQL_SENTINEL: no real schema or records.

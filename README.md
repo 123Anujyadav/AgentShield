@@ -7,10 +7,11 @@ protection or complete prompt-injection prevention.
 ## What this prototype is not
 
 - **Not real execution.** Every agent action handler is simulated; nothing is sent, paid, or deleted.
-- **Not a vulnerability scanner.** Website scanning (M1) makes three passive configuration checks
-  of host names whose ownership is proved by DNS TXT. It is off by default
-  (`SCAN_NETWORK_ENABLED`), has been tested offline only, and has not scanned a real site; see
-  [`docs/scanning.md`](docs/scanning.md).
+- **Not a vulnerability scanner.** Website scanning makes passive configuration checks of host
+  names whose ownership is proved by DNS TXT, plus optional checks for nine fixed, commonly exposed
+  files (opt-in per scan, and off by default server-side via `SCAN_EXPOSURE_ENABLED`). Scanning is
+  off by default (`SCAN_NETWORK_ENABLED`), has been tested offline and in loopback-only labs, and
+  has not scanned a real site; see [`docs/scanning.md`](docs/scanning.md).
 - **Not a secured service.** The API listens on local loopback (`127.0.0.1`) only. Every `/api`
   route requires a single local API token (or a browser session created with it); there are no
   user accounts or roles, and it is not hardened for exposure beyond this machine.
@@ -128,8 +129,8 @@ node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-10-29): `npm test` passes 1,204 tests (engine 708,
-websec 236, API 258, web 2), and `npm run typecheck` and `npm run build` pass. `npm audit` needs network
+Current verified state (2026-10-30): `npm test` passes 1,414 tests (engine 708,
+websec 395, API 292, web 19), and `npm run typecheck` and `npm run build` pass. `npm audit` needs network
 access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 
 ## Demo outline (about four minutes, seeded synthetic scenarios only)
@@ -539,7 +540,7 @@ Advisory layer only. Deterministic policy remains authoritative.
 - Only seeded synthetic scenario text is analysed. Do not send user documents or personal
   data to an external provider without explicit consent.
 
-## Website scanning (M1, off by default)
+## Website scanning (off by default)
 
 The **Website Scans** screen registers host names you own, verifies ownership with a DNS TXT
 record (`_agentshield-verification.<host>`, checked again before every scan, valid 30 days), and
@@ -548,16 +549,32 @@ and `security.txt`. Every request goes through one guarded fetcher that refuses 
 loopback, link-local, metadata and other special-purpose addresses, pins the connection to the
 checked address, follows at most five same-host redirects, and stops at 30 requests per scan.
 Nothing is sent to any website unless `SCAN_NETWORK_ENABLED=true` is set in `.env`; a separate
-`SCAN_LAB_MODE` allows only the exact loopback origins of the local lab in `labs/passive-scan/`.
+`SCAN_LAB_MODE` allows only the exact loopback origins listed in `SCAN_LAB_ORIGINS`.
 Targets, scans and the scan audit log are in memory and reset when the API restarts.
+
+**Exposure checks (M2, opt-in, off by default).** Only when the server has
+`SCAN_EXPOSURE_ENABLED=true` *and* the user ticks **Include exposure checks** for that scan, the
+scan also requests one random missing path (a comparison baseline, never a finding) and nine fixed
+paths: `/.git/HEAD`, `/.git/config`, `/.env`, `/.DS_Store`, `/server-status`, `/backup.zip`,
+`/backup.tar.gz`, `/database.sql`, `/dump.sql`. Each is a GET with `Range: bytes=0-4095` that
+never follows redirects and keeps at most the first 4 KB; a file is reported only when its content
+matches a strict signature. Each path is exposed, not exposed, inconclusive or not checked, and a
+scan whose time limit or request budget stops these checks early is shown as "completed —
+exposure checks incomplete". Verified offline and in the loopback-only exposure lab
+(`labs/exposure-lab/`, 54 of 54 checks); public sites, real DNS, real HTTPS and the browser UI
+remain untested.
+
 Setup, safety controls, report semantics and limitations: [`docs/scanning.md`](docs/scanning.md).
 
 ## Layout
 
 - `packages/engine` — framework-independent TypeScript security engine (contracts, evaluation, seeded scenarios).
-- `packages/websec` — passive website-scanning library (M1): target rules, SSRF address guard,
-  guarded fetcher, passive checks, findings and reports. Network access is injected.
-- `labs/passive-scan` — local nginx lab (good and bad sites on loopback) for M1; prepared, not run.
+- `packages/websec` — website-scanning library: target rules, SSRF address guard, guarded fetcher
+  (with the 4 KB prefix mode), passive checks, opt-in exposure checks, findings and reports.
+  Network access is injected.
+- `labs/passive-scan` — local Docker nginx lab (good and bad sites published on loopback) for the
+  M1 passive checks; run once locally.
+- `labs/exposure-lab` — loopback-only Node lab for the M2 exposure checks (54 of 54 checks).
 - `apps/api` — Express API. Validates input, calls the engine, records in-memory activity events.
 - `apps/web` — React/Vite/Tailwind dashboard. Renders API/engine responses only.
 - `benchmarks/` — deterministic synthetic benchmarks for outbound credential detection

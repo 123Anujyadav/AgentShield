@@ -1,8 +1,14 @@
 # Passive-scan lab (M1)
 
-Two static nginx sites for checking AgentShield's passive website checks
-locally. **Prepared, not run.** Nothing here starts on its own; run it only
-after you have authorized a local lab run.
+Two static nginx sites for checking AgentShield's passive (M1) website checks
+locally. It has been run once locally, and both sites matched the expected
+results below. Nothing here starts on its own; run it only after you have
+authorized a local lab run.
+
+It does not cover the M2 exposure checks: those were verified in
+[`../exposure-lab/`](../exposure-lab/README.md), which binds only
+`127.0.0.1`. Here, nginx listens on `0.0.0.0:80` inside each container and only
+the published host port is bound to `127.0.0.1`.
 
 | Site | Origin | Configuration |
 | --- | --- | --- |

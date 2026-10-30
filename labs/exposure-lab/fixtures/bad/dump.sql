@@ -1,0 +1,4 @@
+--
+-- PostgreSQL database dump
+--
+-- LAB_SQL_SENTINEL_PG: no real schema or records.

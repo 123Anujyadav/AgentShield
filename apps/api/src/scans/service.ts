@@ -3,6 +3,9 @@ import {
   HostGate,
   RequestBudget,
   ScanStopped,
+  EXPOSURE_PATHS,
+  createExposureProbes,
+  exposureSection,
   nodeTransport,
   normalizeTarget,
   runPassiveScan,
@@ -10,6 +13,8 @@ import {
   systemResolver,
   systemTxtResolver,
   type CheckResult,
+  type NotCheckedReason,
+  type PlannedProbe,
   type Resolver,
   type ScanReport,
   type ScanStatus,
@@ -56,6 +61,10 @@ interface ScanRecord {
   finishedAt: number | null;
   requestsUsed: number;
   requestBudget: number;
+  /** Whether this scan asked for exposure checks (includeExposureChecks). Fixed when the scan is created. */
+  exposureChecks: boolean;
+  /** M2-H: why the scheduler stopped the exposure stage early, as it reported it; null when it did not. */
+  exposureStoppedEarly: NotCheckedReason | null;
   checks: CheckResult[];
   controller: AbortController | null;
   /** Why an in-flight scan was stopped from outside (deletion, timeout). */
@@ -82,6 +91,13 @@ export interface AuditEntry {
   scanId: string | null;
   hostname: string;
   reason: string | null;
+  /**
+   * M2-E: on the one entry that records a scan request's outcome (scan-queued, or
+   * scan-rejected when refused at request time), what the user asked for and
+   * whether the server switch allowed it (null when not asked for). Absent on
+   * every other entry.
+   */
+  exposureChecks?: { requested: boolean; allowed: boolean | null };
 }
 
 /**
@@ -108,6 +124,8 @@ export const REASON_MESSAGES: Record<string, string> = {
   ...TARGET_REJECTION_MESSAGES,
   "outbound-scanning-disabled": "Outbound scanning is disabled (SCAN_NETWORK_ENABLED is not true). Nothing was sent.",
   "lab-mode-disabled": "Lab mode is off, or this lab origin is not configured. Nothing was sent.",
+  "exposure-checks-disabled": "Exposure checks are disabled on this server. Start the scan without them. Nothing was sent.",
+  "invalid-scan-options": "includeExposureChecks must be true or false when it is given.",
   "target-not-verified": "Ownership of this target is not verified. Nothing was sent to it.",
   "verification-expired": "Ownership verification has expired. Verify again before scanning. Nothing was sent to the target.",
   "verification-failed": "The last ownership verification failed. Verify again before scanning. Nothing was sent to the target.",
@@ -173,6 +191,11 @@ export interface ScanServiceDeps {
   txtResolver?: TxtResolver;
   transport?: Transport;
   now?: () => number;
+  /**
+   * Replaces the exposure probe planner (tests only). Whatever plans the probes,
+   * they run only when SCAN_EXPOSURE_ENABLED is on and the scan asked for them.
+   */
+  probePlanner?: (target: ScanTarget) => readonly PlannedProbe[];
 }
 
 const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
@@ -182,6 +205,7 @@ export class ScanService {
   private readonly txtResolver: TxtResolver;
   private readonly fetcher: GuardedFetcher;
   private readonly now: () => number;
+  private readonly probePlanner: (target: ScanTarget) => readonly PlannedProbe[];
   private readonly targets = new Map<string, TargetRecord>();
   private readonly scans: ScanRecord[] = [];
   private readonly audit: AuditEntry[] = [];
@@ -194,6 +218,8 @@ export class ScanService {
     this.config = deps.config;
     this.txtResolver = deps.txtResolver ?? systemTxtResolver;
     this.now = deps.now ?? Date.now;
+    // A fresh probe set (and baseline state) per call, so no two scans share any.
+    this.probePlanner = deps.probePlanner ?? (() => createExposureProbes());
     this.fetcher = new GuardedFetcher({
       resolver: deps.resolver ?? systemResolver,
       transport: deps.transport ?? nodeTransport,
@@ -209,6 +235,8 @@ export class ScanService {
       verificationValidityDays: Math.round(this.config.verificationTtlMs / 86_400_000),
       requestBudget: this.config.requestBudget,
       maxConcurrentScans: this.config.maxConcurrentScans,
+      // Whether exposure checks can be requested at all, and the fixed paths they use.
+      exposureChecks: { enabled: this.config.exposureEnabled, paths: [...EXPOSURE_PATHS] },
     };
   }
 
@@ -345,7 +373,13 @@ export class ScanService {
     return scan.status === "queued" || scan.status === "running";
   }
 
-  startScan(targetId: string): Outcome<ReturnType<ScanService["publicScan"]>> {
+  /** Exposure checks run only when both the server switch and the scan's own request allow them. */
+  private exposureAllowed(scan: ScanRecord): boolean {
+    return scan.exposureChecks && this.config.exposureEnabled;
+  }
+
+  startScan(targetId: string, options: { exposureChecks?: boolean } = {}): Outcome<ReturnType<ScanService["publicScan"]>> {
+    const exposureChecks = options.exposureChecks === true;
     const target = this.targets.get(targetId);
     if (!target) return { ok: false, status: 404, reason: "target-not-found" };
     // Judged before the new record exists, so it never counts itself as active.
@@ -355,20 +389,22 @@ export class ScanService {
       ((): [number, string] | [null, null] => {
         const refusal = this.switchRefusal(target.target);
         if (refusal) return [409, refusal];
+        // Asked for, but switched off server-side: refused rather than silently run without them.
+        if (exposureChecks && !this.config.exposureEnabled) return [409, "exposure-checks-disabled"];
         const notVerified = verificationRefusal(verification);
         if (notVerified) return [409, notVerified];
         if (active.some((s) => s.targetId === targetId)) return [409, "scan-already-active"];
         if (active.length >= this.config.maxConcurrentScans) return [429, "too-many-active-scans"];
         return [null, null];
       })();
-    const scan = this.newScan(target);
+    const scan = this.newScan(target, exposureChecks);
     if (status !== null) {
       // Recorded as rejected so the history shows the attempt; nothing was sent.
-      this.finish(scan, "rejected", reason);
+      this.finish(scan, "rejected", reason, this.exposureAudit(scan));
       return { ok: false, status, reason, value: this.publicScan(scan) };
     }
 
-    this.record("scan-queued", target, scan.id, null);
+    this.record("scan-queued", target, scan.id, null, this.exposureAudit(scan));
     const job = Promise.resolve()
       .then(() => this.run(scan))
       .finally(() => this.jobs.delete(job));
@@ -376,7 +412,7 @@ export class ScanService {
     return { ok: true, status: 202, value: this.publicScan(scan) };
   }
 
-  private newScan(target: TargetRecord): ScanRecord {
+  private newScan(target: TargetRecord, exposureChecks: boolean): ScanRecord {
     const scan: ScanRecord = {
       id: `scan-${this.nextScanId++}`,
       targetId: target.id,
@@ -388,6 +424,8 @@ export class ScanService {
       finishedAt: null,
       requestsUsed: 0,
       requestBudget: this.config.requestBudget,
+      exposureChecks,
+      exposureStoppedEarly: null,
       checks: [],
       controller: null,
       stopReason: null,
@@ -402,21 +440,28 @@ export class ScanService {
     return scan;
   }
 
-  private finish(scan: ScanRecord, status: "completed" | "failed" | "rejected", reason: string | null): void {
+  private finish(scan: ScanRecord, status: "completed" | "failed" | "rejected", reason: string | null, exposure?: AuditEntry["exposureChecks"]): void {
     scan.status = status;
     scan.reason = reason;
     scan.finishedAt = this.now();
     const event: AuditEvent = status === "completed" ? "scan-completed" : status === "failed" ? "scan-failed" : "scan-rejected";
-    this.recordFor(event, scan.targetId, scan.target, scan.id, reason);
+    this.recordFor(event, scan.targetId, scan.target, scan.id, reason, exposure);
+  }
+
+  /** The audit record of the user's choice, from the scan's own recorded option. */
+  private exposureAudit(scan: ScanRecord): NonNullable<AuditEntry["exposureChecks"]> {
+    return { requested: scan.exposureChecks, allowed: scan.exposureChecks ? this.config.exposureEnabled : null };
   }
 
   /** Runs one accepted scan. Never throws; every outcome ends in a final state. */
   private async run(scan: ScanRecord): Promise<void> {
     const controller = new AbortController();
     scan.controller = controller;
+    // The soft deadline stops scheduling probes in time; the timer is the hard stop behind it.
+    const deadline = this.now() + this.config.scanTimeoutMs;
     const timer = setTimeout(() => {
       scan.stopReason = "scan-timeout";
-      controller.abort();
+      controller.abort(new DOMException("The scan reached its time limit.", "TimeoutError"));
     }, this.config.scanTimeoutMs);
     const budget = new RequestBudget(this.config.requestBudget);
     try {
@@ -429,6 +474,7 @@ export class ScanService {
       // Re-check everything at start: the switches, expiry, and the DNS proof itself.
       const refusal = this.switchRefusal(target.target);
       if (refusal) return this.finish(scan, "rejected", refusal);
+      if (scan.exposureChecks && !this.config.exposureEnabled) return this.finish(scan, "rejected", "exposure-checks-disabled");
       // The state may have changed while the scan was queued: report which state it is now in.
       const notVerified = verificationRefusal(this.verificationStatus(target));
       if (notVerified) return this.finish(scan, "rejected", notVerified);
@@ -443,9 +489,24 @@ export class ScanService {
         }
       }
 
-      const result = await runPassiveScan({ target: target.target, fetcher: this.fetcher, budget, signal: controller.signal, now: () => new Date(this.now()) });
-      scan.checks = result.checks;
+      // Planned per scan, after the ownership re-check, and only when both controls allow it.
+      const probes = this.exposureAllowed(scan) ? this.probePlanner(target.target) : [];
+      const result = await runPassiveScan({
+        target: target.target,
+        fetcher: this.fetcher,
+        budget,
+        signal: controller.signal,
+        now: () => new Date(this.now()),
+        probeStage: probes.length > 0 ? { probes, deadline, reserveMs: this.config.probeReserveMs } : undefined,
+      });
       scan.requestsUsed = result.requestsUsed;
+      // Stopped from outside during the probe stage (target deleted): end as any stopped scan does.
+      // The time limit is different: the passive results are complete and are kept, with the
+      // unfinished probes reported as not checked.
+      if (scan.stopReason && scan.stopReason !== "scan-timeout") return this.finish(scan, "failed", scan.stopReason);
+      scan.checks = result.checks;
+      // The scheduler's own signal, never inferred from results: null unless it stopped early.
+      scan.exposureStoppedEarly = probes.length > 0 ? result.probesStoppedEarly : null;
       this.finish(scan, "completed", null);
     } catch (error) {
       scan.requestsUsed = budget.spent;
@@ -458,7 +519,14 @@ export class ScanService {
     }
   }
 
+  /** The one reading of a scan's exposure results, shared by history, detail and both reports. */
+  private exposureOf(scan: ScanRecord) {
+    return exposureSection({ exposureChecks: scan.exposureChecks }, scan.status, scan.checks, scan.exposureStoppedEarly);
+  }
+
   publicScan(scan: ScanRecord) {
+    const exposure = this.exposureOf(scan);
+    const incomplete = exposure.requested ? exposure.incomplete : null;
     return {
       id: scan.id,
       targetId: scan.targetId,
@@ -473,6 +541,11 @@ export class ScanService {
       finishedAt: iso(scan.finishedAt),
       requestsUsed: scan.requestsUsed,
       requestBudget: scan.requestBudget,
+      // Requested or not, as recorded when the scan was created; never inferred from results.
+      options: { exposureChecks: scan.exposureChecks },
+      // M2-H: true only for a completed scan whose exposure stage stopped before every path was checked.
+      exposureIncomplete: incomplete !== null,
+      exposureIncompleteReason: incomplete?.reason ?? null,
       summary: summarizeFindings(scan.checks),
     };
   }
@@ -483,7 +556,9 @@ export class ScanService {
 
   getScan(id: string) {
     const scan = this.scans.find((s) => s.id === id);
-    return scan ? { ...this.publicScan(scan), checks: scan.checks } : null;
+    if (!scan) return null;
+    // The exposure section is the same reading the reports use, so the screen and the reports agree.
+    return { ...this.publicScan(scan), checks: scan.checks, exposure: this.exposureOf(scan) };
   }
 
   report(id: string): ScanReport | null {
@@ -503,6 +578,8 @@ export class ScanService {
       finishedAt: iso(scan.finishedAt),
       requestsUsed: scan.requestsUsed,
       requestBudget: scan.requestBudget,
+      options: { exposureChecks: scan.exposureChecks },
+      exposureStoppedEarly: scan.exposureStoppedEarly,
       checks: scan.checks,
     };
   }
@@ -513,11 +590,18 @@ export class ScanService {
     return this.audit.slice(-limit).reverse();
   }
 
-  private record(event: AuditEvent, target: TargetRecord, scanId: string | null, reason: string | null): void {
-    this.recordFor(event, target.id, target.target, scanId, reason);
+  private record(event: AuditEvent, target: TargetRecord, scanId: string | null, reason: string | null, exposure?: AuditEntry["exposureChecks"]): void {
+    this.recordFor(event, target.id, target.target, scanId, reason, exposure);
   }
 
-  private recordFor(event: AuditEvent, targetId: string, target: ScanTarget, scanId: string | null, reason: string | null): void {
+  private recordFor(
+    event: AuditEvent,
+    targetId: string,
+    target: ScanTarget,
+    scanId: string | null,
+    reason: string | null,
+    exposure?: AuditEntry["exposureChecks"],
+  ): void {
     this.audit.push({
       id: this.nextAuditId++,
       at: new Date(this.now()).toISOString(),
@@ -526,6 +610,8 @@ export class ScanService {
       scanId,
       hostname: target.kind === "dns" ? target.hostname : target.origin,
       reason,
+      // Two booleans only: never a path, a body or any other detail of the scan.
+      ...(exposure ? { exposureChecks: { requested: exposure.requested, allowed: exposure.allowed } } : {}),
     });
     if (this.audit.length > this.config.maxAuditEntries) this.audit.splice(0, this.audit.length - this.config.maxAuditEntries);
   }

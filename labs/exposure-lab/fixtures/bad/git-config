@@ -1,0 +1,6 @@
+[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = false
+[remote "origin"]
+	url = https://lab-user:FAKE_AGENTSHIELD_TEST_SECRET_DO_NOT_USE_12345@git.lab.invalid/lab/site.git

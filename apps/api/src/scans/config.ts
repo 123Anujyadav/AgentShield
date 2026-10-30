@@ -1,4 +1,4 @@
-import { parseLabOrigin, type LabTarget } from "@agentshield/websec";
+import { parseLabOrigin, PROBE_TIME_RESERVE_MS, type LabTarget } from "@agentshield/websec";
 
 /**
  * Website-scanning settings (M1). Both switches fail closed: only the exact
@@ -10,9 +10,15 @@ import { parseLabOrigin, type LabTarget } from "@agentshield/websec";
  * - SCAN_LAB_MODE independently allows scans of the exact loopback origins in
  *   SCAN_LAB_ORIGINS (ports 8080-8099 only, never the API's own port), and
  *   nothing else. It never relaxes the address guard for any other target.
+ * - SCAN_EXPOSURE_ENABLED (M2) is the server-wide kill switch for exposure
+ *   checks (a baseline plus nine fixed paths). They run only for a scan that
+ *   also asked for them (includeExposureChecks: true); no request can turn
+ *   this switch on.
  */
 export interface ScanConfig {
   networkEnabled: boolean;
+  /** SCAN_EXPOSURE_ENABLED: exposure checks may run at all. Off unless exactly "true". */
+  exposureEnabled: boolean;
   lab: { enabled: boolean; origins: ReadonlyMap<string, LabTarget>; rejectedEntries: number };
   verificationTtlMs: number;
   maxTargets: number;
@@ -22,6 +28,8 @@ export interface ScanConfig {
   requestBudget: number;
   /** Upper bound on one whole scan, on top of the 10-second per-request timeout. */
   scanTimeoutMs: number;
+  /** Time that must remain before the scan's deadline for an optional probe to start. Not settable from the environment. */
+  probeReserveMs: number;
   rateLimits: { registerTarget: number; verify: number; startScan: number };
 }
 
@@ -39,6 +47,7 @@ export function loadScanConfig(env: NodeJS.ProcessEnv = process.env): ScanConfig
   }
   return {
     networkEnabled: env.SCAN_NETWORK_ENABLED === "true",
+    exposureEnabled: env.SCAN_EXPOSURE_ENABLED === "true",
     lab: { enabled: labEnabled, origins: labEnabled ? origins : new Map(), rejectedEntries },
     verificationTtlMs: 30 * DAY_MS,
     maxTargets: 50,
@@ -47,6 +56,7 @@ export function loadScanConfig(env: NodeJS.ProcessEnv = process.env): ScanConfig
     maxConcurrentScans: 2,
     requestBudget: 30,
     scanTimeoutMs: 120_000,
+    probeReserveMs: PROBE_TIME_RESERVE_MS,
     rateLimits: { registerTarget: 20, verify: 10, startScan: 5 },
   };
 }

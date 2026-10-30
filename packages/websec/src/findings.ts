@@ -10,6 +10,11 @@ import type { ScanTarget } from "./target.js";
 export type Severity = "info" | "low" | "medium" | "high" | "critical";
 export type Confidence = "low" | "medium" | "high";
 export type CheckStatus = "pass" | "fail" | "error" | "not-applicable";
+/**
+ * Which part of a scan a result belongs to (M2-E). Absent means a passive M1
+ * check, so every M1 result and stored record stays valid as it is.
+ */
+export type CheckGroup = "passive" | "exposure" | "exposure-baseline";
 
 export interface Finding {
   /** Stable identifier, e.g. "header.hsts.missing". */
@@ -33,6 +38,13 @@ export interface CheckResult {
   /** Short, fixed-text summary of the outcome. */
   summary: string;
   findings: Finding[];
+  /** Set on exposure rows ("exposure") and the baseline diagnostic ("exposure-baseline"); absent on M1 checks. */
+  group?: CheckGroup;
+}
+
+/** The result's group; a result without one is a passive M1 check. */
+export function checkGroup(check: Pick<CheckResult, "group">): CheckGroup {
+  return check.group ?? "passive";
 }
 
 /** What a passive scan observed. Each fetch is null when it was not attempted. */

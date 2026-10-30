@@ -6,5 +6,7 @@ export * from "./findings.js";
 export * from "./checks/transport-security.js";
 export * from "./checks/headers.js";
 export * from "./checks/security-txt.js";
+export * from "./checks/exposure.js";
 export * from "./scan.js";
+export * from "./stages.js";
 export * from "./report.js";

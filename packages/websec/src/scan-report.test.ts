@@ -101,6 +101,7 @@ describe("reports", () => {
     finishedAt: "2026-10-29T00:00:02.000Z",
     requestsUsed: 3,
     requestBudget: 30,
+    options: { exposureChecks: false },
     checks: [
       {
         checkId: "header.version-disclosure",
@@ -144,7 +145,8 @@ describe("reports", () => {
   it("the JSON report carries the disclaimer, summary and data, and nothing else", () => {
     const json = JSON.parse(renderJsonReport(report)) as Record<string, unknown>;
     expect(Object.keys(json).sort()).toEqual(
-      ["checks", "disclaimer", "finishedAt", "generator", "reason", "requestBudget", "requestedAt", "requestsUsed", "scanId", "startedAt", "status", "summary", "target"].sort(),
+      // "options" and "exposure" were added in M2-E (the recorded opt-in and the exposure section).
+      ["checks", "disclaimer", "exposure", "finishedAt", "generator", "options", "reason", "requestBudget", "requestedAt", "requestsUsed", "scanId", "startedAt", "status", "summary", "target"].sort(),
     );
     expect(json.summary).toEqual({ critical: 0, high: 0, medium: 0, low: 1, info: 0 });
   });

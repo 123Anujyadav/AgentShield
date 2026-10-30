@@ -80,6 +80,9 @@ export class RequestBudget {
   get spent(): number {
     return this.used;
   }
+  get remaining(): number {
+    return this.limit - this.used;
+  }
 }
 
 /** Serializes requests per host: at most one active request to a host at any time. */
@@ -147,6 +150,8 @@ export type FetchResult =
       body: Buffer | null;
       tls: TlsDetails | null;
       hops: FetchHop[];
+      /** Present only when the fetch was made in prefix mode (readPrefix: true). */
+      prefix?: PrefixRead;
     }
   | { ok: false; reason: FetchFailureReason; url: URL; hops: FetchHop[]; blockReason?: BlockReason | "empty" };
 
@@ -169,7 +174,42 @@ export interface FetchOptions {
   /** A fixed Origin to send (CORS probe). Must be an https origin. */
   probeOrigin?: string;
   signal?: AbortSignal;
+  /**
+   * Prefix mode (M2): send the fixed header Range: bytes=0-4095, never follow a
+   * redirect, never decode, and read at most the first PREFIX_READ_BYTES of the
+   * body into result.prefix. Only the exact value true enables it; it replaces
+   * readBodyBytes and followRedirects for that fetch.
+   */
+  readPrefix?: boolean;
 }
+
+/** The fixed prefix size. Callers can switch prefix mode on, but never choose a size or a range. */
+export const PREFIX_READ_BYTES = 4096;
+export const PREFIX_RANGE_HEADER = `bytes=0-${PREFIX_READ_BYTES - 1}`;
+
+/**
+ * What prefix mode read. Bodies are inspected only as sent with no encoding: an
+ * encoded body is left unread (never decoded, never kept), so a later stage can
+ * treat it as inconclusive.
+ */
+export type PrefixRead =
+  | {
+      kind: "read";
+      /** The bytes actually read: at most PREFIX_READ_BYTES. */
+      bytes: Buffer;
+      /** True when reading stopped at the limit: the body was at least PREFIX_READ_BYTES long and anything after was never read. */
+      truncated: boolean;
+    }
+  | {
+      kind: "encoded";
+      /** The declared codings, normalized (lower-case tokens; anything malformed becomes "unrecognized"). */
+      encoding: string;
+    }
+  | {
+      kind: "not-read";
+      /** A 3xx response (never followed in prefix mode) or a 416 (no satisfiable range). */
+      reason: "redirect" | "range-not-satisfiable";
+    };
 
 export const DEFAULT_TIMEOUT_MS = 10_000;
 export const DEFAULT_MAX_REDIRECTS = 5;
@@ -237,6 +277,57 @@ async function readCapped(body: AsyncIterable<Uint8Array> | null, cap: number, s
   return Buffer.concat(chunks);
 }
 
+const PASS_THROUGH_CODINGS = new Set(["identity", "chunked"]);
+
+/**
+ * The codings that would have to be undone before a body could be inspected:
+ * every Content-Encoding coding, plus any Transfer-Encoding coding other than
+ * chunked (Node removes chunking but nothing else). Returns null when there are none.
+ */
+function bodyEncoding(headers: NormalizedHeaders): string | null {
+  const codings = [...(headers["content-encoding"] ?? []), ...(headers["transfer-encoding"] ?? [])]
+    .flatMap((value) => value.split(","))
+    .map((token) => token.trim().toLowerCase())
+    .filter((token) => token !== "" && !PASS_THROUGH_CODINGS.has(token))
+    .map((token) => (/^[a-z0-9._+-]{1,32}$/.test(token) ? token : "unrecognized"));
+  const unique = [...new Set(codings)];
+  return unique.length === 0 ? null : unique.slice(0, 4).join(", ");
+}
+
+/**
+ * Reads at most `cap` bytes. Stops pulling from the stream as soon as the cap is
+ * reached; only the bytes kept are copied, and the stream is released on every
+ * exit (the caller also closes the response).
+ */
+async function readPrefixBytes(body: AsyncIterable<Uint8Array> | null, cap: number, signal: AbortSignal): Promise<PrefixRead> {
+  if (!body) return { kind: "read", bytes: Buffer.alloc(0), truncated: false };
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const iterator = body[Symbol.asyncIterator]();
+  try {
+    while (total < cap) {
+      if (signal.aborted) throw new Error("aborted");
+      const { done, value } = await untilAborted(iterator.next(), signal);
+      if (done) break;
+      const take = Math.min(value.byteLength, cap - total);
+      chunks.push(Buffer.from(value.subarray(0, take)));
+      total += take;
+    }
+  } finally {
+    void iterator.return?.()?.catch?.(() => {});
+  }
+  return { kind: "read", bytes: Buffer.concat(chunks, total), truncated: total >= cap };
+}
+
+async function readPrefix(response: TransportResponse, headers: NormalizedHeaders, cap: number, signal: AbortSignal): Promise<PrefixRead> {
+  // 3xx bodies are never inspected, and 416 means the server had no bytes for the range.
+  if (response.status >= 300 && response.status < 400) return { kind: "not-read", reason: "redirect" };
+  if (response.status === 416) return { kind: "not-read", reason: "range-not-satisfiable" };
+  const encoding = bodyEncoding(headers);
+  if (encoding !== null) return { kind: "encoded", encoding };
+  return readPrefixBytes(response.body, cap, signal);
+}
+
 /** Decodes a bounded body. The decoded size is capped too (decompression bombs). */
 export function decodeBody(body: Buffer, contentEncoding: string | undefined, cap: number): Buffer {
   const encoding = (contentEncoding ?? "").trim().toLowerCase();
@@ -296,7 +387,8 @@ export class GuardedFetcher {
       }
 
       const location = result.headers.location?.[0];
-      if (options.followRedirects !== false && REDIRECT_STATUSES.has(result.status) && location !== undefined) {
+      const follow = options.readPrefix !== true && options.followRedirects !== false;
+      if (follow && REDIRECT_STATUSES.has(result.status) && location !== undefined) {
         hops.push({ url: url.href, status: result.status });
         if (redirects >= this.maxRedirects) return fail("too-many-redirects");
         let next: URL;
@@ -309,7 +401,16 @@ export class GuardedFetcher {
         url = next;
         continue; // Re-checks scope, budget and DNS for the next hop.
       }
-      return { ok: true, url, status: result.status, headers: result.headers, body: result.body, tls: result.tls, hops };
+      return {
+        ok: true,
+        url,
+        status: result.status,
+        headers: result.headers,
+        body: result.body,
+        tls: result.tls,
+        hops,
+        ...(result.prefix ? { prefix: result.prefix } : {}),
+      };
     }
   }
 
@@ -349,7 +450,7 @@ export class GuardedFetcher {
     url: URL,
     pinned: { address: string; family: AddressFamily },
     options: FetchOptions,
-  ): Promise<{ status: number; headers: NormalizedHeaders; body: Buffer | null; tls: TlsDetails | null }> {
+  ): Promise<{ status: number; headers: NormalizedHeaders; body: Buffer | null; tls: TlsDetails | null; prefix?: PrefixRead }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     const onAbort = () => controller.abort();
@@ -364,6 +465,8 @@ export class GuardedFetcher {
     if (options.probeOrigin !== undefined && /^https:\/\/[a-z0-9.-]+$/.test(options.probeOrigin)) {
       headers.origin = options.probeOrigin;
     }
+    const prefixMode = options.readPrefix === true;
+    if (prefixMode) headers.range = PREFIX_RANGE_HEADER;
     const https = url.protocol === "https:";
     let response: TransportResponse | null = null;
     const pending = this.options.transport({
@@ -379,6 +482,10 @@ export class GuardedFetcher {
     try {
       response = await untilAborted(pending, controller.signal);
       const normalized = normalizeHeaders(response.headers);
+      if (prefixMode) {
+        const prefix = await readPrefix(response, normalized, Math.min(PREFIX_READ_BYTES, this.maxBodyBytes), controller.signal);
+        return { status: response.status, headers: normalized, body: null, tls: response.tls, prefix };
+      }
       const wanted = Math.min(options.readBodyBytes ?? 0, this.maxBodyBytes);
       let body: Buffer | null = null;
       if (wanted > 0 && !REDIRECT_STATUSES.has(response.status)) {

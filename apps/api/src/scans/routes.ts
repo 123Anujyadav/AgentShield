@@ -58,12 +58,20 @@ export function registerScanRoutes(app: Express, deps: { service: ScanService; l
   });
 
   app.post("/api/scans", limit("scan-start", limits.startScan), (req, res) => {
-    const targetId: unknown = (req.body as { targetId?: unknown } | undefined)?.targetId;
+    const body = (req.body ?? {}) as { targetId?: unknown; includeExposureChecks?: unknown };
+    const targetId: unknown = body.targetId;
     if (typeof targetId !== "string" || !TARGET_ID.test(targetId)) {
       res.status(400).json({ error: "A targetId such as tgt-1 is required.", reason: "invalid-id" });
       return;
     }
-    send(res, service.startScan(targetId), "scan");
+    // Optional, and only a real boolean: "true", 1, null and objects are refused. Any other
+    // field (paths, URLs, headers, budgets) is ignored; nothing in the body shapes a probe.
+    const include = Object.prototype.hasOwnProperty.call(body, "includeExposureChecks") ? body.includeExposureChecks : false;
+    if (typeof include !== "boolean") {
+      res.status(400).json({ error: refusalMessage("invalid-scan-options"), reason: "invalid-scan-options" });
+      return;
+    }
+    send(res, service.startScan(targetId, { exposureChecks: include }), "scan");
   });
 
   app.get("/api/scans", (_req, res) => {

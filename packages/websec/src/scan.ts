@@ -3,6 +3,7 @@ import { checkSecurityTxt } from "./checks/security-txt.js";
 import { checkHttpsRedirect, checkTls } from "./checks/transport-security.js";
 import type { FetchFailureReason, FetchResult, GuardedFetcher, RequestBudget } from "./fetcher.js";
 import type { CheckResult, PassiveObservations } from "./findings.js";
+import { runProbeStage, type NotCheckedReason, type ProbeStagePlan } from "./stages.js";
 import type { ScanTarget } from "./target.js";
 
 /**
@@ -10,6 +11,10 @@ import type { ScanTarget } from "./target.js";
  * over plain HTTP, /.well-known/security.txt), each with its own redirect hops,
  * all inside one request budget. No crawling, no other paths, no form
  * submission, no payloads.
+ *
+ * An optional probe stage (M2) runs only after every passive check has its
+ * result, so a probe that is skipped, runs out of time or budget, or is
+ * interrupted never costs the passive results.
  */
 
 export const PASSIVE_CHECKS: Array<(obs: PassiveObservations) => CheckResult> = [
@@ -32,7 +37,7 @@ export const CORS_PROBE_ORIGIN = "https://agentshield-cors-probe.invalid";
 export const SECURITY_TXT_READ_BYTES = 32 * 1024;
 
 /** Reasons that mean the target itself must not be scanned; the scan stops instead of reporting findings. */
-const FATAL_REASONS = new Set<FetchFailureReason>(["blocked-address", "malformed-resolution", "dns-failure", "out-of-scope", "cancelled"]);
+export const FATAL_REASONS: ReadonlySet<FetchFailureReason> = new Set<FetchFailureReason>(["blocked-address", "malformed-resolution", "dns-failure", "out-of-scope", "cancelled"]);
 
 export class ScanStopped extends Error {
   constructor(readonly reason: FetchFailureReason) {
@@ -44,6 +49,8 @@ export interface PassiveScanResult {
   checks: CheckResult[];
   requestsUsed: number;
   requestBudget: number;
+  /** Why the optional probe stage stopped scheduling early; null when it finished or was not requested. */
+  probesStoppedEarly: NotCheckedReason | null;
 }
 
 export async function runPassiveScan(options: {
@@ -52,6 +59,8 @@ export async function runPassiveScan(options: {
   budget: RequestBudget;
   signal?: AbortSignal;
   now?: () => Date;
+  /** Optional probes after the passive checks. Omitted or empty: the M1 scan, unchanged. */
+  probeStage?: ProbeStagePlan;
 }): Promise<PassiveScanResult> {
   const { target, fetcher, budget, signal } = options;
   const now = options.now ?? (() => new Date());
@@ -76,5 +85,16 @@ export async function runPassiveScan(options: {
   );
 
   const observations: PassiveObservations = { target, https, http, securityTxt, probeOrigin: CORS_PROBE_ORIGIN, now: now() };
-  return { checks: PASSIVE_CHECKS.map((check) => check(observations)), requestsUsed: budget.spent, requestBudget: budget.limit };
+  const checks = PASSIVE_CHECKS.map((check) => check(observations));
+  let probesStoppedEarly: NotCheckedReason | null = null;
+  if (options.probeStage && options.probeStage.probes.length > 0) {
+    const stage = await runProbeStage({
+      ...options.probeStage,
+      context: { target, fetcher, budget, signal },
+      now: () => now().getTime(),
+    });
+    checks.push(...stage.checks);
+    probesStoppedEarly = stage.stoppedEarly;
+  }
+  return { checks, requestsUsed: budget.spent, requestBudget: budget.limit, probesStoppedEarly };
 }
