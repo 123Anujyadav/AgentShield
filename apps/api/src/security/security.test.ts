@@ -5,7 +5,7 @@ import supertest from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { ActivityEvent } from "@agentshield/engine";
 import { createApp, type AppDeps } from "../app.js";
-import { createTestApp, request, TEST_AGENT_ID, TEST_API_TOKEN } from "../test-support.js";
+import { asAgent, createTestApp, request, TEST_AGENT_ID, TEST_API_TOKEN } from "../test-support.js";
 import { SESSION_COOKIE } from "./auth.js";
 import { loadSecurityConfig, WEB_ORIGINS } from "./config.js";
 import { hostnameOf } from "./request-guards.js";
@@ -94,7 +94,8 @@ describe("M0: Origin and CORS", () => {
 
 describe("M0: authentication on every /api route", () => {
   it("every registered /api route except /api/session refuses missing or wrong credentials", async () => {
-    const app = createTestApp();
+    // Many failed attempts on purpose; the M3-D failed-attempt limit is tested separately.
+    const app = createTestApp({ security: { rateLimits: { ...loadSecurityConfig({}).rateLimits, authFailure: 1000 } } });
     const protectedRoutes = registeredRoutes(app).filter(([, path]) => path.startsWith("/api/") && path !== "/api/session");
     // Guards against a vacuous pass: the routes that exist today are all listed.
     expect(protectedRoutes).toEqual(
@@ -266,7 +267,7 @@ describe("M0: rate limits", () => {
     const time = clock();
     const app = createTestApp({
       now: time.now,
-      security: { rateLimits: { api: 1000, session: 10, evaluate: 3, approvalAction: 2 } },
+      security: { rateLimits: { api: 1000, session: 10, evaluate: 3, approvalAction: 2, authFailure: 20 } },
     });
     for (let i = 0; i < 3; i += 1) expect((await request(app).post("/api/evaluate").send({ agentId: TEST_AGENT_ID, ...benignEvaluate })).status).toBe(200);
     expect((await request(app).post("/api/evaluate").send({ agentId: TEST_AGENT_ID, ...benignEvaluate })).status).toBe(429);
@@ -279,7 +280,7 @@ describe("M0: rate limits", () => {
     time.advance(MINUTE);
     expect((await request(app).post("/api/evaluate").send({ agentId: TEST_AGENT_ID, ...benignEvaluate })).status).toBe(200);
 
-    const global = createTestApp({ now: time.now, security: { rateLimits: { api: 5, session: 10, evaluate: 60, approvalAction: 60 } } });
+    const global = createTestApp({ now: time.now, security: { rateLimits: { api: 5, session: 10, evaluate: 60, approvalAction: 60, authFailure: 20 } } });
     // Unauthenticated floods count too, before authentication runs.
     for (let i = 0; i < 5; i += 1) expect((await supertest(global).get("/api/events")).status).toBe(401);
     expect((await request(global).get("/api/events")).status).toBe(429);
@@ -290,7 +291,7 @@ describe("M0: rate limits", () => {
     const defaults = loadSecurityConfig({});
     expect(defaults).toMatchObject({
       maxEvents: 1000,
-      rateLimits: { api: 600, session: 10, evaluate: 60, approvalAction: 60 },
+      rateLimits: { api: 600, session: 10, evaluate: 60, approvalAction: 60, authFailure: 20 },
       sessionAbsoluteMs: 8 * 60 * MINUTE,
       sessionIdleMs: 30 * MINUTE,
       maxSessions: 10,
@@ -312,7 +313,7 @@ describe("M0: bounded event storage", () => {
     const app = createTestApp({ events, security: { maxEvents: 5 } });
     for (let i = 0; i < 7; i += 1) await request(app).post("/api/evaluate").send({ agentId: TEST_AGENT_ID, ...benignEvaluate });
     const marker = "fakeBenchmarkDestEvent123456";
-    await request(app)
+    await asAgent(app)
       .post("/api/evaluate")
       .send({ agentId: TEST_AGENT_ID,
         intent: { task: "Summarize", allowedActions: ["create_summary"], deniedActions: ["create_summary"], allowedDestinations: [] },

@@ -44,14 +44,16 @@ export function resolveAgentIntent(policy: AgentPolicy, requested: RequestedInte
 
 export const UNKNOWN_AGENT_RULE_ID = "policy.unknown-agent";
 export const POLICY_CHANGED_RULE_ID = "policy.changed-since-approval";
+/** M3-D: the agent credential that created an approval is no longer valid (revoked, expired, removed or unavailable). */
+export const CREDENTIAL_INVALID_RULE_ID = "identity.credential-invalid";
 export const POLICY_BLOCK_RISK = 90;
 
-type PolicyBlockKind = "unknown-agent" | "policy-changed";
+type PolicyBlockKind = "unknown-agent" | "policy-changed" | "credential-invalid";
 
 /**
  * A BLOCK decided by the policy layer itself: no server-side policy for the agent
  * (default deny), or, on an approval recheck, a policy that changed since the
- * approval was created. Scanner findings are still reported, first, as in every
+ * approval was created or (M3-D) a creating agent credential that is no longer valid. Scanner findings are still reported, first, as in every
  * evaluation; nothing here can be overridden by an approval or the advisory model.
  */
 export function policyBlockEvaluation(
@@ -65,7 +67,16 @@ export function policyBlockEvaluation(
   const shownAgent = agentId === null ? "(none)" : redactSecretValue(agentId);
   const shownType = redactSecretValue(action.type);
   const finding: Finding =
-    kind === "unknown-agent"
+    kind === "credential-invalid"
+      ? {
+          ruleId: CREDENTIAL_INVALID_RULE_ID,
+          category: "policy",
+          severity: "high",
+          title: "Agent credential no longer valid",
+          explanation: "The agent credential that requested this action was revoked, expired, removed or cannot be checked, so the approval cannot execute.",
+          evidence: `agentId=${shownAgent}; action.type=${shownType}`,
+        }
+      : kind === "unknown-agent"
       ? {
           ruleId: UNKNOWN_AGENT_RULE_ID,
           category: "policy",
@@ -90,7 +101,9 @@ export function policyBlockEvaluation(
     scannerFindings,
     scannerStatus: scan ? scan.status : "not-scanned",
     explanation:
-      kind === "unknown-agent"
+      kind === "credential-invalid"
+        ? `Blocked: the credential agent ${shownAgent} used to request this action is no longer valid. Nothing was executed.`
+        : kind === "unknown-agent"
         ? `Blocked: no server-side policy exists for agent ${shownAgent}. Unknown agents are denied by default and nothing was executed.`
         : `Blocked: the policy for agent ${shownAgent} changed since this approval was created. Nothing was executed; evaluate the action again under the current policy.`,
     actionType: shownType,

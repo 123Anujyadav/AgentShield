@@ -55,11 +55,11 @@ describe("M3-C: policy documents are validated strictly", () => {
   it.each([
     ["not JSON", "{", /not valid JSON/],
     ["a top-level array", "[]", /must be a JSON object/],
-    ["an unknown top-level field", doc([valid], { extra: true }), /unknown field "extra"/],
+    ["an unknown top-level field", doc([valid], { extra: true }), /^The policy file has an unknown top-level field\.$/],
     ["another schema version", JSON.stringify({ schemaVersion: 2, policies: [] }), /schemaVersion must be 1/],
     ["policies not an array", JSON.stringify({ schemaVersion: 1, policies: {} }), /policies must be an array/],
     ["too many policies", doc(Array.from({ length: 201 }, (_, i) => ({ ...valid, agentId: `a${i}` }))), /more than 200/],
-    ["an unknown policy field", doc([{ ...valid, allowAll: true }]), /unknown field "allowAll"/],
+    ["an unknown policy field", doc([{ ...valid, allowAll: true }]), /^policies\[0\] has an unknown field\.$/],
     ["a missing list", doc([{ ...valid, allowedDestinations: undefined }]), /allowedDestinations is required/],
     ["a list that is not an array", doc([{ ...valid, allowedActions: "create_summary" }]), /must be an array/],
     ["a non-string entry", doc([{ ...valid, allowedActions: [1] }]), /must be a non-empty string/],
@@ -86,6 +86,18 @@ describe("M3-C: policy documents are validated strictly", () => {
       expect(() => createPolicyStore(parsePolicyDocument(text), "file")).toThrowError(message);
     } else {
       refuses(text, message);
+    }
+  });
+
+  it("M3-D audit L4: an unknown field's name is never echoed, at the top level or in a policy", () => {
+    const name = "fakeSecretFieldName_0123456789";
+    for (const text of [doc([valid], { [name]: 1 }), doc([{ ...valid, [name]: 1 }])]) {
+      expect(() => parsePolicyDocument(text)).toThrowError(PolicyConfigError);
+      try {
+        parsePolicyDocument(text);
+      } catch (error) {
+        expect((error as Error).message).not.toContain("fakeSecretFieldName");
+      }
     }
   });
 
@@ -164,6 +176,6 @@ describe("M3-C: loading at start-up", () => {
     const server = readFileSync(new URL("../server.ts", import.meta.url), "utf8");
     expect(server).toContain("policyStore = loadPolicyStore();");
     expect(server).toMatch(/catch \(error\) \{[\s\S]*?agent-policy status=invalid-config[\s\S]*?process\.exit\(1\);/);
-    expect(server).toContain("createApp({ apiToken: tokenFile.token, policyStore })");
+    expect(server).toContain("createApp({ apiToken: tokenFile.token, policyStore, credentialStore })");
   });
 });

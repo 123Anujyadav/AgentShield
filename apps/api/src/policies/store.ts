@@ -66,7 +66,8 @@ function validateList(value: unknown, where: string): string[] {
 export function validatePolicy(value: unknown, where = "policy"): AgentPolicy {
   if (!isRecord(value)) throw new PolicyConfigError(`${where} must be an object.`);
   for (const key of Object.keys(value)) {
-    if (!POLICY_KEYS.has(key)) throw new PolicyConfigError(`${where} has an unknown field "${key.slice(0, 40)}".`);
+    // The field name comes from the file and is never echoed (M3-D audit L4).
+    if (!POLICY_KEYS.has(key)) throw new PolicyConfigError(`${where} has an unknown field.`);
   }
   const { agentId, version, description } = value;
   if (typeof agentId !== "string" || !AGENT_ID_PATTERN.test(agentId)) {
@@ -102,7 +103,7 @@ export function parsePolicyDocument(text: string): AgentPolicy[] {
   }
   if (!isRecord(document)) throw new PolicyConfigError("The policy file must be a JSON object.");
   for (const key of Object.keys(document)) {
-    if (!DOCUMENT_KEYS.has(key)) throw new PolicyConfigError(`The policy file has an unknown field "${key.slice(0, 40)}".`);
+    if (!DOCUMENT_KEYS.has(key)) throw new PolicyConfigError("The policy file has an unknown top-level field.");
   }
   if (document.schemaVersion !== POLICY_SCHEMA_VERSION) throw new PolicyConfigError(`schemaVersion must be ${POLICY_SCHEMA_VERSION}.`);
   if (!Array.isArray(document.policies)) throw new PolicyConfigError("policies must be an array.");

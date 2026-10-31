@@ -41,6 +41,12 @@ export interface AgentPolicyRef {
   sha256: string;
 }
 
+/**
+ * M3-D: who made a request. An agent is identified by its credential's public key
+ * id (never the credential or its hash); an operator by how they authenticated.
+ */
+export type RequestActor = { kind: "agent"; credentialId: string } | { kind: "operator"; method: "session" | "bearer" };
+
 /** What a request may ask for. Each list is optional; a present list can only narrow the agent's policy. */
 export interface RequestedIntent {
   id?: string;
@@ -109,6 +115,10 @@ export interface ActivityEvent {
   agentId?: string | null;
   /** M3-C: the policy the decision was made under (null for an unknown agent). */
   agentPolicy?: AgentPolicyRef | null;
+  /** M3-D: who made the request or took the action. */
+  actor?: RequestActor;
+  /** M3-D: on an identity-mismatch event, the agent id the request claimed (secret-shaped values redacted). */
+  claimedAgentId?: string;
 }
 
 export type ApprovalStatus =
@@ -145,6 +155,8 @@ export interface PendingApproval {
   /** M3-C: the agent and the policy version the CONFIRM was decided under. */
   agentId?: string | null;
   agentPolicy?: AgentPolicyRef | null;
+  /** M3-D: who requested the action (an agent credential, or an operator running a seeded scenario). */
+  requestedBy?: RequestActor;
 }
 
 export interface Scenario {

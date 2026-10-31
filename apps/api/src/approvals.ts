@@ -2,6 +2,7 @@ import type {
   AgentPolicyRef,
   EvaluationResult,
   PendingApproval,
+  RequestActor,
   RequestedIntent,
   ProposedAction,
   SimulatedExecution,
@@ -28,6 +29,8 @@ export interface ApprovalRecord extends PendingApproval {
   untrustedContent?: UntrustedContent;
   /** M3-C, server-only: what the request asked for, re-narrowed against the CURRENT policy on recheck. */
   requestedIntent?: RequestedIntent;
+  /** M3-D, server-only: the key id of the agent credential that requested the action; rechecked on approve. */
+  credentialKeyId?: string;
   /** True while the EXPIRED lifecycle event still has to be written successfully. */
   expiryEventPending?: boolean;
 }
@@ -96,6 +99,9 @@ export function createPendingApproval(
     agentId?: string | null;
     requestedIntent?: RequestedIntent;
     agentPolicy?: AgentPolicyRef | null;
+    /** M3-D: who requested the action, and (for an agent) the credential it used. */
+    requestedBy?: RequestActor;
+    credentialKeyId?: string;
   },
   now = new Date(),
 ): PendingApproval {
@@ -120,6 +126,8 @@ export function createPendingApproval(
     ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
     ...(input.agentPolicy !== undefined ? { agentPolicy: input.agentPolicy === null ? null : { ...input.agentPolicy } } : {}),
     ...(input.requestedIntent !== undefined ? { requestedIntent: clone(input.requestedIntent) } : {}),
+    ...(input.requestedBy !== undefined ? { requestedBy: { ...input.requestedBy } } : {}),
+    ...(input.credentialKeyId !== undefined ? { credentialKeyId: input.credentialKeyId } : {}),
   };
   store.records.set(record.id, record);
   return toPublicApproval(record);
@@ -190,8 +198,9 @@ export function publicExecution(execution: SimulatedExecution, actionType: strin
 
 /** Public view never echoes the raw untrusted content or internal bookkeeping back. */
 export function toPublicApproval(record: ApprovalRecord): PendingApproval {
-  // Server-only fields never reach clients (M3-C adds the requested intent).
-  const { untrustedContent: _ignored, expiryEventPending: _pending, requestedIntent: _requested, ...rest } = record;
+  // Server-only fields never reach clients (M3-C adds the requested intent, M3-D the credential key id;
+  // the public requestedBy carries the key id only for operator views, per U5).
+  const { untrustedContent: _ignored, expiryEventPending: _pending, requestedIntent: _requested, credentialKeyId: _key, ...rest } = record;
   const pub = clone(rest);
   // Phase I: secret-shaped request metadata is shown as [REDACTED].
   if (pub.execution) pub.execution = publicExecution(pub.execution, record.action.type);

@@ -50,3 +50,49 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimitFactory
     next();
   };
 }
+
+/**
+ * Failed-authentication limiter (M3-D). Counts only failed attempts that carried
+ * an Authorization header, per client address, in a fixed window. Once the limit
+ * is reached, further header-authenticated requests get 429 without being
+ * checked until the window ends. Cookie sessions (the dashboard) are not counted
+ * or blocked, so failed bearer attempts cannot lock the operator out of the UI.
+ */
+export interface FailureLimiter {
+  /** Seconds until the window ends when the client is blocked, otherwise null. */
+  blockedFor(key: string): number | null;
+  recordFailure(key: string): void;
+}
+
+export function createFailureLimiter(options: RateLimiterOptions & { limit: number }): FailureLimiter {
+  const { windowMs, now, limit } = options;
+  const maxKeys = options.maxKeys ?? 10_000;
+  const windows = new Map<string, { start: number; count: number }>();
+  const live = (key: string, current: number) => {
+    const window = windows.get(key);
+    return window && current - window.start < windowMs ? window : null;
+  };
+  return {
+    blockedFor(key) {
+      const current = now();
+      const window = live(key, current);
+      return window && window.count >= limit ? Math.max(1, Math.ceil((window.start + windowMs - current) / 1000)) : null;
+    },
+    recordFailure(key) {
+      const current = now();
+      const window = live(key, current);
+      if (window) {
+        window.count += 1;
+        return;
+      }
+      if (windows.size >= maxKeys) {
+        for (const [k, w] of windows) if (current - w.start >= windowMs) windows.delete(k);
+        for (const k of windows.keys()) {
+          if (windows.size < maxKeys) break;
+          windows.delete(k);
+        }
+      }
+      windows.set(key, { start: current, count: 1 });
+    },
+  };
+}

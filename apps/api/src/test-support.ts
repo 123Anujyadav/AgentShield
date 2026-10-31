@@ -1,6 +1,7 @@
 import supertest, { type Test } from "supertest";
 import { DEMO_AGENT_POLICY, type AgentPolicy } from "@agentshield/engine";
 import { createApp, type AppDeps } from "./app.js";
+import { createCredentialStore, issueCredential, type CredentialRecord, type CredentialStore } from "./agents/credentials.js";
 import { createPolicyStore, type PolicyStore } from "./policies/store.js";
 
 /**
@@ -31,17 +32,52 @@ export function testPolicyStore(extra: AgentPolicy[] = []): PolicyStore {
   return createPolicyStore([DEMO_AGENT_POLICY, TEST_AGENT_POLICY, ...extra], "built-in");
 }
 
-/** createApp with the test token and the test policy store, so `request(app)` below is authenticated. */
+/**
+ * M3-D: an agent credential for tests. Issued in memory for this test run only:
+ * never written to disk, never a real credential store.
+ */
+export interface TestCredential {
+  agentId: string;
+  credential: string;
+  record: CredentialRecord;
+}
+
+const issuedKeyIds = new Set<string>();
+
+export function issueTestCredential(agentId: string, options: { now?: number; days?: number } = {}): TestCredential {
+  const { credential, record } = issueCredential({ agentId, now: options.now ?? Date.now(), days: options.days, takenKeyIds: issuedKeyIds });
+  issuedKeyIds.add(record.keyId);
+  return { agentId, credential, record };
+}
+
+/** The route-test agent's credential. */
+export const TEST_AGENT_CREDENTIAL = issueTestCredential(TEST_AGENT_ID);
+
+/** An in-memory credential store: the test agent's credential and any extra ones a test needs. */
+export function testCredentialStore(extra: TestCredential[] = []): CredentialStore {
+  return createCredentialStore([TEST_AGENT_CREDENTIAL.record, ...extra.map((c) => c.record)]);
+}
+
+/** createApp with the test token, policies and credentials, so `request(app)` below is the operator. */
 export function createTestApp(deps: AppDeps = {}) {
-  return createApp({ apiToken: TEST_API_TOKEN, policyStore: testPolicyStore(), ...deps });
+  return createApp({ apiToken: TEST_API_TOKEN, policyStore: testPolicyStore(), credentialStore: testCredentialStore(), ...deps });
 }
 
 type TestableApp = Parameters<typeof supertest>[0];
 
-/** supertest with `Authorization: Bearer <test token>` on every request. */
+/** supertest with `Authorization: Bearer <test token>` (the operator) on every request. */
 export function request(app: TestableApp) {
+  return bearer(app, TEST_API_TOKEN);
+}
+
+/** M3-D: supertest as an agent, with `Authorization: Bearer <agent credential>` on every request. */
+export function asAgent(app: TestableApp, as: TestCredential = TEST_AGENT_CREDENTIAL) {
+  return bearer(app, as.credential);
+}
+
+function bearer(app: TestableApp, value: string) {
   const client = supertest(app);
-  const withToken = (test: Test) => test.set("Authorization", `Bearer ${TEST_API_TOKEN}`);
+  const withToken = (test: Test) => test.set("Authorization", `Bearer ${value}`);
   return {
     get: (url: string) => withToken(client.get(url)),
     post: (url: string) => withToken(client.post(url)),

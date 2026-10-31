@@ -91,8 +91,8 @@ copy it to the clipboard without displaying it and paste it into the sign-in scr
 Get-Content -Raw "$env:LOCALAPPDATA\AgentShield\api-token" | Set-Clipboard
 ```
 
-Signing in sets an HttpOnly session cookie (30 idle minutes, 8 hours at most). Scripts call the
-API with `Authorization: Bearer <token>` instead. Open the web app at `localhost`, the same host
+Signing in sets an HttpOnly session cookie (30 idle minutes, 8 hours at most). Operator scripts call the
+API with `Authorization: Bearer <token>` instead. Agents use their own credentials (see Agent identity below). Open the web app at `localhost`, the same host
 name the web app uses for the API, so the browser sends the session cookie. To replace the token,
 stop the API, delete the file, and start the API again.
 Rebuild the engine (`npm run build -w @agentshield/engine`) after changing engine source.
@@ -129,9 +129,11 @@ node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-10-31, M3-C): `npm test` passes 1,523 tests in 37 files (engine 727
-in 9 files, websec 395 in 13, API 378 in 12, web 23 in 3), with none failed or skipped, and
-`npm run build` passes. `npm run typecheck` passed for all four workspaces on 2026-10-31. `npm audit` needs
+Current verified state (2026-10-31, M3-D, each workspace run separately): engine 728 tests in
+9 files, API 468 in 16, web 23 in 3, all passing with none failed or skipped, and
+`npm run typecheck` passes for all four workspaces. The websec suite, the root `npm test` and
+`npm run build` were not re-run for M3-D (no websec code changed), so there is no combined M3-D
+total; at M3-C, `npm test` passed 1,523 tests (websec 395 in 13 files) and the build passed. `npm audit` needs
 network access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 
 ## Demo outline (about four minutes, seeded synthetic scenarios only)
@@ -543,10 +545,10 @@ Advisory layer only. Deterministic policy remains authoritative.
 
 ## Agent policies (M3-C)
 
-Each evaluation is judged under a server-held policy for the agent it names, not under
-permissions the request supplies. A custom `POST /api/evaluate` sends `agentId`. A
-malformed id is a `400`. A missing or unconfigured agent is an audited BLOCK (risk 90): no
-approval is created and nothing executes. The request can only narrow the policy: allowed
+Each evaluation is judged under a server-held policy for its agent, not under
+permissions the request supplies. Since M3-D the agent is the one whose credential
+authenticated the request (below). An agent without a policy is an audited BLOCK (risk 90):
+no approval is created and nothing executes. The request can only narrow the policy: allowed
 actions and destinations are intersected with it, denied actions are added to it, and an
 explicitly empty list grants nothing. Hard deny, the data-leak guard and the scanner still
 override any policy. Seeded scenarios run under the built-in `demo-summarizer` policy with
@@ -556,8 +558,37 @@ removed since the CONFIRM is blocked on recheck (`409`).
 
 Policies are optional configuration (`AGENT_POLICY_FILE`, strict JSON, read at start-up; an
 invalid file stops the API) and can be read at `GET /api/policies`, which is read-only.
-Agent ids are labels, not credentials: anyone with API access can name any configured
-agent. Schema, enforcement and limitations: [`docs/agent-policies.md`](docs/agent-policies.md).
+Schema, enforcement and limitations: [`docs/agent-policies.md`](docs/agent-policies.md).
+
+## Agent identity (M3-D)
+
+Each agent has its own credential, `asag_<keyId>.<secret>`, sent as
+`Authorization: Bearer <credential>`. The API stores only a domain-separated SHA-256 of each
+credential (`%LOCALAPPDATA%\AgentShield\agent-credentials.json`, or `AGENT_CREDENTIAL_FILE`),
+restricted to the current Windows user, and compares digests in constant time. The agent is
+taken from the credential, never from the request: a different `agentId` in the body is a `403`
+recorded as a security event, and nothing is evaluated.
+
+- **Agents can only use custom `POST /api/evaluate`.** Every other route is operator-only,
+  including approve and reject, so an agent can never approve its own action.
+- **The operator** (the API token or a dashboard session) runs the seeded scenarios and
+  approves, but cannot make custom evaluations for an agent.
+- **Invalid credentials** (unknown, wrong, revoked, expired or malformed) all get the same `401`.
+  Repeated failures are rate limited (`429`), but valid credentials and the dashboard keep working.
+
+Manage credentials with `npm run agent-credential -w @agentshield/api -- create|list|revoke|rotate`:
+
+- A new credential is shown once, or written to a current-user-only file with `--out`.
+- Credentials expire after 90 days by default and 365 at most.
+- A revocation reaches a running API within 2 seconds, and a store that becomes invalid rejects
+  every agent until it is fixed.
+- An approval whose requesting credential has since been revoked or has expired cannot execute
+  (`409`).
+- Events and approvals record `actor` (the agent's credential key id, or the operator and how
+  they signed in). Secrets and hashes are never shown.
+
+Bearer credentials can be replayed until revoked; signed requests are deferred to M3-E. Details,
+lifecycle, incident response and limitations: [`docs/agent-identity.md`](docs/agent-identity.md).
 
 ## Website scanning (off by default)
 

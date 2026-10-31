@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Express, Request, RequestHandler, Response } from "express";
-import type { RateLimitFactory } from "./rate-limit.js";
+import { CREDENTIAL_PREFIX, parseCredential, type CredentialStore } from "../agents/credentials.js";
+import type { FailureLimiter, RateLimitFactory } from "./rate-limit.js";
 import type { SecurityConfig } from "./config.js";
 
 /**
@@ -11,8 +12,13 @@ import type { SecurityConfig } from "./config.js";
  *   random session id in an HttpOnly, SameSite=Strict cookie scoped to /api. The
  *   token itself is never stored in the browser.
  * - Cookie-authenticated writes must carry the web app's Origin (CSRF defence).
+ * - M3-D: agents send `Authorization: Bearer asag_<keyId>.<secret>`. A bearer value
+ *   with the agent prefix is only ever checked as an agent credential, never
+ *   against the operator token, and an agent is never an operator. Every failed
+ *   agent credential gets the same 401 as any other failed authentication; the
+ *   reason is logged on the server only, with the public key id at most.
  *
- * The token and session ids are never logged, echoed, or put in a URL.
+ * The token, credentials and session ids are never logged, echoed, or put in a URL.
  */
 
 export const SESSION_COOKIE = "agentshield_session";
@@ -102,29 +108,70 @@ function sessionCookie(value: string, maxAgeSeconds: number): string {
   return `${SESSION_COOKIE}=${value}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSeconds}`;
 }
 
-type Authentication = { kind: "bearer" } | { kind: "session"; id: string; session: Session };
+export type Authentication =
+  | { kind: "bearer" }
+  | { kind: "session"; id: string; session: Session }
+  /** M3-D: an agent, identified by its verified credential. */
+  | { kind: "agent"; agentId: string; keyId: string };
+
+/** True for the operator (the API token, directly or through a dashboard session). */
+export function isOperator(auth: Authentication | null | undefined): auth is Exclude<Authentication, { kind: "agent" }> {
+  return auth?.kind === "bearer" || auth?.kind === "session";
+}
 
 export interface ApiAuth {
   /** Resolves the request's credentials without side effects beyond session activity. */
   authenticate(req: Request): Authentication | null;
-  /** Middleware for every /api route except /api/session. */
+  /**
+   * The operator only (API token or session). An agent credential is never verified here:
+   * it is simply not an operator, so this reveals nothing about it (M3-D audit L2).
+   */
+  authenticateOperator(req: Request): Exclude<Authentication, { kind: "agent" }> | null;
+  /** Middleware for every /api route except /api/session. Stores the result in res.locals.auth. */
   requireAuth: RequestHandler;
 }
 
-export function createApiAuth(apiToken: string, sessions: SessionStore, config: SecurityConfig): ApiAuth {
+export function createApiAuth(
+  apiToken: string,
+  sessions: SessionStore,
+  config: SecurityConfig,
+  agents: { credentials: CredentialStore; failures: FailureLimiter; log?: (line: string) => void },
+): ApiAuth {
   const allowedOrigins = new Set(config.allowedOrigins);
+  const log = agents.log ?? ((line: string) => console.warn(line));
 
-  function authenticate(req: Request): Authentication | null {
+  type Resolution = { auth: Authentication | null; agentFailure?: string };
+
+  /** Resolves the request's credentials. `agentFailure` is the server-log line for a failed agent credential. */
+  function resolve(req: Request, options: { verifyAgents: boolean }): Resolution {
     const header = req.headers.authorization;
     if (header !== undefined) {
       const match = /^Bearer ([^\s]+)$/.exec(header);
+      const presented = match?.[1];
       // A malformed or wrong Authorization header never falls back to the cookie.
-      return match?.[1] && tokensMatch(match[1], apiToken) ? { kind: "bearer" } : null;
+      if (!presented) return { auth: null };
+      if (presented.startsWith(CREDENTIAL_PREFIX)) {
+        // Never compared with the operator token; outside agent routes, not verified at all.
+        if (!options.verifyAgents) return { auth: null };
+        const result = agents.credentials.verify(presented);
+        if (result.ok) return { auth: { kind: "agent", agentId: result.agentId, keyId: result.keyId } };
+        return { auth: null, agentFailure: `agent-auth status=failed reason=${result.reason} keyId=${parseCredential(presented)?.keyId ?? "none"}` };
+      }
+      return { auth: tokensMatch(presented, apiToken) ? { kind: "bearer" } : null };
     }
     const id = readCookie(req.headers.cookie, SESSION_COOKIE);
-    if (!id) return null;
+    if (!id) return { auth: null };
     const session = sessions.touch(id);
-    return session ? { kind: "session", id, session } : null;
+    return { auth: session ? { kind: "session", id, session } : null };
+  }
+
+  function authenticate(req: Request): Authentication | null {
+    return resolve(req, { verifyAgents: true }).auth;
+  }
+
+  function authenticateOperator(req: Request): Exclude<Authentication, { kind: "agent" }> | null {
+    const { auth } = resolve(req, { verifyAgents: false });
+    return isOperator(auth) ? auth : null;
   }
 
   const requireAuth: RequestHandler = (req, res, next) => {
@@ -132,8 +179,22 @@ export function createApiAuth(apiToken: string, sessions: SessionStore, config: 
       next();
       return;
     }
-    const auth = authenticate(req);
+    // M3-D audit L3: credentials are always verified first, so a valid credential is never
+    // refused because of other callers' failures. Only failed Authorization-header attempts
+    // count; past the limit they get 429 (and are no longer logged) until the window ends.
+    const { auth, agentFailure } = resolve(req, { verifyAgents: true });
     if (!auth) {
+      if (req.headers.authorization !== undefined) {
+        const client = req.socket.remoteAddress ?? "unknown";
+        const retryAfter = agents.failures.blockedFor(client);
+        agents.failures.recordFailure(client);
+        if (retryAfter !== null) {
+          res.setHeader("Retry-After", String(retryAfter));
+          res.status(429).json({ error: "Too many failed authentication attempts. Try again later." });
+          return;
+        }
+        if (agentFailure) log(agentFailure);
+      }
       res.setHeader("WWW-Authenticate", 'Bearer realm="agentshield"');
       res.status(401).json({ error: "Authentication required." });
       return;
@@ -145,10 +206,11 @@ export function createApiAuth(apiToken: string, sessions: SessionStore, config: 
         return;
       }
     }
+    res.locals.auth = auth;
     next();
   };
 
-  return { authenticate, requireAuth };
+  return { authenticate, authenticateOperator, requireAuth };
 }
 
 /**
@@ -162,7 +224,9 @@ export function registerSessionRoutes(
 ): void {
   const { apiToken, auth, sessions, limit, config } = deps;
 
-  function sessionBody(authentication: ReturnType<ApiAuth["authenticate"]>) {
+  // The dashboard's sign-in status: operator authentication only. An agent credential is not a
+  // sign-in and is never verified here (M3-D audit L2).
+  function sessionBody(authentication: ReturnType<ApiAuth["authenticateOperator"]>) {
     return {
       authenticated: authentication !== null,
       method: authentication?.kind ?? null,
@@ -171,7 +235,7 @@ export function registerSessionRoutes(
   }
 
   app.get("/api/session", (req, res) => {
-    res.json(sessionBody(auth.authenticate(req)));
+    res.json(sessionBody(auth.authenticateOperator(req)));
   });
 
   app.post("/api/session", limit("session", config.rateLimits.session), (req, res) => {

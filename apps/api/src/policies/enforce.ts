@@ -8,6 +8,7 @@ import {
   type UntrustedContent,
   type UserIntent,
 } from "@agentshield/engine";
+import type { CredentialStatus } from "../agents/credentials.js";
 import type { ApprovalRecord } from "../approvals.js";
 import { AGENT_ID_PATTERN, type PolicyStore } from "./store.js";
 
@@ -52,16 +53,32 @@ export function evaluateForAgent(
   };
 }
 
+/** M3-D: the finding recorded when a request names a different agent than its credential's. */
+export const IDENTITY_MISMATCH_RULE_ID = "identity.agent-mismatch";
+
 /**
- * The approval recheck. The agent's policy must still exist and be the exact
- * policy (same content hash) the CONFIRM was decided under; any change or removal
- * blocks the stale approval. If it is unchanged, the stored request is narrowed
- * against the current policy again and evaluated in full (hard deny, data-leak
- * guard, intent checks).
+ * The approval recheck.
+ *
+ * 1. M3-D identity: an action an agent requested runs only while the credential
+ *    it used is still active (not revoked, expired, removed, or unverifiable
+ *    because the credential store is invalid). Only an operator-run seeded
+ *    scenario has no credential to check; any other record without one is blocked.
+ * 2. M3-C policy: the agent's policy must still exist and be the exact policy
+ *    (same content hash) the CONFIRM was decided under.
+ * 3. The stored request is narrowed against the current policy again and
+ *    evaluated in full (hard deny, data-leak guard, intent checks).
  */
-export function recheckApproval(store: PolicyStore, record: ApprovalRecord): EvaluationResult {
+export function recheckApproval(
+  store: PolicyStore,
+  record: ApprovalRecord,
+  credentialStatus: (keyId: string) => CredentialStatus,
+): EvaluationResult {
   const agentId = record.agentId ?? null;
   const current = agentId === null ? undefined : store.get(agentId);
+  const operatorScenario = record.requestedBy?.kind === "operator" && record.scenarioId !== null;
+  if (!operatorScenario && (!record.credentialKeyId || credentialStatus(record.credentialKeyId) !== "active")) {
+    return { ...policyBlockEvaluation("credential-invalid", agentId, record.action, record.untrustedContent), agentPolicy: current ? { ...current.ref } : null };
+  }
   if (!current || !record.agentPolicy || current.ref.sha256 !== record.agentPolicy.sha256) {
     return { ...policyBlockEvaluation("policy-changed", agentId, record.action, record.untrustedContent), agentPolicy: current ? { ...current.ref } : null };
   }

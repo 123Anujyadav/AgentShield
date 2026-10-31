@@ -1,8 +1,9 @@
 import cors from "cors";
 import express from "express";
-import type { ActivityEvent, PendingApproval, ProposedAction, RequestedIntent, SimulatedExecution, UntrustedContent, UserIntent } from "@agentshield/engine";
-import { getScenario, MAX_SCAN_LENGTH, SCENARIOS } from "@agentshield/engine";
-import { evaluateForAgent, parseAgentId, recheckApproval } from "./policies/enforce.js";
+import type { ActivityEvent, PendingApproval, ProposedAction, RequestActor, RequestedIntent, SimulatedExecution, UntrustedContent, UserIntent } from "@agentshield/engine";
+import { getScenario, MAX_SCAN_LENGTH, POLICY_BLOCK_RISK, SCENARIOS } from "@agentshield/engine";
+import { CREDENTIAL_PREFIX, emptyCredentialStore, type CredentialStore } from "./agents/credentials.js";
+import { evaluateForAgent, IDENTITY_MISMATCH_RULE_ID, parseAgentId, recheckApproval } from "./policies/enforce.js";
 import { builtInPolicyStore, type PolicyStore } from "./policies/store.js";
 import {
   ApprovalCapacityError,
@@ -22,9 +23,9 @@ import { loadModelConfig, type ModelConfig } from "./model/config.js";
 import { selectModelProvider } from "./model/live.js";
 import { failedAnalysis, redactSecretValue } from "@agentshield/engine";
 import { randomBytes } from "node:crypto";
-import { createApiAuth, createSessionStore, MIN_TOKEN_LENGTH, registerSessionRoutes } from "./security/auth.js";
+import { createApiAuth, createSessionStore, isOperator, MIN_TOKEN_LENGTH, registerSessionRoutes, type Authentication } from "./security/auth.js";
 import { loadSecurityConfig, type SecurityConfig } from "./security/config.js";
-import { createRateLimiter } from "./security/rate-limit.js";
+import { createFailureLimiter, createRateLimiter } from "./security/rate-limit.js";
 import { hostCheck, originCheck } from "./security/request-guards.js";
 import { loadScanConfig } from "./scans/config.js";
 import { registerScanRoutes } from "./scans/routes.js";
@@ -104,6 +105,8 @@ export interface AppDeps {
   approvalStore?: ApprovalStore;
   /** M3-C: server-side agent policies. Defaults to the built-in demo agent only. */
   policyStore?: PolicyStore;
+  /** M3-D: agent credentials (hashes only). Defaults to none, so no agent can authenticate. */
+  credentialStore?: CredentialStore;
   modelService?: ModelAnalysisService;
   modelConfig?: ModelConfig;
   /** Injectable so tests can fault-inject event writes. Defaults to a fresh in-memory list. */
@@ -136,6 +139,9 @@ export function createApp(deps: AppDeps = {}) {
     throw new Error(`The API token must be at least ${MIN_TOKEN_LENGTH} characters.`);
   }
   const apiToken = deps.apiToken ?? randomBytes(32).toString("base64url");
+  // M3-D: an operator token must never look like an agent credential, so the two can never be confused.
+  if (apiToken.startsWith(CREDENTIAL_PREFIX)) throw new Error(`The API token must not start with "${CREDENTIAL_PREFIX}".`);
+  const credentialStore = deps.credentialStore ?? emptyCredentialStore();
   const now = deps.now ?? Date.now;
   const sessions = createSessionStore({
     absoluteMs: security.sessionAbsoluteMs,
@@ -143,7 +149,8 @@ export function createApp(deps: AppDeps = {}) {
     maxSessions: security.maxSessions,
     now,
   });
-  const auth = createApiAuth(apiToken, sessions, security);
+  const failures = createFailureLimiter({ windowMs: security.rateLimitWindowMs, now, limit: security.rateLimits.authFailure });
+  const auth = createApiAuth(apiToken, sessions, security, { credentials: credentialStore, failures });
   const limit = createRateLimiter({ windowMs: security.rateLimitWindowMs, now });
   const scanService = deps.scanService ?? new ScanService({ config: loadScanConfig() });
   let nextId = 1;
@@ -161,6 +168,7 @@ export function createApp(deps: AppDeps = {}) {
       tool: redactSecretValue(partial.tool),
       destination: redactSecretValue(partial.destination),
       ...(typeof partial.agentId === "string" ? { agentId: redactSecretValue(partial.agentId) } : {}),
+      ...(typeof partial.claimedAgentId === "string" ? { claimedAgentId: redactSecretValue(partial.claimedAgentId) } : {}),
     };
     const event: ActivityEvent = {
       id: `evt-${nextId++}`,
@@ -189,6 +197,19 @@ export function createApp(deps: AppDeps = {}) {
   registerSessionRoutes(app, { apiToken, auth, sessions, limit, config: security });
   // Every /api route registered below, including future ones, requires authentication.
   app.use("/api", auth.requireAuth);
+  // M3-D: operator and agent separation. An agent credential is accepted on exactly one
+  // route, POST /api/evaluate (custom evaluations); every other route, including future
+  // ones and approve/reject, is operator-only. Agents can never approve their own actions.
+  // /api/session requests skip authentication, so they may arrive here with no caller; they are
+  // not agents and fall through to the normal 404 (M3-D audit L1).
+  app.use("/api", (req, res, next) => {
+    const caller = res.locals.auth as Authentication | undefined;
+    if (caller?.kind !== "agent" || (req.method === "POST" && req.path === "/evaluate")) {
+      next();
+      return;
+    }
+    res.status(403).json({ error: "This route requires operator authentication.", reason: "operator-required" });
+  });
   registerScanRoutes(app, { service: scanService, limit });
 
   // M3-C: read-only view of the server-side agent policies. There is no write endpoint;
@@ -243,13 +264,22 @@ export function createApp(deps: AppDeps = {}) {
       return;
     }
 
+    const caller = res.locals.auth as Authentication;
     let scenarioId: string | null = null;
     let agentId: string | null = null;
     let requested: RequestedIntent | null = null;
     let action: ProposedAction | null = null;
     let untrustedContent: UntrustedContent | undefined;
+    let actor: RequestActor;
+    let credentialKeyId: string | undefined;
 
     if (typeof body.scenarioId === "string") {
+      // M3-D: seeded scenarios are operator demos, run under the built-in demo agent.
+      if (!isOperator(caller)) {
+        res.status(403).json({ error: "Seeded scenarios can only be run by the operator.", reason: "operator-required" });
+        return;
+      }
+      actor = { kind: "operator", method: caller.kind };
       const scenario = getScenario(body.scenarioId);
       if (!scenario) {
         res.status(404).json({ error: `Unknown scenario: ${redactSecretValue(body.scenarioId)}` });
@@ -261,7 +291,13 @@ export function createApp(deps: AppDeps = {}) {
       action = scenario.action;
       untrustedContent = scenario.untrustedContent;
     } else {
-      // M3-C: an absent agentId is an unknown agent (denied below); a malformed one is a bad request.
+      // M3-D (U2): custom evaluations are for agents only. There is no operator or legacy path.
+      if (caller.kind !== "agent") {
+        res.status(403).json({ error: "Custom evaluations require an agent credential.", reason: "agent-credential-required" });
+        return;
+      }
+      // The agent is the credential's. A body agentId may repeat it; a malformed one is a bad
+      // request; a different one is refused, recorded, and never evaluated (U3).
       const parsedAgent = parseAgentId(body.agentId);
       if (!parsedAgent.ok) {
         res.status(400).json({
@@ -270,13 +306,20 @@ export function createApp(deps: AppDeps = {}) {
         });
         return;
       }
-      agentId = parsedAgent.agentId;
+      if (parsedAgent.agentId !== null && parsedAgent.agentId !== caller.agentId) {
+        recordIdentityMismatch(caller, parsedAgent.agentId, body);
+        res.status(403).json({ error: "agentId does not match the authenticated agent. Nothing was evaluated.", reason: "agent-identity-mismatch" });
+        return;
+      }
+      agentId = caller.agentId;
+      actor = { kind: "agent", credentialId: caller.keyId };
+      credentialKeyId = caller.keyId;
       requested = parseIntent(body.intent);
       action = parseAction(body.action);
       if (!requested || !action) {
         res.status(400).json({
           error:
-            "Provide scenarioId, or agentId, intent {task, and optionally allowedActions, deniedActions, allowedDestinations} and action {type, tool, destination, summary}.",
+            "Provide intent {task, and optionally allowedActions, deniedActions, allowedDestinations} and action {type, tool, destination, summary}.",
         });
         return;
       }
@@ -294,7 +337,7 @@ export function createApp(deps: AppDeps = {}) {
     // happens through the approval endpoints against a server-created record.
     const { evaluation, effectiveIntent } = evaluateForAgent(policyStore, agentId, requested, action, untrustedContent);
     const intent: UserIntent = effectiveIntent ?? { task: requested.task, allowedActions: [], deniedActions: [], allowedDestinations: [] };
-    const agentFields = { agentId, agentPolicy: evaluation.agentPolicy ?? null };
+    const agentFields = { agentId, agentPolicy: evaluation.agentPolicy ?? null, actor };
 
     let execution: SimulatedExecution = {
       executed: false,
@@ -322,6 +365,8 @@ export function createApp(deps: AppDeps = {}) {
           agentId,
           requestedIntent: requested,
           agentPolicy: evaluation.agentPolicy ?? null,
+          requestedBy: actor,
+          ...(credentialKeyId !== undefined ? { credentialKeyId } : {}),
         });
       } catch (error) {
         if (!(error instanceof ApprovalCapacityError)) throw error;
@@ -377,6 +422,46 @@ export function createApp(deps: AppDeps = {}) {
       next(error);
     }
   });
+
+  /**
+   * M3-D (U3): a request named a different agent than its credential's. Recorded as a
+   * security event with the authenticated agent and the claimed id (redacted when
+   * secret-shaped); nothing was evaluated or executed.
+   */
+  function recordIdentityMismatch(caller: Extract<Authentication, { kind: "agent" }>, claimed: string, body: Record<string, unknown>): ActivityEvent {
+    const claimedAction = parseAction(body.action);
+    return recordEvent({
+      scenarioId: null,
+      intentTask: parseIntent(body.intent)?.task ?? "",
+      actionType: claimedAction?.type ?? "",
+      tool: claimedAction?.tool ?? "",
+      destination: claimedAction?.destination ?? "",
+      decision: "BLOCK",
+      riskScore: POLICY_BLOCK_RISK,
+      findings: [
+        {
+          ruleId: IDENTITY_MISMATCH_RULE_ID,
+          category: "policy",
+          severity: "high",
+          title: "Agent identity mismatch",
+          explanation: "The request named a different agent than the one its credential belongs to. It was refused and not evaluated.",
+          evidence: `authenticated=${redactSecretValue(caller.agentId)}; claimed=${redactSecretValue(claimed)}`,
+        },
+      ],
+      explanation: "Refused: the request's agentId does not match the authenticated agent. Nothing was evaluated or executed.",
+      lifecycle: "IDENTITY_MISMATCH",
+      agentId: caller.agentId,
+      agentPolicy: null,
+      claimedAgentId: claimed,
+      actor: { kind: "agent", credentialId: caller.keyId },
+    });
+  }
+
+  /** The operator acting on an approval (approve and reject are operator-only routes). */
+  function operatorActor(res: express.Response): RequestActor {
+    const caller = res.locals.auth as Authentication;
+    return { kind: "operator", method: caller.kind === "session" ? "session" : "bearer" };
+  }
 
   /**
    * Writes the single EXPIRED lifecycle event for an expiry transition.
@@ -446,7 +531,7 @@ export function createApp(deps: AppDeps = {}) {
     if (!id || !hasValidBody(req, res)) return;
     // Any client-supplied action/findings/score in the body is ignored on purpose.
     const storedType = approvalStore.records.get(id)?.action.type ?? "";
-    const outcome = processApproval(approvalStore, id, (record) => recheckApproval(policyStore, record),
+    const outcome = processApproval(approvalStore, id, (record) => recheckApproval(policyStore, record, (keyId) => credentialStore.status(keyId)),
       simulator,
     );
     if (outcome.kind === "not-found") {
@@ -477,6 +562,7 @@ export function createApp(deps: AppDeps = {}) {
         lifecycle: "BLOCKED_ON_RECHECK",
         agentId: outcome.approval.agentId ?? null,
         agentPolicy: outcome.recheck.agentPolicy ?? null,
+        actor: operatorActor(res),
       });
       res.status(409).json({ error: "Policy recheck returned BLOCK. Approval rejected; nothing executed.", approval: outcome.approval, executed: false });
       return;
@@ -498,6 +584,7 @@ export function createApp(deps: AppDeps = {}) {
       lifecycle: outcome.execution.executed ? "SIMULATED_EXECUTED" : "APPROVED_NOT_EXECUTED",
       agentId: outcome.approval.agentId ?? null,
       agentPolicy: outcome.recheck.agentPolicy ?? null,
+      actor: operatorActor(res),
     });
     res.json({ approval: outcome.approval, execution, executed: execution.executed });
   });
@@ -533,6 +620,7 @@ export function createApp(deps: AppDeps = {}) {
       lifecycle: "REJECTED",
       agentId: outcome.approval.agentId ?? null,
       agentPolicy: outcome.approval.agentPolicy ?? null,
+      actor: operatorActor(res),
     });
     res.json({ approval: outcome.approval, executed: false });
   });

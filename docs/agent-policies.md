@@ -7,6 +7,8 @@ Before M3-C, the permissions used to judge an action came from the request itsel
 (`intent.allowedActions`, `intent.deniedActions`, `intent.allowedDestinations`), so a
 caller could grant itself anything. Now every evaluation names an **agent**, and the
 server holds that agent's policy. The request can narrow the policy but never widen it.
+Since M3-D the agent is the one whose credential authenticated the request, not an id the
+request claims; see [agent-identity.md](agent-identity.md).
 
 ## Policy file
 
@@ -38,7 +40,8 @@ which is `apps/api` under `npm run dev:api`. The file is read once at start-up. 
 no write endpoint.
 
 Validation is strict, and **any** problem stops the API at start-up with
-`agent-policy status=invalid-config reason=...` (the reason never quotes file content):
+`agent-policy status=invalid-config reason=...`. The reason names the position and the
+expected field or format, never a value or an unknown field's name from the file:
 
 - The file can be at most 256 KB, must be valid JSON (a UTF-8 BOM is tolerated), and must
   contain only `schemaVersion` (exactly `1`) and `policies` (an array of at most 200).
@@ -58,19 +61,23 @@ the description or only the version, changes the hash.
 
 `POST /api/evaluate`:
 
-1. **Seeded scenario** (`scenarioId`): uses the scenario's own agent
-   (`demo-summarizer`). An `agentId` in the body is ignored.
-2. **Custom request**: `agentId` is read from the body.
-   - Malformed (wrong type, wrong characters, too long, empty, `null`): `400` with
-     `reason: "invalid-agent-id"`. Nothing is recorded.
-   - Missing or not configured: an audited **BLOCK** (`200`, risk 90, rule
+1. **Seeded scenario** (`scenarioId`, operator only since M3-D): uses the scenario's own
+   agent (`demo-summarizer`). An `agentId` in the body is ignored.
+2. **Custom request** (an agent credential is required since M3-D): the agent is the
+   credential's.
+   - A body `agentId` is optional. If present it must equal the authenticated agent: a
+     malformed one (wrong type, wrong characters, too long, empty, `null`) is a `400`
+     with `reason: "invalid-agent-id"`, and a different well-formed one is a `403`
+     `agent-identity-mismatch` recorded as a security event; neither is evaluated.
+   - An authenticated agent with no policy (a credential issued for an agent the policy
+     file does not list): an audited **BLOCK** (`200`, risk 90, rule
      `policy.unknown-agent`). No approval is created, nothing executes, and the event
-     records the agent id (or `null`) with `agentPolicy: null`. Scanner findings are
-     still reported first. The server keeps the original agent id for policy lookup and
-     enforcement, but public events (the evaluate response's `event` and
-     `GET /api/events`) show a token-shaped id, such as one that looks like a GitHub,
-     GitLab, Slack or `sk-` key, as `[REDACTED]`. Ordinary ids such as `report-writer`
-     are shown unchanged.
+     records the agent id with `agentPolicy: null`. Scanner findings are still reported
+     first. The server keeps the original agent id for policy lookup and enforcement, but
+     public events (the evaluate response's `event` and `GET /api/events`) show a
+     token-shaped id, such as one that looks like a GitHub, GitLab, Slack or `sk-` key, as
+     `[REDACTED]`, both as the agent id and as a mismatching claimed id. Ordinary ids such
+     as `report-writer` are shown unchanged.
 3. The effective permissions are the policy narrowed by the request:
 
    | Field | Request omits it | Request supplies it |
@@ -90,8 +97,10 @@ the description or only the version, changes the hash.
 ### Approvals and policy changes
 
 A `CONFIRM` stores the agent, the policy reference and the original request (the request
-stays server-side and is not shown in approval views). On approve, the server looks up
-the agent's **current** policy:
+stays server-side and is not shown in approval views). Only the operator can approve
+(M3-D). On approve, the server first checks that the agent credential that made the
+request is still valid (see [agent-identity.md](agent-identity.md)), then looks up the
+agent's **current** policy:
 
 - If the policy was removed, its hash differs from the one recorded at CONFIRM time (any
   edit or version bump), or the record has no agent or policy reference, the recheck is a
@@ -106,7 +115,7 @@ outlive a restart.
 
 ## Reading policies
 
-`GET /api/policies` (authenticated like every other `/api` route) returns
+`GET /api/policies` (operator only, like every `/api` route except evaluate) returns
 `{ source: "built-in" | "file", policies: [{ agentId, version, sha256, description,
 allowedActions, deniedActions, allowedDestinations }] }` in file order. A description or
 list entry that looks like a secret is shown as `[REDACTED]`. This is display-only, and
@@ -115,9 +124,9 @@ routed (`404`).
 
 ## Limitations
 
-- Agent ids are **labels, not credentials**. Any holder of the API token or a session can
-  claim any configured agent id. Policies stop a caller from widening an agent's
-  permissions, but they do not authenticate which agent is calling.
+- Since M3-D an agent id is bound to a credential, so a caller can no longer act as an
+  agent whose credential it does not hold. The operator, who issues credentials, is
+  fully trusted. See [agent-identity.md](agent-identity.md) for the remaining limits.
 - Policies are global configuration with no per-user or per-tenant scoping, no history
   and no hot reload. Changing a policy means editing the file and restarting.
 - Only exact action and destination strings are supported. There are no patterns,
