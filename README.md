@@ -137,10 +137,10 @@ node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-10-31, M3-E E5): `npm test` passes 1,945 tests in 54 files
-(agent-protocol 98 in 1 file, agent-sdk 46 in 3, engine 728 in 9, websec 395 in 13, API 655 in 25,
-web 23 in 3), with none failed or skipped, and `npm run build` and `npm run typecheck` pass for all
-six workspaces. `npm audit` needs
+Current verified state (2026-11-01, M3-E E6): `npm test` passes 2,033 tests in 59 files
+(agent-protocol 98 in 1 file, agent-sdk 46 in 3, reference-agent 71 in 4, engine 728 in 9, websec
+395 in 13, API 672 in 26, web 23 in 3), with none failed or skipped, and `npm run build` and
+`npm run typecheck` pass for all seven workspaces. `npm audit` needs
 network access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 
 ## Demo outline (about four minutes, seeded synthetic scenarios only)
@@ -621,6 +621,29 @@ signed requests are each accepted once. Details, lifecycle, incident response an
 - **Dependencies:** none outside Node 22 and the workspace.
 
 Usage, errors and limits: [`packages/agent-sdk/README.md`](packages/agent-sdk/README.md).
+
+### Reference agent (M3-E E6)
+
+`apps/reference-agent` (`@agentshield/reference-agent`) is a complete, harmless agent built
+only on the SDK. It summarizes a document into an in-memory simulated workspace.
+
+- **When it saves:** only after AgentShield reports the action as executed (an ALLOW, or an
+  approval that an operator approved and that reached EXECUTED).
+- **Identity:** it comes only from the credential, loaded with the SDK's file or
+  environment loader. The task input and configuration cannot name an agent.
+- **Approvals:** it waits for its own approval and never approves or rejects. A BLOCK,
+  rejection, expiry or recheck failure saves nothing.
+- **Failures:** an evaluation whose outcome is unknown (timeout, network error, server
+  error) is reported as unconfirmed and never sent again.
+- **Tests:** end-to-end tests run it against the real API with deterministic keys and a
+  temporary credential store.
+
+```powershell
+npm run reference-agent -- --document C:\docs\notes.txt
+```
+
+Configuration, workflow, errors and security boundaries:
+[`apps/reference-agent/README.md`](apps/reference-agent/README.md).
 
 ## Website scanning (off by default)
 
