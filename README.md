@@ -124,8 +124,8 @@ session; a new terminal uses the default `http://localhost:4000` again, so open 
 
 ## Verify
 
-On a fresh clone, build first (`npm run build`, or the three package builds above): typechecking
-and testing the API need their `dist` output.
+On a fresh clone, build first (`npm run build`): typechecking and testing need the built `dist`
+of agent-protocol, agent-sdk (used by the API's SDK integration tests), the engine and websec.
 
 ```powershell
 npm run typecheck
@@ -137,9 +137,10 @@ node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-10-31, M3-E E4): `npm test` passes 1,894 tests in 50 files
-(agent-protocol 98 in 1 file, engine 728 in 9, websec 395 in 13, API 650 in 24, web 23 in 3), with
-none failed or skipped, and `npm run build` and `npm run typecheck` pass for all five workspaces. `npm audit` needs
+Current verified state (2026-10-31, M3-E E5): `npm test` passes 1,945 tests in 54 files
+(agent-protocol 98 in 1 file, agent-sdk 46 in 3, engine 728 in 9, websec 395 in 13, API 655 in 25,
+web 23 in 3), with none failed or skipped, and `npm run build` and `npm run typecheck` pass for all
+six workspaces. `npm audit` needs
 network access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 
 ## Demo outline (about four minutes, seeded synthetic scenarios only)
@@ -603,8 +604,23 @@ Manage credentials with `npm run agent-credential -w @agentshield/api -- create|
 - Events and approvals record `actor` (the agent's credential key id, or the operator and how
   they signed in). Secrets and hashes are never shown.
 
-Bearer credentials can be replayed until revoked; signed requests are deferred to M3-E. Details,
-lifecycle, incident response and limitations: [`docs/agent-identity.md`](docs/agent-identity.md).
+Legacy bearer credentials (only while `AGENT_BEARER_ALLOWED=true`) can be replayed until revoked;
+signed requests are each accepted once. Details, lifecycle, incident response and limitations:
+[`docs/agent-identity.md`](docs/agent-identity.md).
+
+### Agent SDK (M3-E E5)
+
+`packages/agent-sdk` (`@agentshield/agent-sdk`) is the TypeScript client for agents.
+
+- **What it does:** it loads the agent's `asag2_` credential from an explicit file or
+  environment variable, and signs every request with the shared protocol package.
+- **What it offers:** `evaluate`, `getApproval`, `listApprovals`, `iterateApprovals` and
+  `waitForApproval`, and nothing that approves, rejects or executes.
+- **Retries:** `evaluate` is never retried. GET requests are retried a few times, each
+  with a fresh signature.
+- **Dependencies:** none outside Node 22 and the workspace.
+
+Usage, errors and limits: [`packages/agent-sdk/README.md`](packages/agent-sdk/README.md).
 
 ## Website scanning (off by default)
 

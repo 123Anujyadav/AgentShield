@@ -7,7 +7,8 @@ browser, or a real agent.
 **Since M3-E E3, agents authenticate by signing each request** with their Ed25519 key
 (see Signed requests below). Legacy bearer credentials are disabled by default
 (`AGENT_BEARER_ALLOWED`, below). Agents can read the status of their own approvals (E4,
-below). The agent SDK (E5) is not implemented yet.
+below). Agents can use the TypeScript SDK (`packages/agent-sdk`, E5), which signs every
+request with the shared protocol package.
 
 M3-C gave each agent a server-side policy, but the agent was whatever id the request
 named. With M3-D each agent has its own credential. The server works out the agent from
