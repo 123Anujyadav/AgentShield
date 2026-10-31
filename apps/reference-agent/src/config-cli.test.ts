@@ -92,6 +92,16 @@ describe("M3-E E6: command line", () => {
     expect(r.server.requests).toHaveLength(1);
   });
 
+  it("a document over 8,000 characters: exit 1, a clear message, no request", async () => {
+    const env = { AGENTSHIELD_AGENT_CREDENTIAL: key.credential };
+    const r = await cli(["--document", file("long.txt", "x".repeat(8001))], env, { evaluate: () => evaluation("ALLOW") });
+    expect([r.code, r.server.requests.length]).toEqual([1, 0]);
+    expect(r.err).toEqual(["The document is 8001 characters long; AgentShield accepts at most 8000. It was not sent, and it was not shortened."]);
+    const big = await cli(["--document", file("big.txt", "x".repeat(24 * 1024 + 1))], env, { evaluate: () => evaluation("ALLOW") });
+    expect([big.code, big.server.requests.length]).toEqual([1, 0]);
+    expect(big.err).toEqual(["The document file is larger than 24576 bytes, so it is over AgentShield's 8000-character limit. It was not sent."]);
+  });
+
   it("usage, configuration and input errors: exit 1, nothing sent", async () => {
     const env = { AGENTSHIELD_AGENT_CREDENTIAL: key.credential };
     const doc = file("doc.txt", "Hello.");
@@ -105,6 +115,7 @@ describe("M3-E E6: command line", () => {
       [["--document", doc], { ...env, AGENTSHIELD_AGENT_ID: "admin" }],
       [["--document", join(dir, "missing.txt")], env],
       [["--document", file("big.txt", "x".repeat(24 * 1024 + 1))], env],
+      [["--document", file("long.txt", "x".repeat(8001))], env],
       [["--document", file("empty.txt", " ")], env],
     ] as Array<[string[], NodeJS.ProcessEnv]>) {
       const r = await cli(argv, e, { evaluate: () => evaluation("ALLOW") });

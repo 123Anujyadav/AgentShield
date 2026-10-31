@@ -146,9 +146,9 @@ node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-11-01, M3-E E6): `npm test` passes 2,033 tests in 59 files
-(agent-protocol 98 in 1 file, agent-sdk 46 in 3, reference-agent 71 in 4, engine 728 in 9, websec
-395 in 13, API 672 in 26, web 23 in 3), with none failed or skipped, and `npm run build` and
+Current verified state (2026-11-01, M3-E E8): `npm test` passes 2,061 tests in 60 files
+(agent-protocol 98 in 1 file, agent-sdk 48 in 3, reference-agent 84 in 4, engine 728 in 9, websec
+395 in 13, API 685 in 27, web 23 in 3), with none failed or skipped, and `npm run build` and
 `npm run typecheck` pass for all seven workspaces. `npm audit` needs
 network access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 

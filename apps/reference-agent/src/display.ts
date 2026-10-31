@@ -28,6 +28,7 @@ const REASONS: Record<FailureReason, string> = {
   "server-error": "AgentShield reported an internal error.",
   "response-format": "AgentShield's answer was not in the expected format.",
   cancelled: "Waiting was cancelled.",
+  "approval-queue-full": "AgentShield's approval queue is full: it reported that the action needs an operator's confirmation, but no approval was created and nothing was executed.",
 };
 
 function decisionLines(evaluation: EvaluationSummary): string[] {
@@ -67,6 +68,13 @@ export function describeOutcome(outcome: TaskOutcome): string[] {
     case "approval-missing":
       return [...decisionLines(outcome.evaluation), `AgentShield no longer knows ${outcome.approvalId} (it may have restarted). Nothing was saved. Run the task again to ask again.`];
     case "unconfirmed":
+      if (outcome.reason === "approval-queue-full") {
+        return [
+          REASONS[outcome.reason],
+          "The evaluation was not sent again and nothing was saved.",
+          "Ask the operator to approve, reject or let pending approvals expire before running the task again.",
+        ];
+      }
       return [
         `${REASONS[outcome.reason]}`,
         "The evaluation may or may not have been processed, so it was not sent again and nothing was saved.",

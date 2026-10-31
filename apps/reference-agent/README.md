@@ -86,9 +86,16 @@ AGENTSHIELD_AGENT_CREDENTIAL_FILE=C:\secure\summary-agent.key
 npm run reference-agent -- --document C:\docs\notes.txt [--title "Notes"] [--wait-minutes 16]
 ```
 
-- `--document`: a UTF-8 text file of at most 24 KB. AgentShield itself accepts at most
-  8,000 characters of untrusted content: a longer document is refused with `400`, and
-  reported as `refused` (`bad-request`).
+- `--document`: a UTF-8 text file of at most **8,000 characters**, AgentShield's limit for
+  untrusted content.
+  - Characters are counted as the API counts them: JavaScript string length, in UTF-16
+    code units. Most emoji therefore count as two.
+  - A longer document is refused locally, before anything is sent, with exit code 1 and
+    `The document is <n> characters long; AgentShield accepts at most 8000. It was not
+    sent, and it was not shortened.`
+  - A file over 24 KB is refused without being read.
+  - The document is never truncated. AgentShield's own limit stays authoritative: the
+    API refuses longer content with `400` whatever a client does.
 - **Use absolute paths** for `--document` and `AGENTSHIELD_AGENT_CREDENTIAL_FILE`. npm runs
   the agent from `apps/reference-agent`, so relative paths resolve from there.
 - `--title`: a local label for the saved summary. It defaults to the file name and is never
@@ -120,8 +127,11 @@ const outcome = await agent.run({ title: "Notes", text: documentText });
 
 ## Workflow
 
-1. **Validate the task.** It must be exactly `{ title, text }`. A task with any other field
-   (`agentId`, `action`, `destination`, `credential`, ...) is refused, not ignored.
+1. **Validate the task.** It must be exactly `{ title, text }`.
+   - A task with any other field (`agentId`, `action`, `destination`, `credential`, ...)
+     is refused, not ignored.
+   - A text over 8,000 characters is refused with `DocumentTooLongError` (a
+     `TaskInputError`). No request is sent.
 2. **Summarize locally.** The summary is deterministic: the first three sentences, at most
    500 characters. Hidden characters are removed. Nothing in the document is followed.
 3. **Evaluate once.** The agent sends one signed `POST /api/evaluate` through the SDK.
@@ -156,8 +166,10 @@ automatically, because a repeat could run the action twice.
 |---|---|---|
 | 401 (unknown, expired or revoked credential) | `refused` (`authentication`) | Not processed. Ask the operator to check or rotate the credential. |
 | 400 / 403 / 413 / 415, or too large to send | `refused` | Not processed. |
+| Document over 8,000 characters | `DocumentTooLongError` is thrown (exit code 1 on the command line) | Nothing was sent. |
 | 429 | `refused` (`rate-limited`, with `retryAfterSeconds`) | Not processed. Re-running is your decision. |
-| Timeout, network error, 5xx, malformed answer | `unconfirmed` | **May or may not have been processed** (it may even have executed). It was not sent again and nothing was saved. Check the agent's approvals (`listApprovals`) before running the task again. |
+| Timeout, network error, 5xx (including any 503), malformed answer | `unconfirmed` | **May or may not have been processed** (it may even have executed). It was not sent again and nothing was saved. Check the agent's approvals (`listApprovals`) before running the task again. |
+| 503 `approval-queue-full` | `unconfirmed` (`approval-queue-full`) | AgentShield reported that the action needs confirmation but its approval queue is full: no approval was created and nothing was executed. Like every 503, it is not sent again and nothing is saved. Ask the operator to clear pending approvals first. |
 
 **Approval failures.**
 
@@ -207,6 +219,19 @@ npm run test -w @agentshield/api -- reference-agent  # end-to-end against the re
 
 **Unit tests.** They drive the real SDK client against a fake `fetch`. They use a
 deterministic test credential derived from a label at run time; no key material is stored.
+
+**Workflow tests.** `apps/api/src/agents/reference-agent.workflow.test.ts` (M3-E E8)
+follows [`docs/quick-start.md`](../../docs/quick-start.md) in-process.
+- **Policy:** the policy file printed in the quick start, loaded through
+  `AGENT_POLICY_FILE`.
+- **Credentials:** deterministic test keys in a temporary store.
+- **Agent:** this command line, configured by environment, against the real API app on a
+  loopback port.
+
+It covers ALLOW, BLOCK, approval, rejection, expiry, the API being unavailable, an
+evaluate timeout after processing, revocation while polling, the 8,000-character
+boundary, a full approval queue and replay-cache capacity. It does not use the dashboard;
+the browser approval flow has not been tested.
 
 **End-to-end tests.** `apps/api/src/agents/reference-agent.integration.test.ts` starts the
 real API app on a loopback ephemeral port, with:

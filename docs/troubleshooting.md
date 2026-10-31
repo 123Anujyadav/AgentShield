@@ -151,9 +151,11 @@ local process can use up the shared limits.
 | `Signed requests are temporarily unavailable. Try again later.` (with `Retry-After`) | No. The replay cache holds 100,000 live nonces. |
 | `The approval queue is full. ...` (`approval-queue-full`) | **Partly.** The evaluation ran and was recorded as `CONFIRM_NOT_QUEUED`, but no approval was created and nothing executed. The operator must approve, reject or let pending approvals expire. |
 
-**Why it counts as unconfirmed.** Both arrive as `ServiceUnavailableError`.
-`approval-queue-full` is in `details.reason`, but a client that treats every 503 from
-`evaluate` as unconfirmed is never wrong. GETs are retried after a short `Retry-After`.
+**Why it counts as unconfirmed.** Both arrive as `ServiceUnavailableError`, and neither is
+retried for `evaluate`, even with a short `Retry-After`. `approval-queue-full` is in
+`details.reason`. A client can use it to explain the situation, as the reference agent
+does, but a client that treats every 503 from `evaluate` as unconfirmed is never wrong.
+GETs are retried after a short `Retry-After`.
 
 ### Other statuses
 
@@ -287,7 +289,9 @@ only after a restart.
 **Usage problems.**
 - Use absolute paths for `--document` and `AGENTSHIELD_AGENT_CREDENTIAL_FILE`: npm runs the
   agent from `apps/reference-agent`.
-- A document over 8,000 characters is refused by the API with `400`, which the agent
-  reports as refused (`bad-request`).
+- A document over 8,000 characters (counted in UTF-16 code units, as the API counts) is
+  refused locally with exit code 1, before anything is sent, and is never truncated.
+- A full approval queue (`503 approval-queue-full`) is reported as `unconfirmed`
+  (`approval-queue-full`) with exit code 3, and is not sent again.
 
 The full status list is in [`apps/reference-agent/README.md`](../apps/reference-agent/README.md#error-handling).

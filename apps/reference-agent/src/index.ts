@@ -18,5 +18,5 @@ export { exitCode, runReferenceAgent, type CliIo } from "./cli.js";
 export { AgentConfigError, CREDENTIAL_FILE_VARIABLE, CREDENTIAL_VARIABLE, DEFAULT_BASE_URL, URL_VARIABLE, loadAgentConfig, type AgentConfig } from "./config.js";
 export { describeOutcome, inert } from "./display.js";
 export { MAX_SUMMARY_LENGTH, summarize } from "./summarize.js";
-export { MAX_DOCUMENT_BYTES, TaskInputError, parseSummaryTask, type SummaryTask } from "./task.js";
+export { DocumentTooLongError, MAX_DOCUMENT_BYTES, MAX_DOCUMENT_CHARACTERS, TaskInputError, parseSummaryTask, type SummaryTask } from "./task.js";
 export { SimulatedWorkspace, type SavedSummary } from "./workspace.js";

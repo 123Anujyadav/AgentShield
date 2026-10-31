@@ -56,7 +56,9 @@ export type FailureReason =
   | "network"
   | "server-error"
   | "response-format"
-  | "cancelled";
+  | "cancelled"
+  /** 503 approval-queue-full: CONFIRM was needed, but no approval was created and nothing executed. */
+  | "approval-queue-full";
 
 /** What AgentShield decided. Finding evidence is left out: it can quote the document. */
 export interface EvaluationSummary {
@@ -224,7 +226,12 @@ function summarizeEvaluation(result: EvaluateResult): EvaluationSummary {
   };
 }
 
-/** Errors that prove the evaluation was not processed; anything else leaves it unknown. */
+/**
+ * Errors that prove the evaluation was not processed; anything else leaves it unknown and
+ * is never sent again. A 503 is always unconfirmed, whatever its reason: the replay cache
+ * refuses before processing, while a full approval queue answers after the evaluation was
+ * recorded (nothing executed). Neither is a success, and neither is retried.
+ */
 function evaluateFailure(error: unknown): TaskOutcome {
   if (error instanceof AuthenticationError || error instanceof ForbiddenError || error instanceof BadRequestError || error instanceof InvalidArgumentError) {
     return { status: "refused", reason: failureReason(error), retryAfterSeconds: null };
@@ -239,7 +246,7 @@ function failureReason(error: AgentShieldError): FailureReason {
   if (error instanceof ForbiddenError) return "forbidden";
   if (error instanceof BadRequestError || error instanceof InvalidArgumentError) return "bad-request";
   if (error instanceof RateLimitedError) return "rate-limited";
-  if (error instanceof ServiceUnavailableError) return "unavailable";
+  if (error instanceof ServiceUnavailableError) return error.details.reason === "approval-queue-full" ? "approval-queue-full" : "unavailable";
   if (error instanceof TimeoutError) return "timeout";
   if (error instanceof NetworkError) return "network";
   if (error instanceof ResponseFormatError) return "response-format";

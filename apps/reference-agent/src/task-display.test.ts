@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { EvaluationSummary, TaskOutcome } from "./agent.js";
 import { describeOutcome, inert } from "./display.js";
 import { MAX_SUMMARY_LENGTH, summarize } from "./summarize.js";
-import { MAX_DOCUMENT_BYTES, parseSummaryTask, TaskInputError } from "./task.js";
+import { DocumentTooLongError, MAX_DOCUMENT_CHARACTERS, parseSummaryTask, TaskInputError } from "./task.js";
 
 describe("M3-E E6: task input", () => {
   it("accepts exactly a title and a text", () => {
@@ -21,9 +21,15 @@ describe("M3-E E6: task input", () => {
     ["an over-long title", { title: "t".repeat(101), text: "b" }],
     ["an empty text", { title: "a", text: "   " }],
     ["a non-string text", { title: "a", text: 5 }],
-    ["an over-large text", { title: "a", text: "é".repeat(MAX_DOCUMENT_BYTES / 2 + 1) }],
+    ["an over-long text", { title: "a", text: "é".repeat(MAX_DOCUMENT_CHARACTERS + 1) }],
   ])("refuses %s", (_label, input) => {
     expect(() => parseSummaryTask(input)).toThrow(TaskInputError);
+  });
+
+  it("an over-long text is a DocumentTooLongError (a TaskInputError), refused whole rather than truncated", () => {
+    expect(() => parseSummaryTask({ title: "a", text: "x".repeat(MAX_DOCUMENT_CHARACTERS + 1) })).toThrow(DocumentTooLongError);
+    expect(parseSummaryTask({ title: "a", text: "x".repeat(MAX_DOCUMENT_CHARACTERS) }).text).toHaveLength(MAX_DOCUMENT_CHARACTERS);
+    expect(new DocumentTooLongError(9000)).toBeInstanceOf(TaskInputError);
   });
 });
 

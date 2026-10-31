@@ -106,7 +106,12 @@ const result: EvaluateResult = await client.evaluate(request);
 
 **Request limits.**
 - A request over 32 KB is refused locally with `InvalidArgumentError`, and nothing is sent.
-- The server refuses `untrustedContent.text` over 8,000 characters with `400`.
+- The server refuses `untrustedContent.text` over 8,000 characters with `400`. The limit is
+  counted as JavaScript string length (UTF-16 code units).
+  - The SDK does not check it. Checking `text.length` yourself avoids sending a request
+    that will be refused, as the reference agent does.
+  - Refuse an over-long document rather than truncating it: a cut document is not what
+    the agent read.
 - `action.payload` is optional. It must be a flat object of string, number or boolean
   values; anything nested is refused with `400`.
 

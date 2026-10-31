@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { AgentShieldClient } from "@agentshield/agent-sdk";
 import { ReferenceAgent, SUMMARY_ACTION, UnknownApprovalError, type TaskOutcome } from "./agent.js";
+import { describeOutcome } from "./display.js";
+import { DocumentTooLongError, MAX_DOCUMENT_CHARACTERS } from "./task.js";
 import { approval, evaluation, fakeAgentShield, json, testClient, testCredential, type Reply } from "./test-support.js";
 
 const DOCUMENT = { title: "Quarterly report", text: "Revenue grew 4% in the quarter. Costs were flat. Hiring resumes in Q3. Office moves are planned." };
@@ -220,8 +222,97 @@ describe("M3-E E6: a failed evaluation is never sent twice", () => {
 
   it("an evaluation too large to send is refused locally, before any request", async () => {
     const t = setup({ evaluate: () => evaluation("ALLOW") });
-    // Within the document limit, but JSON escaping pushes the request past the 32 KB limit.
-    expect(await t.agent.run({ title: "Big", text: "\u0001".repeat(24 * 1024) })).toMatchObject({ status: "refused", reason: "bad-request" });
+    // Exactly at the 8,000-character limit, but JSON escapes each control character as six bytes: over 32 KB.
+    expect(await t.agent.run({ title: "Big", text: "\u0001".repeat(8000) })).toMatchObject({ status: "refused", reason: "bad-request" });
     expect(t.server.requests).toEqual([]);
+  });
+});
+
+describe("M3-E E8: document length is checked before anything is sent", () => {
+  const sentence = "Revenue grew in the quarter. ";
+  const ofLength = (n: number) => sentence.repeat(Math.ceil(n / sentence.length)).slice(0, n);
+
+  it("the limit matches AgentShield's untrusted-content limit", () => {
+    expect(MAX_DOCUMENT_CHARACTERS).toBe(8000);
+  });
+
+  it.each([7999, 8000])("%i characters: sent once, unchanged", async (n) => {
+    const t = setup({ evaluate: () => evaluation("ALLOW") });
+    const text = ofLength(n);
+    expect(text).toHaveLength(n);
+    expect(await t.agent.run({ title: "Doc", text })).toMatchObject({ status: "completed" });
+    expect(t.server.requests).toHaveLength(1);
+    // Never shortened or altered.
+    expect(JSON.parse(t.server.requests[0]!.body!).untrustedContent.text).toBe(text);
+  });
+
+  it("8,001 characters: refused locally with DocumentTooLongError, no request, nothing saved", async () => {
+    const t = setup({ evaluate: () => evaluation("ALLOW") });
+    const error = await t.agent.run({ title: "Doc", text: ofLength(8001) }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(DocumentTooLongError);
+    expect(error).toMatchObject({ length: 8001, limit: 8000 });
+    expect((error as Error).message).toBe("The document is 8001 characters long; AgentShield accepts at most 8000. It was not sent, and it was not shortened.");
+    expect(t.server.requests).toEqual([]);
+    expect(t.agent.workspace.list()).toEqual([]);
+  });
+
+  it("counts characters the way the API does (UTF-16 code units): 4,000 emoji fit, one more character does not", async () => {
+    const emoji = String.fromCodePoint(0x1f600).repeat(4000);
+    expect(emoji).toHaveLength(8000);
+    const t = setup({ evaluate: () => evaluation("ALLOW") });
+    expect(await t.agent.run({ title: "Doc", text: emoji })).toMatchObject({ status: "completed" });
+    await expect(t.agent.run({ title: "Doc", text: `${emoji}a` })).rejects.toBeInstanceOf(DocumentTooLongError);
+    expect(t.server.requests).toHaveLength(1);
+  });
+});
+
+describe("M3-E E8: 503 is never success, and an evaluation is never retried after one", () => {
+  it("a full approval queue: unconfirmed (approval-queue-full), sent once, nothing saved", async () => {
+    const t = setup({ evaluate: () => json(503, { error: "The approval queue is full.", reason: "approval-queue-full", executed: false, pendingApproval: null }) }, { getRetries: 5 });
+    const outcome = await t.agent.run(INJECTED);
+    expect(outcome).toEqual({ status: "unconfirmed", reason: "approval-queue-full" });
+    expect(t.evaluateCalls()).toBe(1);
+    expectNothingSaved(t);
+    expect(describeOutcome(outcome)).toEqual([
+      "AgentShield's approval queue is full: it reported that the action needs an operator's confirmation, but no approval was created and nothing was executed.",
+      "The evaluation was not sent again and nothing was saved.",
+      "Ask the operator to approve, reject or let pending approvals expire before running the task again.",
+    ]);
+  });
+
+  it.each([
+    ["replay-cache capacity (Retry-After 30)", { "Retry-After": "30" }],
+    ["a short Retry-After the SDK would honour for a GET", { "Retry-After": "1" }],
+    ["no Retry-After", {}],
+  ])("a 503 from evaluate, %s: unconfirmed (unavailable), sent once", async (_label, headers) => {
+    const t = setup({ evaluate: () => json(503, { error: "Signed requests are temporarily unavailable. Try again later." }, headers) }, { getRetries: 5 });
+    expect(await t.agent.run(DOCUMENT)).toEqual({ status: "unconfirmed", reason: "unavailable" });
+    expect(t.evaluateCalls()).toBe(1);
+    expectNothingSaved(t);
+    expect(describeOutcome({ status: "unconfirmed", reason: "unavailable" }).join(" ")).toMatch(/may or may not have been processed, so it was not sent again/);
+  });
+
+  it("a 503 while polling with a short Retry-After: the SDK re-reads (a GET is safe to repeat), and only EXECUTED saves", async () => {
+    const t = setup({
+      evaluate: () => evaluation("CONFIRM", { approvalId: "apr-11" }),
+      approval: (id, call) => (call === 1 ? json(503, { error: "Unavailable" }, { "Retry-After": "1" }) : approval(id, "EXECUTED")),
+    });
+    expect(await t.agent.run(INJECTED)).toMatchObject({ status: "completed", approvalId: "apr-11" });
+    expect(t.evaluateCalls()).toBe(1);
+    expect(t.server.requests.filter((r) => r.method === "GET")).toHaveLength(2);
+  });
+
+  it("a persistent 503 while polling: wait-interrupted (unavailable), nothing saved, resumable", async () => {
+    let down = true;
+    const t = setup({
+      evaluate: () => evaluation("CONFIRM", { approvalId: "apr-12" }),
+      approval: (id) => (down ? json(503, { error: "Unavailable" }, { "Retry-After": "30" }) : approval(id, "REJECTED")),
+    });
+    expect(await t.agent.run(INJECTED)).toMatchObject({ status: "wait-interrupted", reason: "unavailable", approvalId: "apr-12" });
+    expect(t.evaluateCalls()).toBe(1);
+    expect(t.agent.pendingApprovals()).toEqual(["apr-12"]);
+    down = false;
+    expect(await t.agent.resume("apr-12")).toMatchObject({ status: "rejected" });
+    expectNothingSaved(t);
   });
 });

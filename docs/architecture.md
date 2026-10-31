@@ -291,7 +291,9 @@ the same agent, so history survives key rotation.
 `apps/reference-agent` summarizes a document into an in-memory simulated workspace. Full
 reference: [`apps/reference-agent/README.md`](../apps/reference-agent/README.md).
 
-1. **Validate the task:** exactly `{ title, text }`.
+1. **Validate the task:** exactly `{ title, text }`, with at most 8,000 characters of
+   text (the API's untrusted-content limit). A longer document is refused before any
+   request, never truncated.
 2. **Summarize locally:** deterministic and extractive.
 3. **Evaluate once,** with a fixed action (`create_summary` to `simulated-workspace`) and
    the document as `untrustedContent`.

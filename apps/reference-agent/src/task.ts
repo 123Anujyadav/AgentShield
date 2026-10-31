@@ -5,7 +5,18 @@
  * credential, so a document or a caller cannot change who acts or what is done.
  */
 
-/** The document text is sent to AgentShield as untrusted content; the request limit is 32 KB. */
+/**
+ * AgentShield's limit for untrusted content (the API refuses `untrustedContent.text` longer
+ * than this with 400; engine MAX_SCAN_LENGTH). Counted the way the API counts: JavaScript
+ * string length, in UTF-16 code units, so a character outside the Basic Multilingual Plane
+ * (such as most emoji) counts as two. The API stays authoritative; this check only stops a
+ * request that would certainly be refused from being sent at all.
+ */
+export const MAX_DOCUMENT_CHARACTERS = 8000;
+/**
+ * A document file larger than this cannot hold MAX_DOCUMENT_CHARACTERS characters (at most
+ * 3 UTF-8 bytes per UTF-16 code unit, plus a byte-order mark), so it is refused unread.
+ */
 export const MAX_DOCUMENT_BYTES = 24 * 1024;
 export const MAX_TITLE_LENGTH = 100;
 
@@ -20,6 +31,15 @@ export class TaskInputError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "TaskInputError";
+  }
+}
+
+/** The document is longer than AgentShield accepts. It was not sent, and it is never shortened. */
+export class DocumentTooLongError extends TaskInputError {
+  readonly limit = MAX_DOCUMENT_CHARACTERS;
+  constructor(readonly length: number) {
+    super(`The document is ${length} characters long; AgentShield accepts at most ${MAX_DOCUMENT_CHARACTERS}. It was not sent, and it was not shortened.`);
+    this.name = "DocumentTooLongError";
   }
 }
 
@@ -39,6 +59,7 @@ export function parseSummaryTask(input: unknown): SummaryTask {
     throw new TaskInputError(`The title must be 1 to ${MAX_TITLE_LENGTH} printable characters.`);
   }
   if (typeof text !== "string" || text.trim().length === 0) throw new TaskInputError("The document text is empty.");
-  if (Buffer.byteLength(text, "utf8") > MAX_DOCUMENT_BYTES) throw new TaskInputError(`The document is larger than ${MAX_DOCUMENT_BYTES} bytes.`);
+  // Refused whole, never truncated: a cut document could change what AgentShield scans.
+  if (text.length > MAX_DOCUMENT_CHARACTERS) throw new DocumentTooLongError(text.length);
   return { title: title.trim(), text };
 }

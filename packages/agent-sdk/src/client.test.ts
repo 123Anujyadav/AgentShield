@@ -114,12 +114,21 @@ describe("M3-E E5: evaluate", () => {
     ["401", () => json(401, { error: "Authentication required." }), AuthenticationError],
     ["429 with a short Retry-After", () => json(429, { error: "x" }, { "retry-after": "1" }), RateLimitedError],
     ["503 approval queue full", () => json(503, { error: "x", reason: "approval-queue-full" }), ServiceUnavailableError],
+    ["503 with a short Retry-After (replay-cache capacity)", () => json(503, { error: "x" }, { "retry-after": "1" }), ServiceUnavailableError],
     ["500", () => json(500, { error: "Internal error." }), ServerError],
     ["a network failure", () => Promise.reject(new TypeError("fetch failed")), NetworkError],
   ])("is never retried automatically (%s)", async (_label, responder, ErrorType) => {
     const h = harness(responder as Responder, { getRetries: 5 });
     const error = await caught(h.client.evaluate(request));
     expect(error).toBeInstanceOf(ErrorType);
+    expect([h.calls.length, h.sleeps]).toEqual([1, []]);
+  });
+
+  it("keeps a 503's reason for the caller (approval-queue-full) and does not retry", async () => {
+    const h = harness(() => json(503, { error: "x", reason: "approval-queue-full" }, { "retry-after": "1" }), { getRetries: 5 });
+    const error = await caught(h.client.evaluate(request));
+    expect(error).toBeInstanceOf(ServiceUnavailableError);
+    expect((error as ServiceUnavailableError).details).toEqual({ status: 503, reason: "approval-queue-full", retryAfterSeconds: 1 });
     expect([h.calls.length, h.sleeps]).toEqual([1, []]);
   });
 

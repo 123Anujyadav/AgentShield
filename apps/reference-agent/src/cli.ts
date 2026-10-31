@@ -5,7 +5,7 @@ import { AgentShieldClient, AgentShieldError, type AgentShieldClientOptions } fr
 import { ReferenceAgent, type TaskOutcome } from "./agent.js";
 import { AgentConfigError, loadAgentConfig } from "./config.js";
 import { describeOutcome, inert } from "./display.js";
-import { MAX_DOCUMENT_BYTES, MAX_TITLE_LENGTH, TaskInputError } from "./task.js";
+import { MAX_DOCUMENT_BYTES, MAX_DOCUMENT_CHARACTERS, MAX_TITLE_LENGTH, TaskInputError } from "./task.js";
 
 /**
  * Command line for the reference agent (M3-E E6):
@@ -21,8 +21,8 @@ export interface CliIo {
   env: NodeJS.ProcessEnv;
   out: (line: string) => void;
   err: (line: string) => void;
-  /** Tests only: replaces the SDK client's fetch and sleep. */
-  client?: Pick<AgentShieldClientOptions, "fetch" | "sleep">;
+  /** Tests only: replaces the SDK client's fetch, sleep and request timeout. */
+  client?: Pick<AgentShieldClientOptions, "fetch" | "sleep" | "timeoutMs">;
 }
 
 const USAGE = "Usage: --document <file> [--title <text>] [--wait-minutes <1-60>]";
@@ -69,7 +69,9 @@ export async function runReferenceAgent(argv: string[], io: CliIo): Promise<numb
     const config = loadAgentConfig(io.env);
     let text: string;
     try {
-      if (statSync(values.document).size > MAX_DOCUMENT_BYTES) throw new TaskInputError(`The document is larger than ${MAX_DOCUMENT_BYTES} bytes.`);
+      if (statSync(values.document).size > MAX_DOCUMENT_BYTES) {
+        throw new TaskInputError(`The document file is larger than ${MAX_DOCUMENT_BYTES} bytes, so it is over AgentShield's ${MAX_DOCUMENT_CHARACTERS}-character limit. It was not sent.`);
+      }
       text = readFileSync(values.document, "utf8");
     } catch (error) {
       if (error instanceof TaskInputError) throw error;
