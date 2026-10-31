@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { evaluateAction, getScenario } from "@agentshield/engine";
 import {
+  ApprovalCapacityError,
+  approvalStoreFull,
   APPROVAL_TTL_MS,
   createApprovalStore,
+  MAX_APPROVAL_RECORDS,
   createPendingApproval,
   expirePendingApprovals,
   markExpiryEventRecorded,
@@ -307,6 +310,111 @@ describe("processApproval policy recheck", () => {
     expect(simulator.execute(scenario.action, "CONFIRM").executed).toBe(false);
     expect(simulator.invocationCount).toBe(0);
     expect(simulator.execute(scenario.action, "ALLOW").executed).toBe(true);
+    expect(simulator.invocationCount).toBe(1);
+  });
+});
+
+/** A CONFIRM approval for an allowed action type that has no simulated handler. */
+function makeUnhandledIn(store: ApprovalStore) {
+  const scenario = getScenario("injection-in-document");
+  if (!scenario) throw new Error("missing scenario");
+  const intent = { ...scenario.intent, allowedActions: [...scenario.intent.allowedActions, "translate_text"] };
+  const action = { ...scenario.action, type: "translate_text" };
+  const evaluation = evaluateAction({ intent, action, untrustedContent: scenario.untrustedContent });
+  expect(evaluation.decision).toBe("CONFIRM");
+  return createPendingApproval(store, { scenarioId: null, intent, action, untrustedContent: scenario.untrustedContent, evaluation });
+}
+
+const recheckStored = (record: ApprovalRecord) =>
+  evaluateAction({ intent: record.intent, action: record.action, untrustedContent: record.untrustedContent });
+
+describe("M3-B (G4): bounded approval storage", () => {
+  it("defaults to a fixed limit and refuses a non-positive or fractional one", () => {
+    expect(createApprovalStore().limit).toBe(MAX_APPROVAL_RECORDS);
+    expect(MAX_APPROVAL_RECORDS).toBe(500);
+    for (const bad of [0, -1, 2.5, Number.NaN]) expect(() => createApprovalStore(bad)).toThrow(RangeError);
+  });
+
+  it("evicts the oldest finished records, never a pending one, to stay within the limit", () => {
+    const store = createApprovalStore(3);
+    const simulator = createSimulator();
+    const a = makePendingIn(store);
+    const b = makePendingIn(store);
+    const c = makePendingIn(store);
+    processApproval(store, a.id, recheckStored, simulator); // EXECUTED (finished)
+    processRejection(store, b.id); // REJECTED (finished)
+    const d = makePendingIn(store); // evicts a, the oldest finished record
+    expect([...store.records.keys()]).toEqual([b.id, c.id, d.id]);
+    const e = makePendingIn(store); // evicts b
+    expect([...store.records.keys()]).toEqual([c.id, d.id, e.id]);
+    expect(store.records.size).toBe(3);
+    expect([c.id, d.id, e.id].every((id) => store.records.get(id)?.status === "PENDING")).toBe(true);
+  });
+
+  it("refuses a new approval when every stored record is still pending, and changes nothing", () => {
+    const store = createApprovalStore(2);
+    const first = makePendingIn(store);
+    const second = makePendingIn(store);
+    expect(approvalStoreFull(store)).toBe(true);
+    expect(() => makePendingIn(store)).toThrow(ApprovalCapacityError);
+    expect([...store.records.keys()]).toEqual([first.id, second.id]);
+    expect([...store.records.values()].every((r) => r.status === "PENDING")).toBe(true);
+    expect(store.nextId).toBe(3); // no id was consumed by the refused attempt
+  });
+
+  it("keeps an EXPIRED record until its expiry event is recorded, then lets it go", () => {
+    const store = createApprovalStore(1);
+    const created = new Date("2026-10-30T00:00:00Z");
+    const record = makePendingIn(store);
+    expirePendingApprovals(store, new Date(created.getTime() + APPROVAL_TTL_MS + 1e9)); // no event writer: event still pending
+    expect(store.records.get(record.id)).toMatchObject({ status: "EXPIRED", expiryEventPending: true });
+    expect(approvalStoreFull(store)).toBe(true);
+    expect(() => makePendingIn(store)).toThrow(ApprovalCapacityError);
+    expect(markExpiryEventRecorded(store, record.id)).toBe(true);
+    expect(approvalStoreFull(store)).toBe(false);
+    const next = makePendingIn(store);
+    expect([...store.records.keys()]).toEqual([next.id]);
+  });
+
+  it("BLOCKED_ON_RECHECK and APPROVED_NOT_EXECUTED records are finished and can be evicted", () => {
+    const store = createApprovalStore(2);
+    const simulator = createSimulator();
+    const blocked = makePendingIn(store);
+    processApproval(store, blocked.id, (r) => evaluateAction({ intent: { ...r.intent, allowedActions: [], deniedActions: [r.action.type] }, action: r.action }), simulator);
+    const unhandled = makeUnhandledIn(store);
+    processApproval(store, unhandled.id, recheckStored, simulator);
+    expect([store.records.get(blocked.id)?.status, store.records.get(unhandled.id)?.status]).toEqual(["BLOCKED_ON_RECHECK", "APPROVED_NOT_EXECUTED"]);
+    makePendingIn(store);
+    makePendingIn(store);
+    expect(store.records.has(blocked.id) || store.records.has(unhandled.id)).toBe(false);
+  });
+});
+
+describe("M3-B (G8): a passed recheck with no handler is not recorded as a block", () => {
+  it("records APPROVED_NOT_EXECUTED, runs nothing, and keeps the passed recheck", () => {
+    const store = createApprovalStore();
+    const simulator = createSimulator();
+    const approval = makeUnhandledIn(store);
+    const outcome = processApproval(store, approval.id, recheckStored, simulator);
+    expect(outcome.kind).toBe("executed");
+    if (outcome.kind !== "executed") return;
+    expect(outcome.recheck.decision).toBe("CONFIRM");
+    expect(outcome.execution.executed).toBe(false);
+    expect(outcome.approval.status).toBe("APPROVED_NOT_EXECUTED");
+    expect(simulator.invocationCount).toBe(0);
+    // Final: a second approve is refused as already final.
+    expect(processApproval(store, approval.id, recheckStored, simulator).kind).toBe("already-final");
+  });
+
+  it("a registered handler still records EXECUTED, and a policy block still records BLOCKED_ON_RECHECK", () => {
+    const store = createApprovalStore();
+    const simulator = createSimulator();
+    const ran = makePendingIn(store);
+    const runOutcome = processApproval(store, ran.id, recheckStored, simulator);
+    expect(runOutcome.kind === "executed" && [runOutcome.approval.status, runOutcome.execution.executed]).toEqual(["EXECUTED", true]);
+    const blocked = makePendingIn(store);
+    const blockOutcome = processApproval(store, blocked.id, (r) => evaluateAction({ intent: { ...r.intent, allowedActions: [], deniedActions: [r.action.type] }, action: r.action }), simulator);
+    expect(blockOutcome.kind === "blocked-on-recheck" && blockOutcome.approval.status).toBe("BLOCKED_ON_RECHECK");
     expect(simulator.invocationCount).toBe(1);
   });
 });

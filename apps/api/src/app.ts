@@ -3,6 +3,7 @@ import express from "express";
 import type { ActivityEvent, PendingApproval, ProposedAction, SimulatedExecution, UntrustedContent, UserIntent } from "@agentshield/engine";
 import { evaluateAction, getScenario, MAX_SCAN_LENGTH, SCENARIOS } from "@agentshield/engine";
 import {
+  ApprovalCapacityError,
   createApprovalStore,
   expirePendingApprovals,
   markExpiryEventRecorded,
@@ -262,13 +263,41 @@ export function createApp(deps: AppDeps = {}) {
     if (evaluation.decision === "ALLOW") {
       execution = publicExecution(simulator.execute(action, evaluation.decision), action.type);
     } else if (evaluation.decision === "CONFIRM") {
-      pendingApproval = createPendingApproval(approvalStore, {
-        scenarioId,
-        intent,
-        action,
-        untrustedContent,
-        evaluation,
-      });
+      // Stale PENDING records become EXPIRED (with their event written) so they can make room.
+      if (approvalStore.records.size >= approvalStore.limit) expirePendingApprovals(approvalStore, new Date(), recordExpiryEvent);
+      try {
+        pendingApproval = createPendingApproval(approvalStore, {
+          scenarioId,
+          intent,
+          action,
+          untrustedContent,
+          evaluation,
+        });
+      } catch (error) {
+        if (!(error instanceof ApprovalCapacityError)) throw error;
+        // Nothing runs without an approval record. The decision stays CONFIRM and is recorded.
+        const event = recordEvent({
+          scenarioId,
+          intentTask: intent.task,
+          actionType: action.type,
+          tool: action.tool,
+          destination: action.destination,
+          decision: evaluation.decision,
+          riskScore: evaluation.riskScore,
+          findings: evaluation.findings,
+          explanation: "Confirmation required, but the approval queue is full. Nothing was executed and no approval was created.",
+          lifecycle: "CONFIRM_NOT_QUEUED",
+        });
+        res.status(503).json({
+          error: "The approval queue is full. Approve, reject or let pending approvals expire, then try again. Nothing was executed.",
+          reason: "approval-queue-full",
+          evaluation,
+          event,
+          executed: false,
+          pendingApproval: null,
+        });
+        return;
+      }
     }
 
     const event = recordEvent({

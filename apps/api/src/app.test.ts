@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ActivityEvent } from "@agentshield/engine";
+import { getScenario, type ActivityEvent } from "@agentshield/engine";
 import { createTestApp as createApp, request } from "./test-support.js";
 import { createApprovalStore } from "./approvals.js";
 import { createSimulator } from "./simulator.js";
@@ -1683,7 +1683,7 @@ describe("approval lifecycle and guarded execution", () => {
     const approved = await request(app).post(`/api/approvals/${id}/approve`).send({});
     // Policy recheck passes, but no simulated handler is registered, so nothing executes.
     expect(approved.body.executed).toBe(false);
-    expect(approved.body.approval.status).toBe("BLOCKED_ON_RECHECK");
+    expect(approved.body.approval.status).toBe("APPROVED_NOT_EXECUTED");
     expect(simulator.invocationCount).toBe(0);
   });
 });
@@ -1873,5 +1873,42 @@ describe("Phase I: secret-shaped request metadata is never echoed", () => {
     expect(blocked.body.evaluation.findings.at(-1).evidence).toBe("action.type=create_summary; allowed=read_document");
     const missing = await h.call("post", "/api/evaluate", { scenarioId: "no-such-scenario" });
     expect(missing.body.error).toBe("Unknown scenario: no-such-scenario");
+  });
+});
+
+describe("M3-B: bounded approval queue and the missing-handler status (route level)", () => {
+  it("a full queue of pending approvals refuses a new CONFIRM with 503, records it and executes nothing", async () => {
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore(1);
+    const app = createApp({ simulator, approvalStore });
+    const first = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    expect([first.status, first.body.evaluation.decision, first.body.pendingApproval?.status]).toEqual([200, "CONFIRM", "PENDING"]);
+    const second = await request(app).post("/api/evaluate").send({ scenarioId: "injection-in-document" });
+    expect(second.status).toBe(503);
+    expect(second.body).toMatchObject({ reason: "approval-queue-full", executed: false, pendingApproval: null });
+    expect(second.body.evaluation.decision).toBe("CONFIRM");
+    expect(second.body.event.lifecycle).toBe("CONFIRM_NOT_QUEUED");
+    expect(simulator.invocationCount).toBe(0);
+    expect(approvalStore.records.size).toBe(1);
+  });
+
+  it("approving an allowed action with no registered handler records APPROVED_NOT_EXECUTED, not a block", async () => {
+    const scenario = getScenario("injection-in-document");
+    if (!scenario) throw new Error("missing scenario");
+    const simulator = createSimulator();
+    const approvalStore = createApprovalStore();
+    const app = createApp({ simulator, approvalStore });
+    const res = await request(app)
+      .post("/api/evaluate")
+      .send({
+        intent: { ...scenario.intent, allowedActions: [...scenario.intent.allowedActions, "translate_text"] },
+        action: { ...scenario.action, type: "translate_text" },
+        untrustedContent: scenario.untrustedContent,
+      });
+    expect(res.body.evaluation.decision).toBe("CONFIRM");
+    const approved = await request(app).post(`/api/approvals/${res.body.pendingApproval.id}/approve`).send({});
+    expect(approved.status).toBe(200);
+    expect([approved.body.executed, approved.body.approval.status]).toEqual([false, "APPROVED_NOT_EXECUTED"]);
+    expect(simulator.invocationCount).toBe(0);
   });
 });

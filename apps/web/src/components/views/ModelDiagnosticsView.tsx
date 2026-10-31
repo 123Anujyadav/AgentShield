@@ -84,8 +84,8 @@ export default function ModelDiagnosticsView({
         <MetricCard
           title="Provider Mode"
           value={modelStatus?.mode.toUpperCase() ?? "UNKNOWN"}
-          subtitle="Offline synthetic provider"
-          badge="LOCAL"
+          subtitle={modelStatus?.isMock === false ? "Live provider (advisory only)" : "Offline synthetic provider"}
+          badge={modelStatus?.isMock === false ? "LIVE" : "LOCAL"}
           color="var(--advisory)"
           icon={<CpuIcon className="h-4 w-4" />}
         />
@@ -126,7 +126,7 @@ export default function ModelDiagnosticsView({
           <div className="space-y-2 text-xs">
             <div className="p-2.5 rounded border flex items-center justify-between" style={{ background: "#060d11", borderColor: "var(--border)" }}>
               <span className="text-muted">Target Endpoint Base URL:</span>
-              <span className="font-mono text-cyan-300">https://api.meta.ai/v1</span>
+              <span className="font-mono text-cyan-300">{modelStatus?.baseUrl ?? "unknown"}</span>
             </div>
             <div className="p-2.5 rounded border flex items-center justify-between" style={{ background: "#060d11", borderColor: "var(--border)" }}>
               <span className="text-muted">Auth Header Contract:</span>
@@ -134,19 +134,19 @@ export default function ModelDiagnosticsView({
             </div>
             <div className="p-2.5 rounded border flex items-center justify-between" style={{ background: "#060d11", borderColor: "var(--border)" }}>
               <span className="text-muted">Request Timeout:</span>
-              <span className="font-mono text-slate-200">5,000 ms</span>
+              <span className="font-mono text-slate-200">5,000 ms (server default, configurable)</span>
             </div>
             <div className="p-2.5 rounded border flex items-center justify-between" style={{ background: "#060d11", borderColor: "var(--border)" }}>
               <span className="text-muted">Bounded Retry Limit:</span>
-              <span className="font-mono text-slate-200">2 attempts (exponential backoff)</span>
+              <span className="font-mono text-slate-200">Up to 2 retries by default (exponential backoff or Retry-After)</span>
             </div>
             <div className="p-2.5 rounded border flex items-center justify-between" style={{ background: "#060d11", borderColor: "var(--border)" }}>
               <span className="text-muted">Payload Bounds:</span>
-              <span className="font-mono text-slate-200">4,000 chars max input / output</span>
+              <span className="font-mono text-slate-200">8,000 chars input · 20,000 chars response (server defaults)</span>
             </div>
             <div className="p-2.5 rounded border flex items-center justify-between" style={{ background: "#060d11", borderColor: "var(--border)" }}>
               <span className="text-muted">Safety Gating Guard:</span>
-              <span className="font-mono text-emerald-400">MODEL_LIVE_ENABLED=false (Enforced)</span>
+              <span className="font-mono text-emerald-400">{modelStatus?.liveEnabled ? "MODEL_LIVE_ENABLED=true (live, advisory only)" : "MODEL_LIVE_ENABLED is not true (mock)"}</span>
             </div>
           </div>
           <p className="text-[10px] mt-3 text-muted">

@@ -11,6 +11,16 @@ import type { Simulator } from "./simulator.js";
 
 export const APPROVAL_TTL_MS = 15 * 60 * 1000;
 
+/** M3-B: most approval records kept in memory. Only finished records are ever evicted to stay under it. */
+export const MAX_APPROVAL_RECORDS = 500;
+
+/** Thrown when every stored approval is still open, so a new one cannot be stored without dropping one. */
+export class ApprovalCapacityError extends Error {
+  constructor() {
+    super("approval-queue-full");
+  }
+}
+
 /** Internal record: public approval fields plus server-only bookkeeping. */
 export interface ApprovalRecord extends PendingApproval {
   untrustedContent?: UntrustedContent;
@@ -21,10 +31,49 @@ export interface ApprovalRecord extends PendingApproval {
 export interface ApprovalStore {
   records: Map<string, ApprovalRecord>;
   nextId: number;
+  /** Most records kept (M3-B). */
+  limit: number;
 }
 
-export function createApprovalStore(): ApprovalStore {
-  return { records: new Map(), nextId: 1 };
+export function createApprovalStore(limit: number = MAX_APPROVAL_RECORDS): ApprovalStore {
+  if (!Number.isInteger(limit) || limit < 1) throw new RangeError("The approval store limit must be a positive integer.");
+  return { records: new Map(), nextId: 1, limit };
+}
+
+/**
+ * A record that may be dropped to make room: a final decision whose lifecycle
+ * event has already been written. PENDING records are never evicted, and an
+ * EXPIRED record is kept until its expiry event has been recorded.
+ */
+function isEvictable(record: ApprovalRecord): boolean {
+  switch (record.status) {
+    case "EXECUTED":
+    case "REJECTED":
+    case "BLOCKED_ON_RECHECK":
+    case "APPROVED_NOT_EXECUTED":
+      return true;
+    case "EXPIRED":
+      return record.expiryEventPending !== true;
+    default:
+      return false;
+  }
+}
+
+/** Evicts the oldest finished records until one more fits; false when only open records remain. */
+function makeRoom(store: ApprovalStore): boolean {
+  for (const [id, record] of store.records) {
+    if (store.records.size < store.limit) break;
+    if (isEvictable(record)) store.records.delete(id);
+  }
+  return store.records.size < store.limit;
+}
+
+/** True when a new approval would not fit even after evicting every finished record. */
+export function approvalStoreFull(store: ApprovalStore): boolean {
+  if (store.records.size < store.limit) return false;
+  let evictable = 0;
+  for (const record of store.records.values()) if (isEvictable(record)) evictable += 1;
+  return evictable === 0;
 }
 
 function clone<T>(value: T): T {
@@ -42,6 +91,8 @@ export function createPendingApproval(
   },
   now = new Date(),
 ): PendingApproval {
+  // Bounded (M3-B): drop the oldest finished records; never an open one.
+  if (!makeRoom(store)) throw new ApprovalCapacityError();
   const record: ApprovalRecord = {
     id: `apr-${store.nextId++}`,
     status: "PENDING",
@@ -205,7 +256,8 @@ export function processApproval(
   }
   const execution = simulator.execute(clone(record.action), "ALLOW");
   record.execution = execution;
-  record.status = execution.executed ? "EXECUTED" : "BLOCKED_ON_RECHECK";
+  // The recheck passed; if no handler ran, that is not a policy block (M3-B).
+  record.status = execution.executed ? "EXECUTED" : "APPROVED_NOT_EXECUTED";
   return { kind: "executed", approval: toPublicApproval(record), execution, recheck };
 }
 

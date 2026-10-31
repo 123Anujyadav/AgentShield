@@ -1,3 +1,4 @@
+import { MAX_SCAN_LENGTH } from "./scanner/scan.js";
 import type { FindingSeverity } from "./types.js";
 
 /**
@@ -5,7 +6,8 @@ import type { FindingSeverity } from "./types.js";
  * This is NOT a policy finding and never carries a decision.
  */
 export const MODEL_ANALYSIS_LIMITS = {
-  maxInputLength: 4000,
+  /** M3-B: the same limit evaluation accepts for untrusted content, so analysis can see everything the scanner sees. */
+  maxInputLength: MAX_SCAN_LENGTH,
   maxSummaryLength: 280,
   maxExplanationLength: 800,
   maxIndicators: 8,

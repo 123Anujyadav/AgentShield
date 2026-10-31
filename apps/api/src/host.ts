@@ -1,7 +1,9 @@
 /**
  * Network address the API server listens on (Phase J). IPv4 loopback only:
- * the API has no authentication, so it must not accept connections from other
- * hosts. Loopback does not protect against other processes on this machine.
+ * the API is a single-user local service (one API token or a session created
+ * with it, no user accounts or roles), so it must not accept connections from
+ * other hosts. Loopback does not protect against other processes on this
+ * machine.
  *
  * This module deliberately imports nothing, so loading it never reads .env or
  * any configuration that could hold secrets.

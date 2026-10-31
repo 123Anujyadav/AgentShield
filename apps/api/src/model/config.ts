@@ -1,3 +1,5 @@
+import { MODEL_ANALYSIS_LIMITS } from "@agentshield/engine";
+
 export interface ModelConfig {
   /**
    * Effective runtime mode. "live" is only possible when MODEL_LIVE_ENABLED
@@ -41,7 +43,10 @@ export function loadModelConfig(env: NodeJS.ProcessEnv = process.env): ModelConf
     liveFlagSet,
     liveEnabled,
     timeoutMs: parseBoundedInt(env.MODEL_TIMEOUT_MS, 5000, 100, 30000),
-    maxInputLength: parseBoundedInt(env.MODEL_MAX_INPUT_CHARS, 4000, 100, 20000),
+    // M3-B: defaults to the evaluation limit for untrusted content (8,000), so the advisory
+    // analysis can see everything the deterministic scanner sees. A lower setting is
+    // reported as an "oversized-input" analysis failure; the decision is unaffected.
+    maxInputLength: parseBoundedInt(env.MODEL_MAX_INPUT_CHARS, MODEL_ANALYSIS_LIMITS.maxInputLength, 100, 20000),
     // Bounds the provider's whole response body, not only the answer. A
     // schema-maximal answer in a full chat.completion envelope measures 4,017
     // characters as compact ASCII JSON and up to about 18,000 when quotes or

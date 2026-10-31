@@ -24,6 +24,8 @@ export interface ModelStatus {
   mode: string;
   provider: string;
   model: string;
+  /** Returned by GET /api/model/status; the configured provider base URL (never a key). */
+  baseUrl: string;
   apiKeyConfigured: boolean;
   liveEnabled: boolean;
   isMock: boolean;

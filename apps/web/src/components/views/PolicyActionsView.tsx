@@ -69,7 +69,7 @@ export default function PolicyActionsView({
               <span className="font-mono font-bold text-sm text-emerald-400 flex items-center gap-1.5">
                 <CheckCircleIcon className="h-4 w-4" /> 1 · ALLOW
               </span>
-              <span className="badge text-[9px] text-emerald-300 border-emerald-900 bg-emerald-950/40">RISK &lt; 30</span>
+              <span className="badge text-[9px] text-emerald-300 border-emerald-900 bg-emerald-950/40">RISK 10&ndash;30</span>
             </div>
             <p className="text-xs text-slate-200 mb-2 font-medium">
               Permitted to execute immediately.
@@ -77,8 +77,8 @@ export default function PolicyActionsView({
             <ul className="text-[11px] text-muted space-y-1.5">
               <li>• Action type matches explicit user intent contract.</li>
               <li>• Destination matches allowed destination criteria.</li>
-              <li>• Zero injection scanner or hard-deny flags.</li>
-              <li>• Invokes registered SIMULATED handler.</li>
+              <li>• No hard-deny, data-leak or high/critical scanner finding (lower-severity findings raise the score to 30).</li>
+              <li>• Invokes the registered SIMULATED handler; an action type with no handler is allowed but not executed.</li>
             </ul>
           </div>
           <div className="mt-4 pt-2 border-t text-[10px] font-mono text-emerald-400" style={{ borderColor: "var(--border-subtle)" }}>
@@ -214,8 +214,8 @@ export default function PolicyActionsView({
           </div>
 
           <div className="mt-4 pt-2 border-t text-[10px] flex items-center justify-between text-muted" style={{ borderColor: "var(--border-subtle)" }}>
-            <span>Unlisted Tools:</span>
-            <span className="text-red-400 font-bold font-mono">AUTOMATIC HARD BLOCK</span>
+            <span>Unregistered action types:</span>
+            <span className="text-amber-300 font-bold font-mono">NOT EXECUTED (DECISION UNCHANGED)</span>
           </div>
         </section>
       </div>

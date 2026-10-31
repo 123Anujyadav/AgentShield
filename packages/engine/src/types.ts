@@ -78,7 +78,9 @@ export type ApprovalStatus =
   | "EXECUTED"
   | "REJECTED"
   | "EXPIRED"
-  | "BLOCKED_ON_RECHECK";
+  | "BLOCKED_ON_RECHECK"
+  /** M3-B: the recheck passed, but no simulated handler is registered for the action type. Nothing ran. */
+  | "APPROVED_NOT_EXECUTED";
 
 export interface SimulatedExecution {
   executed: boolean;

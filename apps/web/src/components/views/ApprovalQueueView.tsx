@@ -196,8 +196,9 @@ export default function ApprovalQueueView({
                   <span
                     className="badge text-[9px] font-bold"
                     style={{
-                      borderColor: item.status === "EXECUTED" ? "var(--allow)" : "var(--block)",
-                      color: item.status === "EXECUTED" ? "var(--allow)" : "var(--block)",
+                      // M3-B: approved but with no registered handler is not a block; shown amber.
+                      borderColor: item.status === "EXECUTED" ? "var(--allow)" : item.status === "APPROVED_NOT_EXECUTED" ? "var(--confirm)" : "var(--block)",
+                      color: item.status === "EXECUTED" ? "var(--allow)" : item.status === "APPROVED_NOT_EXECUTED" ? "var(--confirm)" : "var(--block)",
                     }}
                   >
                     {item.status}

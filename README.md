@@ -129,9 +129,10 @@ node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-10-30): `npm test` passes 1,414 tests (engine 708,
-websec 395, API 292, web 19), and `npm run typecheck` and `npm run build` pass. `npm audit` needs network
-access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
+Current verified state (2026-10-31): `npm test` passes 1,431 tests in 34 files (engine 708,
+websec 395, API 305, web 23), with none failed or skipped, and `npm run build` passes. `npm run typecheck`
+last passed on 2026-10-30. `npm audit` needs network access; it last reported 0 vulnerabilities on
+2026-10-26 and was not re-run for this update.
 
 ## Demo outline (about four minutes, seeded synthetic scenarios only)
 
