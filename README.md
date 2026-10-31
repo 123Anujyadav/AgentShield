@@ -12,9 +12,11 @@ protection or complete prompt-injection prevention.
   files (opt-in per scan, and off by default server-side via `SCAN_EXPOSURE_ENABLED`). Scanning is
   off by default (`SCAN_NETWORK_ENABLED`), has been tested offline and in loopback-only labs, and
   has not scanned a real site; see [`docs/scanning.md`](docs/scanning.md).
-- **Not a secured service.** The API listens on local loopback (`127.0.0.1`) only. Every `/api`
-  route requires a single local API token (or a browser session created with it); there are no
-  user accounts or roles, and it is not hardened for exposure beyond this machine.
+- **Not a secured service.** The API listens on local loopback (`127.0.0.1`) only, over plain
+  HTTP. Every `/api` route requires the single local operator token (or a browser session
+  created with it), except the two agent routes, which require a signed agent credential.
+  There are no user accounts or roles, and it is not hardened for exposure beyond this
+  machine. See [`docs/security-model.md`](docs/security-model.md).
 - **Not persistent.** Pending approvals and activity events are in memory and reset when the
   API restarts.
 - **Not a live model.** The advisory model is a mock by default. Two separately authorized,
@@ -34,6 +36,13 @@ proposal and any execution: it compares the proposed action with the user's
 explicit intent, scans the untrusted content with documented rules, and
 allows, requires confirmation for, or blocks the action — with an explanation
 for every decision. Nothing real ever executes; handlers are simulated.
+
+**Integrating an agent?** Start with the developer quick start
+([`docs/quick-start.md`](docs/quick-start.md)), then the
+[integration guide](docs/integration-guide.md). Every document is listed in
+[`docs/README.md`](docs/README.md). How agent requests are signed, verified and approved
+is described in [`docs/architecture.md`](docs/architecture.md), and what is and is not
+protected in [`docs/security-model.md`](docs/security-model.md).
 
 ## Architecture
 
@@ -621,6 +630,8 @@ signed requests are each accepted once. Details, lifecycle, incident response an
 - **Dependencies:** none outside Node 22 and the workspace.
 
 Usage, errors and limits: [`packages/agent-sdk/README.md`](packages/agent-sdk/README.md).
+Integration patterns and error handling: [`docs/integration-guide.md`](docs/integration-guide.md)
+and [`docs/troubleshooting.md`](docs/troubleshooting.md).
 
 ### Reference agent (M3-E E6)
 
@@ -643,7 +654,8 @@ npm run reference-agent -- --document C:\docs\notes.txt
 ```
 
 Configuration, workflow, errors and security boundaries:
-[`apps/reference-agent/README.md`](apps/reference-agent/README.md).
+[`apps/reference-agent/README.md`](apps/reference-agent/README.md). A step-by-step run with a
+test credential and policy: [`docs/quick-start.md`](docs/quick-start.md).
 
 ## Website scanning (off by default)
 
@@ -673,6 +685,9 @@ Setup, safety controls, report semantics and limitations: [`docs/scanning.md`](d
 
 ## Layout
 
+- `packages/agent-protocol` — the signed-request format (`AGENTSHIELD-SIG-V1` header and canonical
+  request), shared by the SDK and the API.
+- `packages/agent-sdk` — the official TypeScript agent SDK (`@agentshield/agent-sdk`).
 - `packages/engine` — framework-independent TypeScript security engine (contracts, evaluation, seeded scenarios).
 - `packages/websec` — website-scanning library: target rules, SSRF address guard, guarded fetcher
   (with the 4 KB prefix mode), passive checks, opt-in exposure checks, findings and reports.
@@ -682,9 +697,12 @@ Setup, safety controls, report semantics and limitations: [`docs/scanning.md`](d
 - `labs/exposure-lab` — loopback-only Node lab for the M2 exposure checks (54 of 54 checks).
 - `apps/api` — Express API. Validates input, calls the engine, records in-memory activity events.
 - `apps/web` — React/Vite/Tailwind dashboard. Renders API/engine responses only.
+- `apps/reference-agent` — a complete, harmless agent built only on the SDK (simulated workspace).
 - `benchmarks/` — deterministic synthetic benchmarks for outbound credential detection
   (`benchmarks/detection/`) and the injection scanner (`benchmarks/scanner/`), each with its own README.
-- `docs/` — audits, live-readiness notes, and the Sentinel research documents.
+- `docs/` — developer guides (quick start, architecture, security model, integration,
+  troubleshooting), reference documents, audits, live-readiness notes, and the Sentinel research
+  documents; indexed in [`docs/README.md`](docs/README.md).
 - `ml/` — the Sentinel ML research track (dataset tooling and review workflow). It is separate
   from this prototype: the demo does not use it, and model training is not approved.
 - `scripts/` — the repository secret scanner (`scripts/secret-scan.mjs`) used by `npm run security:verify`.

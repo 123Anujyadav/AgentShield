@@ -1,7 +1,8 @@
 # Agent policies (M3-C)
 
-Status: implemented and verified with offline unit and route tests only (no browser,
-no deployed server).
+Status: implemented and verified with offline unit and route tests, and exercised by the
+reference agent's end-to-end tests against the API app on a loopback port (no browser, no
+deployed server). For a first policy and a guided run, see [quick-start.md](quick-start.md).
 
 Before M3-C, the permissions used to judge an action came from the request itself
 (`intent.allowedActions`, `intent.deniedActions`, `intent.allowedDestinations`), so a
@@ -133,5 +134,5 @@ routed (`404`).
   parameter constraints, rate or amount limits, or time windows.
 - Unknown agents are blocked, but a policy that is too broad is still too broad. Review
   policies as you would code.
-- Verified by unit, store and route tests only. The web UI only runs seeded scenarios and
-  does not show or choose agents.
+- Verified by unit, store, route and end-to-end tests only. The web UI only runs seeded
+  scenarios and does not show or choose agents.

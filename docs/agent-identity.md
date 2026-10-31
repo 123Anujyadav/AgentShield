@@ -1,8 +1,14 @@
 # Agent identity (M3-D, with M3-E E2 credential schemes and E3 signed requests)
 
-Status: implemented and verified with offline unit, CLI and route tests, plus Windows
-permission checks on temporary files. Not yet exercised against a running server, a
-browser, or a real agent.
+Status: implemented and verified with offline unit, CLI and route tests, Windows
+permission checks on temporary files, and end-to-end tests that run the SDK and the
+reference agent against the real API app on a loopback port (deterministic test keys,
+temporary stores). Not yet exercised against a separately started server, a browser, or
+a real agent.
+
+For a guided first run see [quick-start.md](quick-start.md); for the overall design,
+[architecture.md](architecture.md) and [security-model.md](security-model.md); for error
+handling, [troubleshooting.md](troubleshooting.md).
 
 **Since M3-E E3, agents authenticate by signing each request** with their Ed25519 key
 (see Signed requests below). Legacy bearer credentials are disabled by default
@@ -389,7 +395,10 @@ redacted as described in [agent-policies.md](agent-policies.md).
 
 **Server logs** (standard error) contain no secrets:
 
-- `agent-auth status=failed reason=<malformed|unknown-key|wrong-secret|revoked|expired|store-unavailable> keyId=<keyId or none>`
+- `agent-auth status=failed scheme=signature reason=<reason> keyId=<keyId or none>` for signed
+  requests (reasons listed under Signed requests above).
+- `agent-auth status=failed reason=<malformed|unknown-key|wrong-secret|scheme-mismatch|bearer-disabled|revoked|expired|store-unavailable> keyId=<keyId or none>`
+  for legacy bearer credentials.
 - `agent-credentials status=reloaded|invalid|warning ...`
 
 ## Failed attempts
@@ -406,8 +415,9 @@ of `401`, and are no longer logged, until the minute ends.
 - Dashboard sessions (cookies) are neither counted nor limited here.
 - `GET /api/session` never verifies agent credentials, so it offers no way around the
   limit.
-- Verifying a credential is one SHA-256 and one comparison, and every `/api` request is
-  also under the general request limit (`API_RATE_LIMIT_PER_MINUTE`).
+- Verifying a credential costs one Ed25519 verification (signed requests) or one SHA-256
+  and one comparison (legacy bearer), and every `/api` request is also under the general
+  request limit (`API_RATE_LIMIT_PER_MINUTE`).
 
 ## Incident response
 
@@ -442,8 +452,9 @@ If a credential may have leaked:
 - **Approval ids are sequential** (`apr-N`). An agent cannot read or list other agents'
   approvals, but the gaps between its own ids show roughly how many approvals were
   created in between.
-- **The API is plain HTTP on loopback**, so a local process able to capture loopback
-  traffic could read credentials in transit.
+- **Legacy bearer credentials travel in plain text** on that loopback HTTP connection, so a
+  local process able to capture loopback traffic could read them in transit. Signed
+  requests never send the private key.
 - **The failed-attempt limit is per client address.** Locally that is the whole machine,
   so a local process sending bad credentials can make other callers' *failed* attempts
   get `429` rather than `401` for up to a minute. Valid credentials are not affected. The
@@ -453,8 +464,9 @@ If a credential may have leaked:
   updating size, timestamps or file id on every change, which NTFS does.
 - **CLI output.** A credential printed by `create` can remain in terminal scrollback.
   Prefer `--out`.
-- **Verification so far** is offline tests and Windows permission checks on temporary
-  files only.
+- **Verification so far** is automated tests (including the SDK and reference-agent
+  end-to-end tests against the API app on a loopback port) and Windows permission checks
+  on temporary files.
 
 ## Proposed follow-up: detecting leaked agent credentials (U7, not implemented)
 

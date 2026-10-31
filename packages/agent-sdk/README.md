@@ -19,10 +19,19 @@ executes an action: only the operator can do that.
 Requirements: Node.js 22 (it uses the built-in `fetch` and `node:crypto`). There are no
 third-party runtime dependencies.
 
+**Guides.**
+- First run with a test credential: [`docs/quick-start.md`](../../docs/quick-start.md).
+- Integration patterns, including unconfirmed outcomes:
+  [`docs/integration-guide.md`](../../docs/integration-guide.md).
+- Every error and status code: [`docs/troubleshooting.md`](../../docs/troubleshooting.md).
+- What is and is not protected: [`docs/security-model.md`](../../docs/security-model.md).
+- A complete agent built on the SDK:
+  [`apps/reference-agent`](../../apps/reference-agent/README.md).
+
 ## Setup in this workspace
 
-The SDK is a workspace package, so `npm install` at the repository root links it. Build it
-after the protocol package:
+The SDK is a workspace package (it is not published to npm), so `npm install` at the
+repository root links it. Build it after the protocol package:
 
 ```powershell
 npm run build -w @agentshield/agent-protocol
@@ -40,7 +49,7 @@ import { AgentCredential, AgentShieldClient } from "@agentshield/agent-sdk";
 The operator issues an Ed25519 credential for the agent (see `docs/agent-identity.md`):
 
 ```powershell
-npm run agent-credential -w @agentshield/api -- create --agent report-writer --out C:\secure\report-writer.key
+npm run agent-credential -w @agentshield/api -- create --agent summary-agent --out C:\secure\summary-agent.key
 ```
 
 The file holds one line, `asag2_<keyId>.<key>`. `<key>` is the agent's private key
@@ -48,7 +57,7 @@ The file holds one line, `asag2_<keyId>.<key>`. `<key>` is the agent's private k
 already restricts it that way. Load it from an explicit source:
 
 ```ts
-const credential = AgentCredential.fromFile("C:\\secure\\report-writer.key");
+const credential = AgentCredential.fromFile("C:\\secure\\summary-agent.key");
 // or, from an environment variable you name explicitly:
 const fromEnv = AgentCredential.fromEnv("AGENTSHIELD_AGENT_CREDENTIAL");
 ```

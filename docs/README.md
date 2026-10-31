@@ -1,0 +1,46 @@
+# AgentShield documentation
+
+AgentShield is a local-first prototype: execution is simulated and the API listens on
+loopback only. Start with the project [README](../README.md) for what it is and is not.
+
+## Integrating an agent
+
+Read these in order:
+
+1. [quick-start.md](quick-start.md). Covers:
+   - build and test;
+   - start the API with a policy and create a test credential;
+   - run the reference agent through `ALLOW`, `CONFIRM` and `BLOCK`.
+2. [integration-guide.md](integration-guide.md). Covers the SDK:
+   - credential loading and client set-up;
+   - evaluation and approval polling;
+   - error handling, and unconfirmed outcomes.
+3. [troubleshooting.md](troubleshooting.md). Every status code and SDK error, and the four
+   kinds of outcome: confirmed, refused, pending and unconfirmed.
+
+## Understanding the design
+
+- [architecture.md](architecture.md). The signed protocol, credentials, verification and
+  replay protection, authorization, policies, approvals, the SDK and the reference agent,
+  with diagrams.
+- [security-model.md](security-model.md). What is protected and what is not: the trust
+  model, key handling, replay limits, approval versus execution, and restart limits.
+
+## Reference
+
+| Document | Covers |
+|---|---|
+| [agent-identity.md](agent-identity.md) | Credentials (Ed25519 and legacy bearer), the store, the `agent-credential` CLI, signed-request verification, agent approval visibility, incident response |
+| [agent-policies.md](agent-policies.md) | The policy file schema, enforcement and recheck |
+| [`packages/agent-sdk/README.md`](../packages/agent-sdk/README.md) | The SDK's API, options, errors and retries |
+| [`apps/reference-agent/README.md`](../apps/reference-agent/README.md) | The reference agent's configuration, workflow, statuses and boundaries |
+| [security-baseline.md](security-baseline.md) | The repository secret scan and secret-handling rules |
+| [scanning.md](scanning.md) | Website scanning (off by default) |
+| [live-readiness.md](live-readiness.md) | The advisory model and the live Muse Spark readiness notes |
+
+## Research and audit records
+
+These are historical records. They are not needed for integration:
+- `phase7-audit.md`;
+- `phase11-sentinel-research.md`;
+- `phase11a-*.md`: the Sentinel ML research track, kept separate from the prototype.

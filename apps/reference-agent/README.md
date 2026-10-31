@@ -13,6 +13,12 @@ network other than AgentShield. It never approves or rejects anything; only an o
 Use it as a template for how an agent should handle `ALLOW`, `CONFIRM` and `BLOCK`, approvals
 and failures.
 
+**Guides.**
+- A guided run with a test credential and policy:
+  [`docs/quick-start.md`](../../docs/quick-start.md).
+- The same patterns for your own agent:
+  [`docs/integration-guide.md`](../../docs/integration-guide.md).
+
 ## Install and build
 
 It is a workspace package. Install at the repository root once, then build it after the
@@ -47,24 +53,30 @@ out from the credential. `AGENTSHIELD_AGENT_ID` (or `AGENTSHIELD_AGENT`) is refu
 so nobody believes it does something.
 
 **Getting a credential.** The operator issues it with the existing CLI. The example below is
-for a throwaway local test only:
+for a throwaway local test only. `summary-agent` stands for an agent whose policy allows
+the action (see below):
 
 ```powershell
 # Operator, on the AgentShield machine (writes a key file restricted to the current user):
-npm run agent-credential -w @agentshield/api -- create --agent report-writer --out C:\secure\report-writer.key
+npm run agent-credential -w @agentshield/api -- create --agent summary-agent --days 7 --out C:\secure\summary-agent.key
 
 # Agent:
-$env:AGENTSHIELD_AGENT_CREDENTIAL_FILE = "C:\secure\report-writer.key"
+$env:AGENTSHIELD_AGENT_CREDENTIAL_FILE = "C:\secure\summary-agent.key"
 ```
 
-The operator also needs a policy for `report-writer` that allows the action `create_summary`
-to the destination `simulated-workspace`.
+**The agent needs a policy.** It must allow the action `create_summary` to the destination
+`simulated-workspace`.
+- Neither the built-in `demo-summarizer` policy nor the example file's `report-writer`
+  policy is meant for this agent. `report-writer` does not allow `create_summary`, so a
+  `report-writer` credential gets `BLOCK`.
+- [`docs/quick-start.md`](../../docs/quick-start.md#3-give-your-test-agent-a-policy) shows a
+  policy file with a `summary-agent` entry.
 
 **Placeholder values.** The values below are placeholders, not a credential:
 
 ```text
 AGENTSHIELD_URL=http://127.0.0.1:4000
-AGENTSHIELD_AGENT_CREDENTIAL_FILE=C:\secure\report-writer.key
+AGENTSHIELD_AGENT_CREDENTIAL_FILE=C:\secure\summary-agent.key
 # never commit a credential; the file holds one line: asag2_<keyId>.<key>
 ```
 
@@ -74,7 +86,11 @@ AGENTSHIELD_AGENT_CREDENTIAL_FILE=C:\secure\report-writer.key
 npm run reference-agent -- --document C:\docs\notes.txt [--title "Notes"] [--wait-minutes 16]
 ```
 
-- `--document`: a UTF-8 text file of at most 24 KB.
+- `--document`: a UTF-8 text file of at most 24 KB. AgentShield itself accepts at most
+  8,000 characters of untrusted content: a longer document is refused with `400`, and
+  reported as `refused` (`bad-request`).
+- **Use absolute paths** for `--document` and `AGENTSHIELD_AGENT_CREDENTIAL_FILE`. npm runs
+  the agent from `apps/reference-agent`, so relative paths resolve from there.
 - `--title`: a local label for the saved summary. It defaults to the file name and is never
   sent to AgentShield.
 - `--wait-minutes`: how long to wait for an operator (1 to 60; default 16, just past the
@@ -96,7 +112,7 @@ reasons, and what happened. It never prints the key, the document or the summary
 import { AgentCredential, AgentShieldClient } from "@agentshield/agent-sdk";
 import { ReferenceAgent } from "@agentshield/reference-agent";
 
-const credential = AgentCredential.fromFile("C:\\secure\\report-writer.key");
+const credential = AgentCredential.fromFile("C:\\secure\\summary-agent.key");
 const agent = new ReferenceAgent({ client: new AgentShieldClient({ baseUrl: "http://127.0.0.1:4000", credential }) });
 const outcome = await agent.run({ title: "Notes", text: documentText });
 // outcome.status: "completed", "blocked", "pending", ...; agent.workspace.list() holds saved summaries.
