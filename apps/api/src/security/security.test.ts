@@ -267,7 +267,7 @@ describe("M0: rate limits", () => {
     const time = clock();
     const app = createTestApp({
       now: time.now,
-      security: { rateLimits: { api: 1000, session: 10, evaluate: 3, approvalAction: 2, authFailure: 20 } },
+      security: { rateLimits: { api: 1000, session: 10, evaluate: 3, approvalAction: 2, authFailure: 20, agentApprovalStatus: 120 } },
     });
     for (let i = 0; i < 3; i += 1) expect((await request(app).post("/api/evaluate").send({ agentId: TEST_AGENT_ID, ...benignEvaluate })).status).toBe(200);
     expect((await request(app).post("/api/evaluate").send({ agentId: TEST_AGENT_ID, ...benignEvaluate })).status).toBe(429);
@@ -280,7 +280,7 @@ describe("M0: rate limits", () => {
     time.advance(MINUTE);
     expect((await request(app).post("/api/evaluate").send({ agentId: TEST_AGENT_ID, ...benignEvaluate })).status).toBe(200);
 
-    const global = createTestApp({ now: time.now, security: { rateLimits: { api: 5, session: 10, evaluate: 60, approvalAction: 60, authFailure: 20 } } });
+    const global = createTestApp({ now: time.now, security: { rateLimits: { api: 5, session: 10, evaluate: 60, approvalAction: 60, authFailure: 20, agentApprovalStatus: 120 } } });
     // Unauthenticated floods count too, before authentication runs.
     for (let i = 0; i < 5; i += 1) expect((await supertest(global).get("/api/events")).status).toBe(401);
     expect((await request(global).get("/api/events")).status).toBe(429);
@@ -291,7 +291,7 @@ describe("M0: rate limits", () => {
     const defaults = loadSecurityConfig({});
     expect(defaults).toMatchObject({
       maxEvents: 1000,
-      rateLimits: { api: 600, session: 10, evaluate: 60, approvalAction: 60, authFailure: 20 },
+      rateLimits: { api: 600, session: 10, evaluate: 60, approvalAction: 60, authFailure: 20, agentApprovalStatus: 120 },
       sessionAbsoluteMs: 8 * 60 * MINUTE,
       sessionIdleMs: 30 * MINUTE,
       maxSessions: 10,

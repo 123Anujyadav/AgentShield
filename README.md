@@ -137,8 +137,8 @@ node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-10-31, M3-E E1-E3 with audit fixes): `npm test` passes 1,865 tests in 49
-files (agent-protocol 98 in 1 file, engine 728 in 9, websec 395 in 13, API 621 in 23, web 23 in 3), with
+Current verified state (2026-10-31, M3-E E4): `npm test` passes 1,894 tests in 50 files
+(agent-protocol 98 in 1 file, engine 728 in 9, websec 395 in 13, API 650 in 24, web 23 in 3), with
 none failed or skipped, and `npm run build` and `npm run typecheck` pass for all five workspaces. `npm audit` needs
 network access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 
@@ -582,8 +582,10 @@ the current Windows user. The agent is
 taken from the credential, never from the request: a different `agentId` in the body is a `403`
 recorded as a security event, and nothing is evaluated.
 
-- **Agents can only use custom `POST /api/evaluate`.** Every other route is operator-only,
-  including approve and reject, so an agent can never approve its own action.
+- **Agents can only use custom `POST /api/evaluate`, and (M3-E E4) read the status of their
+  own approvals** at `GET /api/agent/approvals[/:id]`. That view is minimal; another agent's
+  approval gets the same 404 as an unknown id. Every other route is operator-only, including
+  approve and reject, so an agent can never approve its own action.
 - **The operator** (the API token or a dashboard session) runs the seeded scenarios and
   approves, but cannot make custom evaluations for an agent.
 - **Invalid credentials** (unknown, wrong, revoked, expired or malformed) all get the same `401`.

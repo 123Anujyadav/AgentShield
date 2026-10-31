@@ -1,6 +1,6 @@
 import cors from "cors";
 import express from "express";
-import type { ActivityEvent, PendingApproval, ProposedAction, RequestActor, RequestedIntent, SimulatedExecution, UntrustedContent, UserIntent } from "@agentshield/engine";
+import type { ActivityEvent, ApprovalStatus, PendingApproval, ProposedAction, RequestActor, RequestedIntent, SimulatedExecution, UntrustedContent, UserIntent } from "@agentshield/engine";
 import { getScenario, MAX_SCAN_LENGTH, POLICY_BLOCK_RISK, SCENARIOS } from "@agentshield/engine";
 import { CREDENTIAL_PREFIX, emptyCredentialStore, SIGNING_CREDENTIAL_PREFIX, type CredentialStore } from "./agents/credentials.js";
 import { createNonceCache, type NonceCache } from "./agents/nonce-cache.js";
@@ -10,7 +10,11 @@ import { builtInPolicyStore, type PolicyStore } from "./policies/store.js";
 import {
   ApprovalCapacityError,
   createApprovalStore,
+  AGENT_APPROVAL_PAGE_DEFAULT,
+  AGENT_APPROVAL_PAGE_MAX,
   expirePendingApprovals,
+  isOwnAgentApproval,
+  toAgentApprovalView,
   markExpiryEventRecorded,
   processApproval,
   processRejection,
@@ -132,6 +136,33 @@ function bodyParserClientError(error: unknown): { status: 400 | 413 | 415; categ
   return null;
 }
 
+/** An approval id as the store creates it (`apr-N`). */
+const APPROVAL_ID = /^apr-[1-9][0-9]{0,8}$/;
+const APPROVAL_STATUSES: ReadonlySet<string> = new Set<ApprovalStatus>(["PENDING", "EXECUTED", "REJECTED", "EXPIRED", "BLOCKED_ON_RECHECK", "APPROVED_NOT_EXECUTED"]);
+
+/**
+ * M3-E E4: the query of GET /api/agent/approvals. Only `limit` (1 to 50, default 20),
+ * `before` (an approval id: only older approvals are listed) and `status`, each given
+ * once as a plain string. Anything else makes the whole query invalid.
+ */
+function parseAgentApprovalQuery(query: Record<string, unknown>): { limit: number; before: number | null; status: string | null } | null {
+  for (const key of Object.keys(query)) if (key !== "limit" && key !== "before" && key !== "status") return null;
+  const { limit, before, status } = query;
+  if ([limit, before, status].some((value) => value !== undefined && typeof value !== "string")) return null;
+  const size = limit === undefined ? AGENT_APPROVAL_PAGE_DEFAULT : /^[1-9][0-9]?$/.test(limit as string) ? Number(limit) : Number.NaN;
+  if (!(size >= 1 && size <= AGENT_APPROVAL_PAGE_MAX)) return null;
+  if (before !== undefined && !APPROVAL_ID.test(before as string)) return null;
+  if (status !== undefined && !APPROVAL_STATUSES.has(status as string)) return null;
+  return { limit: size, before: before === undefined ? null : Number((before as string).slice(4)), status: (status as string | undefined) ?? null };
+}
+
+/** Routes an agent credential may use. Every other route is operator-only. */
+function agentMayUse(req: express.Request): boolean {
+  if (req.method === "POST" && req.path === "/evaluate") return true;
+  // M3-E E4: reading the agent's own approvals; the handlers decide what is visible.
+  return req.method === "GET" && /^\/agent\/approvals(?:\/[^/]+)?$/.test(req.path);
+}
+
 export interface AppDeps {
   simulator?: Simulator;
   approvalStore?: ApprovalStore;
@@ -250,14 +281,15 @@ export function createApp(deps: AppDeps = {}) {
   registerSessionRoutes(app, { apiToken, auth, sessions, limit, config: security });
   // Every /api route registered below, including future ones, requires authentication.
   app.use("/api", auth.requireAuth);
-  // M3-D: operator and agent separation. An agent credential is accepted on exactly one
-  // route, POST /api/evaluate (custom evaluations); every other route, including future
-  // ones and approve/reject, is operator-only. Agents can never approve their own actions.
+  // M3-D: operator and agent separation. An agent credential is accepted only on
+  // POST /api/evaluate and (M3-E E4) GET /api/agent/approvals[/:id]. Every other route,
+  // including future ones and approve/reject, is operator-only. Agents can never approve,
+  // reject or change an approval.
   // /api/session requests skip authentication, so they may arrive here with no caller; they are
   // not agents and fall through to the normal 404 (M3-D audit L1).
   app.use("/api", (req, res, next) => {
     const caller = res.locals.auth as Authentication | undefined;
-    if (caller?.kind !== "agent" || (req.method === "POST" && req.path === "/evaluate")) {
+    if (caller?.kind !== "agent" || agentMayUse(req)) {
       next();
       return;
     }
@@ -560,6 +592,56 @@ export function createApp(deps: AppDeps = {}) {
     expirePendingApprovals(approvalStore, new Date(), recordExpiryEvent);
     const approvals = [...approvalStore.records.values()].map(toPublicApproval).reverse();
     res.json({ approvals });
+  });
+
+  // M3-E E4: an agent reads its own approvals (status only). Agent credentials only, and the
+  // agent is always the credential's, never a parameter. Read rate is limited per agent.
+  const agentOnly: express.RequestHandler = (_req, res, next) => {
+    if ((res.locals.auth as Authentication).kind !== "agent") {
+      res.status(403).json({ error: "This route requires an agent credential.", reason: "agent-credential-required" });
+      return;
+    }
+    next();
+  };
+  const agentOf = (res: express.Response) => res.locals.auth as Extract<Authentication, { kind: "agent" }>;
+  const agentReadLimit = limit("agent-approval-status", security.rateLimits.agentApprovalStatus, (_req, res) => `agent:${agentOf(res).agentId}`);
+
+  app.get("/api/agent/approvals/:id", agentOnly, agentReadLimit, (req, res) => {
+    expirePendingApprovals(approvalStore, new Date(), recordExpiryEvent);
+    const id = req.params.id;
+    const record = typeof id === "string" && APPROVAL_ID.test(id) ? approvalStore.records.get(id) : undefined;
+    // One response for a malformed id, an unknown id, and another agent's or the operator's approval.
+    if (!record || !isOwnAgentApproval(record, agentOf(res).agentId)) {
+      res.status(404).json({ error: "Approval not found." });
+      return;
+    }
+    res.json({ approval: toAgentApprovalView(record) });
+  });
+
+  app.get("/api/agent/approvals", agentOnly, agentReadLimit, (req, res) => {
+    const query = parseAgentApprovalQuery(req.query as Record<string, unknown>);
+    if (!query) {
+      res.status(400).json({ error: "Invalid query. Allowed once each: limit (1-50), before (an approval id), status.", reason: "invalid-query" });
+      return;
+    }
+    expirePendingApprovals(approvalStore, new Date(), recordExpiryEvent);
+    // Newest first (ids grow with creation time). The store holds at most MAX_APPROVAL_RECORDS records.
+    const agentId = agentOf(res).agentId;
+    const records = [...approvalStore.records.values()];
+    const approvals: ReturnType<typeof toAgentApprovalView>[] = [];
+    let more = false;
+    for (let i = records.length - 1; i >= 0; i -= 1) {
+      const record = records[i]!;
+      if (!isOwnAgentApproval(record, agentId)) continue;
+      if (query.before !== null && Number(record.id.slice(4)) >= query.before) continue;
+      if (query.status !== null && record.status !== query.status) continue;
+      if (approvals.length === query.limit) {
+        more = true;
+        break;
+      }
+      approvals.push(toAgentApprovalView(record));
+    }
+    res.json({ approvals, nextCursor: more ? approvals.at(-1)!.id : null });
   });
 
   function approvalIdParam(req: express.Request, res: express.Response): string | null {

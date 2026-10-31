@@ -1,4 +1,4 @@
-import type { RequestHandler } from "express";
+import type { Request, RequestHandler, Response } from "express";
 
 /**
  * In-memory fixed-window rate limiter (M0). Counts requests per bucket and
@@ -13,7 +13,11 @@ export interface RateLimiterOptions {
   maxKeys?: number;
 }
 
-export type RateLimitFactory = (bucket: string, limit: number) => RequestHandler;
+/**
+ * `clientKey` (M3-E E4) counts requests per something other than the client address,
+ * for example per authenticated agent, so local agents do not share one allowance.
+ */
+export type RateLimitFactory = (bucket: string, limit: number, clientKey?: (req: Request, res: Response) => string) => RequestHandler;
 
 export function createRateLimiter(options: RateLimiterOptions): RateLimitFactory {
   const { windowMs, now } = options;
@@ -31,9 +35,9 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimitFactory
     }
   }
 
-  return (bucket, limit) => (req, res, next) => {
+  return (bucket, limit, clientKey) => (req, res, next) => {
     const current = now();
-    const key = `${bucket}|${req.socket.remoteAddress ?? "unknown"}`;
+    const key = `${bucket}|${clientKey ? clientKey(req, res) : (req.socket.remoteAddress ?? "unknown")}`;
     let window = windows.get(key);
     if (!window || current - window.start >= windowMs) {
       if (!window && windows.size >= maxKeys) prune(current);

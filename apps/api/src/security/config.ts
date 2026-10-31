@@ -22,6 +22,8 @@ export interface RateLimits {
   approvalAction: number;
   /** M3-D: failed Authorization-header attempts (operator token or agent credential). */
   authFailure: number;
+  /** M3-E E4: an agent's reads of its own approval status, counted per agent. */
+  agentApprovalStatus: number;
 }
 
 export interface SecurityConfig {
@@ -60,6 +62,7 @@ export function loadSecurityConfig(env: NodeJS.ProcessEnv = process.env): Securi
       evaluate: boundedInt(env.API_EVALUATE_RATE_LIMIT_PER_MINUTE, 60, 1, 1000),
       approvalAction: boundedInt(env.API_APPROVAL_RATE_LIMIT_PER_MINUTE, 60, 1, 1000),
       authFailure: boundedInt(env.API_AUTH_FAILURE_RATE_LIMIT_PER_MINUTE, 20, 1, 1000),
+      agentApprovalStatus: boundedInt(env.API_AGENT_APPROVAL_STATUS_RATE_LIMIT_PER_MINUTE, 120, 1, 1000),
     },
     sessionAbsoluteMs: boundedInt(env.API_SESSION_MAX_MINUTES, 480, 5, 1440) * MINUTE_MS,
     sessionIdleMs: boundedInt(env.API_SESSION_IDLE_MINUTES, 30, 1, 480) * MINUTE_MS,

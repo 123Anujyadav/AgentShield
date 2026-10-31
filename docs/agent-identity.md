@@ -6,8 +6,8 @@ browser, or a real agent.
 
 **Since M3-E E3, agents authenticate by signing each request** with their Ed25519 key
 (see Signed requests below). Legacy bearer credentials are disabled by default
-(`AGENT_BEARER_ALLOWED`, below). The agent SDK (E5) and agent approval-status routes (E4)
-are not implemented yet.
+(`AGENT_BEARER_ALLOWED`, below). Agents can read the status of their own approvals (E4,
+below). The agent SDK (E5) is not implemented yet.
 
 M3-C gave each agent a server-side policy, but the agent was whatever id the request
 named. With M3-D each agent has its own credential. The server works out the agent from
@@ -19,7 +19,7 @@ credential it holds.
 | | Operator | Agent |
 |---|---|---|
 | Authenticates with | the API token (`Authorization: Bearer <token>`) or a dashboard session | signed requests with its Ed25519 key (`Authorization: AGENTSHIELD-SIG-V1 ...`); or, only while `AGENT_BEARER_ALLOWED=true`, a legacy bearer credential (`Authorization: Bearer asag_<keyId>.<secret>`) |
-| Can use | every `/api` route except custom evaluations | `POST /api/evaluate` with a custom request, and nothing else |
+| Can use | every `/api` route except custom evaluations and `/api/agent/*` | `POST /api/evaluate` with a custom request, and `GET /api/agent/approvals[/:id]` for its own approvals; nothing else |
 | Seeded scenarios | yes (the dashboard) | no: `403 operator-required` |
 | Custom evaluations | no: `403 agent-credential-required` (no compatibility mode) | yes, as itself |
 | Approve or reject | yes: the only approver | no: `403 operator-required`, even for its own request |
@@ -297,14 +297,64 @@ reasons are `bad-header`, `before-startup`, `stale`, `future`, `content-encoding
 and `nonce-capacity`. The header, signature, nonce and any key material are never logged
 or echoed.
 
-**Where signed requests are accepted:** only on `POST /api/evaluate`; every other route
-answers `403 operator-required` to a signed agent. `GET /api/session` never verifies a
+**Where signed requests are accepted:** only on `POST /api/evaluate` and
+`GET /api/agent/approvals[/:id]`. Every other route answers `403 operator-required` to a
+signed agent. `GET /api/session` never verifies a
 signed header and uses no nonce.
 
 **The replay cache is in memory**, so it is per process and empty after a restart. The
 start-up fence closes that gap: any request captured before a restart carries an older
 timestamp and is refused. A request signed shortly before a restart and sent after it is
 refused too; the agent should sign it again.
+
+## An agent's own approvals (M3-E E4)
+
+An agent can follow its own CONFIRM decisions:
+
+```
+GET /api/agent/approvals/apr-12
+-> 200 {"approval":{"id":"apr-12","status":"PENDING","createdAt":"...","expiresAt":"...","executed":false,"pollAfterSeconds":2}}
+
+GET /api/agent/approvals?limit=20&before=apr-12&status=PENDING
+-> 200 {"approvals":[{...same fields...}],"nextCursor":"apr-7"}
+```
+
+- **Agent credentials only.** Operators get `403 agent-credential-required` and use
+  `/api/approvals`.
+- **The agent is always the credential's.** No query, path or body value can name it.
+  - `GET /api/agent/approvals` rejects any query parameter other than `limit`, `before`
+    and `status` (so `agentId` too) with `400`.
+  - `GET /api/agent/approvals/:id` ignores its query string entirely, so `?agentId=...`
+    changes nothing.
+- **What an agent sees.** Only approvals that one of its own credentials requested. Any of
+  the agent's credentials will do, so rotating a key keeps its history visible. An
+  operator-run seeded scenario is never visible to an agent, even one with the same agent
+  id.
+- **Not found.** An approval id that is unknown, malformed, another agent's or the
+  operator's always gets the same `404 {"error":"Approval not found."}`, so ids of other
+  approvals cannot be confirmed this way.
+- **The view** has exactly these fields: `id`, `status` (`PENDING`, `EXECUTED`,
+  `APPROVED_NOT_EXECUTED`, `REJECTED`, `EXPIRED`, `BLOCKED_ON_RECHECK`), `createdAt`,
+  `expiresAt`, `executed`, and `pollAfterSeconds` (2 while pending, otherwise `null`).
+  - Nothing else from the record is returned: not the intent, action, untrusted content,
+    findings, risk, policy reference, actor or credential details.
+  - An approval past its 15-minute expiry is reported as `EXPIRED` and recorded once, as
+    in the operator listing.
+- **Listing.**
+  - Newest first, at most 50 per page (20 by default).
+  - Pass the last id as `before` to get older approvals; `nextCursor` is null on the last
+    page.
+  - Only `limit`, `before` and `status` are accepted, each once. Anything else is a `400`.
+  - With `status`, the filter applies at the moment each page is read. An approval whose
+    status changes between two page requests is never returned twice. If it changes before
+    its page is reached, it no longer matches the filter and is left out; the unfiltered
+    listing still shows it with its new status. Only the agent's own approvals are ever
+    considered.
+- **Read-only.** There is no agent route to approve, reject, cancel or change an approval:
+  every such attempt is `403 operator-required`, and approving stays operator-only with the
+  M3-C and M3-D rechecks.
+- **Rate limit.** Reads are limited per agent (`API_AGENT_APPROVAL_STATUS_RATE_LIMIT_PER_MINUTE`,
+  default 120), so one agent cannot use up another's allowance.
 
 ## Identity on each request
 
@@ -387,7 +437,9 @@ If a credential may have leaked:
   Whoever holds it can sign as that agent until it is revoked or expires.
 - **The operator is fully trusted.** The operator issues credentials and approves
   actions; there is a single operator with no roles.
-- **Agents cannot yet read the status of their own approvals.** This is deferred to M3-E.
+- **Approval ids are sequential** (`apr-N`). An agent cannot read or list other agents'
+  approvals, but the gaps between its own ids show roughly how many approvals were
+  created in between.
 - **The API is plain HTTP on loopback**, so a local process able to capture loopback
   traffic could read credentials in transit.
 - **The failed-attempt limit is per client address.** Locally that is the whole machine,

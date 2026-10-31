@@ -1,5 +1,6 @@
 import type {
   AgentPolicyRef,
+  ApprovalStatus,
   EvaluationResult,
   PendingApproval,
   RequestActor,
@@ -194,6 +195,45 @@ export function publicExecution(execution: SimulatedExecution, actionType: strin
   if (shown === actionType) return execution;
   const hide = (text: string | null) => (text === null ? null : text.split(actionType).join(shown));
   return { ...execution, handler: hide(execution.handler), result: hide(execution.result), reason: hide(execution.reason) };
+}
+
+/**
+ * M3-E E4: everything an agent may see about one of its own approvals. Built field by
+ * field, so nothing else in the record (intent, action, findings, untrusted content,
+ * policy, actor or credential details) can reach an agent.
+ */
+export interface AgentApprovalView {
+  id: string;
+  status: ApprovalStatus;
+  createdAt: string;
+  expiresAt: string;
+  executed: boolean;
+  /** Seconds to wait before asking again while the approval is pending; null once it is final. */
+  pollAfterSeconds: number | null;
+}
+
+export const AGENT_APPROVAL_POLL_SECONDS = 2;
+export const AGENT_APPROVAL_PAGE_DEFAULT = 20;
+export const AGENT_APPROVAL_PAGE_MAX = 50;
+
+/**
+ * Whether an agent may see a record: one that an agent credential requested, for this
+ * agent. Any of the agent's credentials qualifies, so history survives rotation. An
+ * operator-run seeded scenario is never visible to an agent, even one with the same id.
+ */
+export function isOwnAgentApproval(record: ApprovalRecord, agentId: string): boolean {
+  return record.requestedBy?.kind === "agent" && record.agentId === agentId;
+}
+
+export function toAgentApprovalView(record: ApprovalRecord): AgentApprovalView {
+  return {
+    id: record.id,
+    status: record.status,
+    createdAt: record.createdAt,
+    expiresAt: record.expiresAt,
+    executed: record.execution?.executed === true,
+    pollAfterSeconds: record.status === "PENDING" ? AGENT_APPROVAL_POLL_SECONDS : null,
+  };
 }
 
 /** Public view never echoes the raw untrusted content or internal bookkeeping back. */
