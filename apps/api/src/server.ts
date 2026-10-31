@@ -2,6 +2,7 @@ import type { AddressInfo } from "node:net";
 import { createApp } from "./app.js";
 import { API_HOST } from "./host.js";
 import { loadLocalEnv } from "./load-env.js";
+import { loadPolicyStore, PolicyConfigError, type PolicyStore } from "./policies/store.js";
 import { loadOrCreateApiToken } from "./security/token.js";
 
 // Loads repo-root .env (git-ignored) if present. Never logs values.
@@ -10,9 +11,19 @@ loadLocalEnv();
 // The API token lives in the user profile, outside the repository. Only its path is printed.
 const tokenFile = loadOrCreateApiToken();
 
+// M3-C: server-side agent policies. An invalid AGENT_POLICY_FILE stops start-up (fail closed).
+let policyStore: PolicyStore;
+try {
+  policyStore = loadPolicyStore();
+} catch (error) {
+  const reason = error instanceof PolicyConfigError ? error.message : "unexpected error";
+  console.error(`agent-policy status=invalid-config reason=${reason}`);
+  process.exit(1);
+}
+
 const port = Number(process.env.PORT ?? 4000);
 // Loopback only (API_HOST), and every /api route requires the API token or a session.
-const server = createApp({ apiToken: tokenFile.token }).listen(port, API_HOST, () => {
+const server = createApp({ apiToken: tokenFile.token, policyStore }).listen(port, API_HOST, () => {
   const { address, port: boundPort } = server.address() as AddressInfo;
   console.log(`AgentShield API listening on http://${address}:${boundPort} (loopback only, API token required)`);
   console.log(`API token file${tokenFile.created ? " (created)" : ""}: ${tokenFile.path}`);

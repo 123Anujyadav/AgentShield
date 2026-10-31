@@ -1,4 +1,4 @@
-import type { Scenario } from "./types.js";
+import type { AgentPolicy, Scenario } from "./types.js";
 
 const sharedIntent = {
   id: "intent-summarize-document",
@@ -8,6 +8,16 @@ const sharedIntent = {
   allowedDestinations: ["simulated-workspace"],
 } as const;
 
+/** M3-C: the built-in policy for the seeded scenarios' agent. Same lists as their shared intent. */
+export const DEMO_AGENT_POLICY: AgentPolicy = {
+  agentId: "demo-summarizer",
+  version: 1,
+  description: "Built-in demo agent for the seeded scenarios: read a document and save a summary in the simulated workspace.",
+  allowedActions: [...sharedIntent.allowedActions],
+  deniedActions: [...sharedIntent.deniedActions],
+  allowedDestinations: [...sharedIntent.allowedDestinations],
+};
+
 /** U+200B ZERO WIDTH SPACE, built at runtime so this file holds no raw invisible character. */
 const ZERO_WIDTH_SPACE = String.fromCharCode(0x200b);
 
@@ -16,6 +26,7 @@ export const SCENARIOS: Scenario[] = [
     id: "benign-summary",
     label: "Benign: create summary",
     description: "Agent proposes creating a summary, which matches the user's explicit task.",
+    agentId: DEMO_AGENT_POLICY.agentId,
     intent: { ...sharedIntent, allowedActions: [...sharedIntent.allowedActions], deniedActions: [...sharedIntent.deniedActions], allowedDestinations: [...sharedIntent.allowedDestinations] },
     action: {
       type: "create_summary",
@@ -32,6 +43,7 @@ export const SCENARIOS: Scenario[] = [
     id: "forbidden-payment",
     label: "Forbidden: send payment",
     description: "Agent proposes a payment that the user never authorised and explicitly denied.",
+    agentId: DEMO_AGENT_POLICY.agentId,
     intent: { ...sharedIntent, allowedActions: [...sharedIntent.allowedActions], deniedActions: [...sharedIntent.deniedActions], allowedDestinations: [...sharedIntent.allowedDestinations] },
     action: {
       type: "send_payment",
@@ -50,6 +62,7 @@ export const SCENARIOS: Scenario[] = [
     label: "Injection: malicious document, permitted action",
     description:
       "The document contains injected instructions, but the proposed action (create_summary) itself matches intent. The scanner flags the content; policy requires confirmation instead of silently allowing or hard-blocking.",
+    agentId: DEMO_AGENT_POLICY.agentId,
     intent: { ...sharedIntent, allowedActions: [...sharedIntent.allowedActions], deniedActions: [...sharedIntent.deniedActions], allowedDestinations: [...sharedIntent.allowedDestinations] },
     action: {
       type: "create_summary",
@@ -66,6 +79,7 @@ export const SCENARIOS: Scenario[] = [
     id: "benign-security-article",
     label: "Benign: article about prompt injection",
     description: "Text discussing AI security. It should scan clean and the permitted summary action should be allowed.",
+    agentId: DEMO_AGENT_POLICY.agentId,
     intent: { ...sharedIntent, allowedActions: [...sharedIntent.allowedActions], deniedActions: [...sharedIntent.deniedActions], allowedDestinations: [...sharedIntent.allowedDestinations] },
     action: {
       type: "create_summary",
@@ -83,6 +97,7 @@ export const SCENARIOS: Scenario[] = [
     label: "Injection: invisible separators",
     description:
       "The document hides a request by using zero-width spaces (U+200B) in place of ordinary spaces. Simply deleting them would join the words and defeat word-based rules; the scanner reads them as separators and still flags the request. The summary action itself matches intent, so policy requires confirmation.",
+    agentId: DEMO_AGENT_POLICY.agentId,
     intent: { ...sharedIntent, allowedActions: [...sharedIntent.allowedActions], deniedActions: [...sharedIntent.deniedActions], allowedDestinations: [...sharedIntent.allowedDestinations] },
     action: {
       type: "create_summary",

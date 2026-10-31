@@ -129,10 +129,10 @@ node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-10-31): `npm test` passes 1,431 tests in 34 files (engine 708,
-websec 395, API 305, web 23), with none failed or skipped, and `npm run build` passes. `npm run typecheck`
-last passed on 2026-10-30. `npm audit` needs network access; it last reported 0 vulnerabilities on
-2026-10-26 and was not re-run for this update.
+Current verified state (2026-10-31, M3-C): `npm test` passes 1,523 tests in 37 files (engine 727
+in 9 files, websec 395 in 13, API 378 in 12, web 23 in 3), with none failed or skipped, and
+`npm run build` passes. `npm run typecheck` passed for all four workspaces on 2026-10-31. `npm audit` needs
+network access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 
 ## Demo outline (about four minutes, seeded synthetic scenarios only)
 
@@ -540,6 +540,24 @@ Advisory layer only. Deterministic policy remains authoritative.
   never as evidence that content is safe.
 - Only seeded synthetic scenario text is analysed. Do not send user documents or personal
   data to an external provider without explicit consent.
+
+## Agent policies (M3-C)
+
+Each evaluation is judged under a server-held policy for the agent it names, not under
+permissions the request supplies. A custom `POST /api/evaluate` sends `agentId`. A
+malformed id is a `400`. A missing or unconfigured agent is an audited BLOCK (risk 90): no
+approval is created and nothing executes. The request can only narrow the policy: allowed
+actions and destinations are intersected with it, denied actions are added to it, and an
+explicitly empty list grants nothing. Hard deny, the data-leak guard and the scanner still
+override any policy. Seeded scenarios run under the built-in `demo-summarizer` policy with
+unchanged results. Results, events and approvals record `agentId` and
+`agentPolicy: { agentId, version, sha256 }`. An approval whose policy has changed or been
+removed since the CONFIRM is blocked on recheck (`409`).
+
+Policies are optional configuration (`AGENT_POLICY_FILE`, strict JSON, read at start-up; an
+invalid file stops the API) and can be read at `GET /api/policies`, which is read-only.
+Agent ids are labels, not credentials: anyone with API access can name any configured
+agent. Schema, enforcement and limitations: [`docs/agent-policies.md`](docs/agent-policies.md).
 
 ## Website scanning (off by default)
 

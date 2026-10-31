@@ -1,7 +1,9 @@
 import cors from "cors";
 import express from "express";
-import type { ActivityEvent, PendingApproval, ProposedAction, SimulatedExecution, UntrustedContent, UserIntent } from "@agentshield/engine";
-import { evaluateAction, getScenario, MAX_SCAN_LENGTH, SCENARIOS } from "@agentshield/engine";
+import type { ActivityEvent, PendingApproval, ProposedAction, RequestedIntent, SimulatedExecution, UntrustedContent, UserIntent } from "@agentshield/engine";
+import { getScenario, MAX_SCAN_LENGTH, SCENARIOS } from "@agentshield/engine";
+import { evaluateForAgent, parseAgentId, recheckApproval } from "./policies/enforce.js";
+import { builtInPolicyStore, type PolicyStore } from "./policies/store.js";
 import {
   ApprovalCapacityError,
   createApprovalStore,
@@ -32,24 +34,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function parseIntent(value: unknown): UserIntent | null {
+/**
+ * What a request asks for (M3-C). Every list is optional: an omitted list inherits
+ * the agent's server-side policy; a present list can only narrow it, and an empty
+ * list grants nothing in that category.
+ */
+function parseIntent(value: unknown): RequestedIntent | null {
   if (!isRecord(value)) return null;
   if (typeof value.task !== "string" || !value.task.trim()) return null;
-  if (!Array.isArray(value.allowedActions) || !value.allowedActions.every((v) => typeof v === "string")) return null;
-  if (!Array.isArray(value.deniedActions) || !value.deniedActions.every((v) => typeof v === "string")) return null;
   if (value.id !== undefined && typeof value.id !== "string") return null;
-  if (
-    value.allowedDestinations !== undefined &&
-    (!Array.isArray(value.allowedDestinations) || !value.allowedDestinations.every((v) => typeof v === "string"))
-  ) {
-    return null;
-  }
+  const list = (field: unknown): string[] | undefined | null =>
+    field === undefined ? undefined : Array.isArray(field) && field.every((v) => typeof v === "string") ? (field as string[]) : null;
+  const allowedActions = list(value.allowedActions);
+  const deniedActions = list(value.deniedActions);
+  const allowedDestinations = list(value.allowedDestinations);
+  if (allowedActions === null || deniedActions === null || allowedDestinations === null) return null;
   return {
-    id: typeof value.id === "string" ? value.id : undefined,
+    ...(typeof value.id === "string" ? { id: value.id } : {}),
     task: value.task,
-    allowedActions: value.allowedActions,
-    deniedActions: value.deniedActions,
-    allowedDestinations: Array.isArray(value.allowedDestinations) ? value.allowedDestinations : undefined,
+    ...(allowedActions !== undefined ? { allowedActions } : {}),
+    ...(deniedActions !== undefined ? { deniedActions } : {}),
+    ...(allowedDestinations !== undefined ? { allowedDestinations } : {}),
   };
 }
 
@@ -97,6 +102,8 @@ function parseUntrustedContent(value: unknown): ParseResult {
 export interface AppDeps {
   simulator?: Simulator;
   approvalStore?: ApprovalStore;
+  /** M3-C: server-side agent policies. Defaults to the built-in demo agent only. */
+  policyStore?: PolicyStore;
   modelService?: ModelAnalysisService;
   modelConfig?: ModelConfig;
   /** Injectable so tests can fault-inject event writes. Defaults to a fresh in-memory list. */
@@ -120,6 +127,7 @@ export function createApp(deps: AppDeps = {}) {
   const events: ActivityEvent[] = deps.events ?? [];
   const simulator = deps.simulator ?? createSimulator();
   const approvalStore = deps.approvalStore ?? createApprovalStore();
+  const policyStore = deps.policyStore ?? builtInPolicyStore();
   const modelConfig = deps.modelConfig ?? loadModelConfig();
   const modelService =
     deps.modelService ?? new ModelAnalysisService(selectModelProvider(modelConfig), modelConfig);
@@ -144,13 +152,15 @@ export function createApp(deps: AppDeps = {}) {
     partial: Omit<ActivityEvent, "id" | "timestamp">,
   ): ActivityEvent {
     // Secret-shaped request metadata (destination, and since Phase I the
-    // action type, tool, and intent task) is never stored in the public event log.
+    // action type, tool, and intent task; since M3-C the agent id) is never stored in the public event log.
+    // Display only: policy lookup and enforcement use the original agent id.
     const safePartial = {
       ...partial,
       intentTask: redactSecretValue(partial.intentTask),
       actionType: redactSecretValue(partial.actionType),
       tool: redactSecretValue(partial.tool),
       destination: redactSecretValue(partial.destination),
+      ...(typeof partial.agentId === "string" ? { agentId: redactSecretValue(partial.agentId) } : {}),
     };
     const event: ActivityEvent = {
       id: `evt-${nextId++}`,
@@ -180,6 +190,24 @@ export function createApp(deps: AppDeps = {}) {
   // Every /api route registered below, including future ones, requires authentication.
   app.use("/api", auth.requireAuth);
   registerScanRoutes(app, { service: scanService, limit });
+
+  // M3-C: read-only view of the server-side agent policies. There is no write endpoint;
+  // policies change only by editing the policy file and restarting the server.
+  app.get("/api/policies", (_req, res) => {
+    const shown = (values: readonly string[]) => values.map(redactSecretValue);
+    res.json({
+      source: policyStore.source,
+      policies: policyStore.list().map(({ policy, ref }) => ({
+        agentId: ref.agentId,
+        version: ref.version,
+        sha256: ref.sha256,
+        description: policy.description === undefined ? null : redactSecretValue(policy.description),
+        allowedActions: shown(policy.allowedActions),
+        deniedActions: shown(policy.deniedActions),
+        allowedDestinations: shown(policy.allowedDestinations),
+      })),
+    });
+  });
 
   app.get("/api/scenarios", (_req, res) => {
     res.json({ scenarios: SCENARIOS });
@@ -216,7 +244,8 @@ export function createApp(deps: AppDeps = {}) {
     }
 
     let scenarioId: string | null = null;
-    let intent: UserIntent | null = null;
+    let agentId: string | null = null;
+    let requested: RequestedIntent | null = null;
     let action: ProposedAction | null = null;
     let untrustedContent: UntrustedContent | undefined;
 
@@ -227,14 +256,28 @@ export function createApp(deps: AppDeps = {}) {
         return;
       }
       scenarioId = scenario.id;
-      intent = scenario.intent;
+      agentId = scenario.agentId;
+      requested = scenario.intent;
       action = scenario.action;
       untrustedContent = scenario.untrustedContent;
     } else {
-      intent = parseIntent(body.intent);
+      // M3-C: an absent agentId is an unknown agent (denied below); a malformed one is a bad request.
+      const parsedAgent = parseAgentId(body.agentId);
+      if (!parsedAgent.ok) {
+        res.status(400).json({
+          error: "agentId must be a lowercase identifier: a-z or 0-9 first, then a-z, 0-9, '.', '_' or '-', at most 64 characters.",
+          reason: "invalid-agent-id",
+        });
+        return;
+      }
+      agentId = parsedAgent.agentId;
+      requested = parseIntent(body.intent);
       action = parseAction(body.action);
-      if (!intent || !action) {
-        res.status(400).json({ error: "Provide scenarioId, or intent {task, allowedActions, deniedActions} and action {type, tool, destination, summary}." });
+      if (!requested || !action) {
+        res.status(400).json({
+          error:
+            "Provide scenarioId, or agentId, intent {task, and optionally allowedActions, deniedActions, allowedDestinations} and action {type, tool, destination, summary}.",
+        });
         return;
       }
       const parsed = parseUntrustedContent(body.untrustedContent);
@@ -245,9 +288,13 @@ export function createApp(deps: AppDeps = {}) {
       untrustedContent = parsed.value;
     }
 
+    // The agent's server-side policy is authoritative (M3-C): the request can only
+    // narrow it, and an unknown agent is an audited default-deny BLOCK.
     // userApproved in the evaluate body is ignored for execution: approval only
     // happens through the approval endpoints against a server-created record.
-    const evaluation = evaluateAction({ intent, action, untrustedContent });
+    const { evaluation, effectiveIntent } = evaluateForAgent(policyStore, agentId, requested, action, untrustedContent);
+    const intent: UserIntent = effectiveIntent ?? { task: requested.task, allowedActions: [], deniedActions: [], allowedDestinations: [] };
+    const agentFields = { agentId, agentPolicy: evaluation.agentPolicy ?? null };
 
     let execution: SimulatedExecution = {
       executed: false,
@@ -272,6 +319,9 @@ export function createApp(deps: AppDeps = {}) {
           action,
           untrustedContent,
           evaluation,
+          agentId,
+          requestedIntent: requested,
+          agentPolicy: evaluation.agentPolicy ?? null,
         });
       } catch (error) {
         if (!(error instanceof ApprovalCapacityError)) throw error;
@@ -287,6 +337,7 @@ export function createApp(deps: AppDeps = {}) {
           findings: evaluation.findings,
           explanation: "Confirmation required, but the approval queue is full. Nothing was executed and no approval was created.",
           lifecycle: "CONFIRM_NOT_QUEUED",
+          ...agentFields,
         });
         res.status(503).json({
           error: "The approval queue is full. Approve, reject or let pending approvals expire, then try again. Nothing was executed.",
@@ -312,6 +363,7 @@ export function createApp(deps: AppDeps = {}) {
       explanation: evaluation.explanation,
       approvalId: pendingApproval?.id,
       lifecycle: evaluation.decision === "ALLOW" ? (execution.executed ? "SIMULATED_EXECUTED" : "EVALUATED") : evaluation.decision === "CONFIRM" ? "PENDING_CONFIRMATION" : "BLOCKED",
+      ...agentFields,
     });
     // Advisory only: model analysis runs after the deterministic decision and
     // can never change decision, riskScore, execution, or approval state.
@@ -319,6 +371,7 @@ export function createApp(deps: AppDeps = {}) {
       ? await modelService.analyze(untrustedContent.text)
       : failedAnalysis("mock", "mock (deterministic, offline)", "not-scanned", "unavailable");
 
+    // The effective intent is not echoed: it can carry raw request metadata (Phase I redaction applies to events and approvals).
     res.json({ evaluation, event, executed: execution.executed, execution, pendingApproval, modelAnalysis });
     } catch (error) {
       next(error);
@@ -347,6 +400,8 @@ export function createApp(deps: AppDeps = {}) {
         "Approval expiry detected on review: the record passed its 15-minute expiry and no handler was invoked. Event time is detection time, not the exact expiry instant.",
       approvalId: approval.id,
       lifecycle: "EXPIRED",
+      agentId: approval.agentId ?? null,
+      agentPolicy: approval.agentPolicy ?? null,
     });
   }
 
@@ -391,8 +446,7 @@ export function createApp(deps: AppDeps = {}) {
     if (!id || !hasValidBody(req, res)) return;
     // Any client-supplied action/findings/score in the body is ignored on purpose.
     const storedType = approvalStore.records.get(id)?.action.type ?? "";
-    const outcome = processApproval(approvalStore, id, (record) =>
-      evaluateAction({ intent: record.intent, action: record.action, untrustedContent: record.untrustedContent }),
+    const outcome = processApproval(approvalStore, id, (record) => recheckApproval(policyStore, record),
       simulator,
     );
     if (outcome.kind === "not-found") {
@@ -421,6 +475,8 @@ export function createApp(deps: AppDeps = {}) {
         explanation: "Approval rejected by policy recheck: current policy returns BLOCK. Nothing executed.",
         approvalId: id,
         lifecycle: "BLOCKED_ON_RECHECK",
+        agentId: outcome.approval.agentId ?? null,
+        agentPolicy: outcome.recheck.agentPolicy ?? null,
       });
       res.status(409).json({ error: "Policy recheck returned BLOCK. Approval rejected; nothing executed.", approval: outcome.approval, executed: false });
       return;
@@ -440,6 +496,8 @@ export function createApp(deps: AppDeps = {}) {
         : `Approved, but simulated execution did not run: ${execution.reason}`,
       approvalId: id,
       lifecycle: outcome.execution.executed ? "SIMULATED_EXECUTED" : "APPROVED_NOT_EXECUTED",
+      agentId: outcome.approval.agentId ?? null,
+      agentPolicy: outcome.recheck.agentPolicy ?? null,
     });
     res.json({ approval: outcome.approval, execution, executed: execution.executed });
   });
@@ -473,6 +531,8 @@ export function createApp(deps: AppDeps = {}) {
       explanation: "Rejected by user. No handler invoked.",
       approvalId: id,
       lifecycle: "REJECTED",
+      agentId: outcome.approval.agentId ?? null,
+      agentPolicy: outcome.approval.agentPolicy ?? null,
     });
     res.json({ approval: outcome.approval, executed: false });
   });

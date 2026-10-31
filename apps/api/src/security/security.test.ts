@@ -5,7 +5,7 @@ import supertest from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { ActivityEvent } from "@agentshield/engine";
 import { createApp, type AppDeps } from "../app.js";
-import { createTestApp, request, TEST_API_TOKEN } from "../test-support.js";
+import { createTestApp, request, TEST_AGENT_ID, TEST_API_TOKEN } from "../test-support.js";
 import { SESSION_COOKIE } from "./auth.js";
 import { loadSecurityConfig, WEB_ORIGINS } from "./config.js";
 import { hostnameOf } from "./request-guards.js";
@@ -64,7 +64,7 @@ describe("M0: Host header validation", () => {
       }
     }
     // A rebinding page cannot reach a write route either, even with a valid token.
-    const write = await request(app).post("/api/evaluate").set("Host", "rebind.attacker.test").send(benignEvaluate);
+    const write = await request(app).post("/api/evaluate").set("Host", "rebind.attacker.test").send({ agentId: TEST_AGENT_ID, ...benignEvaluate });
     expect(write.status).toBe(403);
   });
 });
@@ -74,7 +74,7 @@ describe("M0: Origin and CORS", () => {
     const app = createTestApp();
     for (const origin of ["https://evil.example", "http://localhost:5174", "null"]) {
       expect((await request(app).get("/api/events").set("Origin", origin)).status, origin).toBe(403);
-      expect((await request(app).post("/api/evaluate").set("Origin", origin).send(benignEvaluate)).status, origin).toBe(403);
+      expect((await request(app).post("/api/evaluate").set("Origin", origin).send({ agentId: TEST_AGENT_ID, ...benignEvaluate })).status, origin).toBe(403);
     }
     for (const origin of WEB_ORIGINS) {
       const res = await request(app).get("/api/events").set("Origin", origin);
@@ -198,12 +198,12 @@ describe("M0: login and session cookie", () => {
     const { app } = sessionApp();
     const cookie = await login(app);
     expect((await supertest(app).get("/api/events").set("Cookie", cookie)).status).toBe(200);
-    expect((await supertest(app).post("/api/evaluate").set("Cookie", cookie).set("Origin", WEB_ORIGIN).send(benignEvaluate)).status).toBe(200);
-    const noOrigin = await supertest(app).post("/api/evaluate").set("Cookie", cookie).send(benignEvaluate);
+    expect((await supertest(app).post("/api/evaluate").set("Cookie", cookie).set("Origin", WEB_ORIGIN).send({ agentId: TEST_AGENT_ID, ...benignEvaluate })).status).toBe(200);
+    const noOrigin = await supertest(app).post("/api/evaluate").set("Cookie", cookie).send({ agentId: TEST_AGENT_ID, ...benignEvaluate });
     expect([noOrigin.status, noOrigin.body]).toEqual([403, { error: "Origin not allowed." }]);
-    expect((await supertest(app).post("/api/evaluate").set("Cookie", cookie).set("Origin", "https://evil.example").send(benignEvaluate)).status).toBe(403);
+    expect((await supertest(app).post("/api/evaluate").set("Cookie", cookie).set("Origin", "https://evil.example").send({ agentId: TEST_AGENT_ID, ...benignEvaluate })).status).toBe(403);
     // Bearer clients (scripts, tests) do not need an Origin.
-    expect((await supertest(app).post("/api/evaluate").set("Authorization", BEARER).send(benignEvaluate)).status).toBe(200);
+    expect((await supertest(app).post("/api/evaluate").set("Authorization", BEARER).send({ agentId: TEST_AGENT_ID, ...benignEvaluate })).status).toBe(200);
   });
 
   it("a session ends after 30 idle minutes, and after 8 hours however active it is", async () => {
@@ -268,8 +268,8 @@ describe("M0: rate limits", () => {
       now: time.now,
       security: { rateLimits: { api: 1000, session: 10, evaluate: 3, approvalAction: 2 } },
     });
-    for (let i = 0; i < 3; i += 1) expect((await request(app).post("/api/evaluate").send(benignEvaluate)).status).toBe(200);
-    expect((await request(app).post("/api/evaluate").send(benignEvaluate)).status).toBe(429);
+    for (let i = 0; i < 3; i += 1) expect((await request(app).post("/api/evaluate").send({ agentId: TEST_AGENT_ID, ...benignEvaluate })).status).toBe(200);
+    expect((await request(app).post("/api/evaluate").send({ agentId: TEST_AGENT_ID, ...benignEvaluate })).status).toBe(429);
     // Reads are not affected by the evaluate limit.
     expect((await request(app).get("/api/events")).status).toBe(200);
     // approve and reject share one bucket.
@@ -277,7 +277,7 @@ describe("M0: rate limits", () => {
     expect((await request(app).post("/api/approvals/apr-1/reject").send({})).status).toBe(404);
     expect((await request(app).post("/api/approvals/apr-1/approve").send({})).status).toBe(429);
     time.advance(MINUTE);
-    expect((await request(app).post("/api/evaluate").send(benignEvaluate)).status).toBe(200);
+    expect((await request(app).post("/api/evaluate").send({ agentId: TEST_AGENT_ID, ...benignEvaluate })).status).toBe(200);
 
     const global = createTestApp({ now: time.now, security: { rateLimits: { api: 5, session: 10, evaluate: 60, approvalAction: 60 } } });
     // Unauthenticated floods count too, before authentication runs.
@@ -310,11 +310,11 @@ describe("M0: bounded event storage", () => {
   it("keeps only the newest events, newest first, and still redacts secret-shaped values", async () => {
     const events: ActivityEvent[] = [];
     const app = createTestApp({ events, security: { maxEvents: 5 } });
-    for (let i = 0; i < 7; i += 1) await request(app).post("/api/evaluate").send(benignEvaluate);
+    for (let i = 0; i < 7; i += 1) await request(app).post("/api/evaluate").send({ agentId: TEST_AGENT_ID, ...benignEvaluate });
     const marker = "fakeBenchmarkDestEvent123456";
     await request(app)
       .post("/api/evaluate")
-      .send({
+      .send({ agentId: TEST_AGENT_ID,
         intent: { task: "Summarize", allowedActions: ["create_summary"], deniedActions: ["create_summary"], allowedDestinations: [] },
         action: { type: "create_summary", tool: "simulated.workspace.createSummary", destination: `api_key=${marker}`, summary: "Create" },
       });

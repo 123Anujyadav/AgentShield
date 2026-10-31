@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "policies": [
+    {
+      "agentId": "demo-summarizer",
+      "version": 1,
+      "description": "Built-in demo agent for the seeded scenarios: read a document and save a summary in the simulated workspace.",
+      "allowedActions": ["read_document", "create_summary"],
+      "deniedActions": ["send_payment", "delete_data", "send_external_message"],
+      "allowedDestinations": ["simulated-workspace"]
+    },
+    {
+      "agentId": "report-writer",
+      "version": 1,
+      "description": "Example only: may read documents and create reports, never send anything out.",
+      "allowedActions": ["read_document", "create_report"],
+      "deniedActions": ["send_email", "send_external_message"],
+      "allowedDestinations": ["simulated-workspace"]
+    }
+  ]
+}

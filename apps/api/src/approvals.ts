@@ -1,6 +1,8 @@
 import type {
+  AgentPolicyRef,
   EvaluationResult,
   PendingApproval,
+  RequestedIntent,
   ProposedAction,
   SimulatedExecution,
   UntrustedContent,
@@ -24,6 +26,8 @@ export class ApprovalCapacityError extends Error {
 /** Internal record: public approval fields plus server-only bookkeeping. */
 export interface ApprovalRecord extends PendingApproval {
   untrustedContent?: UntrustedContent;
+  /** M3-C, server-only: what the request asked for, re-narrowed against the CURRENT policy on recheck. */
+  requestedIntent?: RequestedIntent;
   /** True while the EXPIRED lifecycle event still has to be written successfully. */
   expiryEventPending?: boolean;
 }
@@ -88,6 +92,10 @@ export function createPendingApproval(
     action: ProposedAction;
     untrustedContent?: UntrustedContent;
     evaluation: EvaluationResult;
+    /** M3-C: the agent, what the request asked for, and the policy the CONFIRM was decided under. */
+    agentId?: string | null;
+    requestedIntent?: RequestedIntent;
+    agentPolicy?: AgentPolicyRef | null;
   },
   now = new Date(),
 ): PendingApproval {
@@ -109,6 +117,9 @@ export function createPendingApproval(
     explanation: input.evaluation.explanation,
     execution: null,
     untrustedContent: input.untrustedContent ? clone(input.untrustedContent) : undefined,
+    ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
+    ...(input.agentPolicy !== undefined ? { agentPolicy: input.agentPolicy === null ? null : { ...input.agentPolicy } } : {}),
+    ...(input.requestedIntent !== undefined ? { requestedIntent: clone(input.requestedIntent) } : {}),
   };
   store.records.set(record.id, record);
   return toPublicApproval(record);
@@ -179,7 +190,8 @@ export function publicExecution(execution: SimulatedExecution, actionType: strin
 
 /** Public view never echoes the raw untrusted content or internal bookkeeping back. */
 export function toPublicApproval(record: ApprovalRecord): PendingApproval {
-  const { untrustedContent: _ignored, expiryEventPending: _pending, ...rest } = record;
+  // Server-only fields never reach clients (M3-C adds the requested intent).
+  const { untrustedContent: _ignored, expiryEventPending: _pending, requestedIntent: _requested, ...rest } = record;
   const pub = clone(rest);
   // Phase I: secret-shaped request metadata is shown as [REDACTED].
   if (pub.execution) pub.execution = publicExecution(pub.execution, record.action.type);
