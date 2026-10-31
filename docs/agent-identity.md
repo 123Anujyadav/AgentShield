@@ -1,8 +1,13 @@
-# Agent identity (M3-D)
+# Agent identity (M3-D, with M3-E E2 credential schemes and E3 signed requests)
 
 Status: implemented and verified with offline unit, CLI and route tests, plus Windows
 permission checks on temporary files. Not yet exercised against a running server, a
 browser, or a real agent.
+
+**Since M3-E E3, agents authenticate by signing each request** with their Ed25519 key
+(see Signed requests below). Legacy bearer credentials are disabled by default
+(`AGENT_BEARER_ALLOWED`, below). The agent SDK (E5) and agent approval-status routes (E4)
+are not implemented yet.
 
 M3-C gave each agent a server-side policy, but the agent was whatever id the request
 named. With M3-D each agent has its own credential. The server works out the agent from
@@ -13,7 +18,7 @@ credential it holds.
 
 | | Operator | Agent |
 |---|---|---|
-| Authenticates with | the API token (`Authorization: Bearer <token>`) or a dashboard session | its credential (`Authorization: Bearer asag_<keyId>.<secret>`) |
+| Authenticates with | the API token (`Authorization: Bearer <token>`) or a dashboard session | signed requests with its Ed25519 key (`Authorization: AGENTSHIELD-SIG-V1 ...`); or, only while `AGENT_BEARER_ALLOWED=true`, a legacy bearer credential (`Authorization: Bearer asag_<keyId>.<secret>`) |
 | Can use | every `/api` route except custom evaluations | `POST /api/evaluate` with a custom request, and nothing else |
 | Seeded scenarios | yes (the dashboard) | no: `403 operator-required` |
 | Custom evaluations | no: `403 agent-credential-required` (no compatibility mode) | yes, as itself |
@@ -32,13 +37,31 @@ handlers, so routes added later are operator-only by default.
 
 ## Credentials
 
-A credential is `asag_<keyId>.<secret>`, 65 characters:
+Every credential has a public `keyId`: 16 lower-case hex digits (8 random bytes), like an
+access key id. It appears in `list`, logs and operator events. There are two schemes, and
+they are never interchangeable.
 
-- `keyId`: 16 lower-case hex digits (8 random bytes), a public identifier like an access
-  key id. It appears in `list`, logs and operator events.
-- `secret`: 43 base64url characters (32 bytes from `crypto.randomBytes`, 256 bits).
+### Ed25519 (the default since M3-E E2)
 
-The server stores only `sha256("agentshield-agent-credential-v1\0" + keyId + "\0" + secret)`.
+The CLI generates an Ed25519 key pair with `node:crypto`.
+
+- **The store keeps only the public key**: the raw 32 bytes in unpadded base64url.
+- **The agent keeps the private key**, as `asag2_<keyId>.<key>` (87 characters). `<key>`
+  is the private key's PKCS#8 DER encoding (48 bytes, RFC 8410) in unpadded base64url.
+  Node loads it with
+  `crypto.createPrivateKey({ key: Buffer.from(key, "base64url"), format: "der", type: "pkcs8" })`.
+- **The private key never leaves the agent machine.** It is used to sign requests
+  (see Signed requests) and is never sent to the API. A bearer token starting with `asag2_`
+  is refused without being compared with anything, and the API logs
+  `reason=private-key-sent-as-bearer keyId=<keyId> action=rotate-this-credential` so the
+  operator knows to replace that key.
+
+### Legacy bearer (M3-D)
+
+A legacy bearer credential is `asag_<keyId>.<secret>`, 65 characters. The secret is 43
+base64url characters (32 bytes from `crypto.randomBytes`, 256 bits), sent with every
+request. Bearer credentials authenticate only while `AGENT_BEARER_ALLOWED=true`. The
+server stores only `sha256("agentshield-agent-credential-v1\0" + keyId + "\0" + secret)`.
 The fixed prefix separates this from any other use of SHA-256, and including the key id
 means two records' hashes cannot be swapped. With a 256-bit random secret a fast hash is
 enough: guessing a secret from its hash is not feasible, so a slow password hash would
@@ -49,33 +72,63 @@ key ids exist.
 ## The credential store
 
 `%LOCALAPPDATA%\AgentShield\agent-credentials.json` (next to the API token), or the path
-in `AGENT_CREDENTIAL_FILE`. It never holds a secret:
+in `AGENT_CREDENTIAL_FILE`. It never holds a secret or a private key. Schema 2 (written by
+the CLI since M3-E E2) records each credential's scheme:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "credentials": [
     {
+      "scheme": "ed25519",
       "keyId": "3f9a1c2b7d4e6f80",
       "agentId": "report-writer",
-      "sha256": "<64 lower-case hex digits>",
+      "publicKey": "<43 base64url characters: the raw 32-byte public key>",
       "label": "nightly report job",
       "createdAt": "2026-11-01T09:00:00.000Z",
       "expiresAt": "2027-01-30T09:00:00.000Z",
+      "revokedAt": null
+    },
+    {
+      "scheme": "bearer",
+      "keyId": "0a1b2c3d4e5f6a7b",
+      "agentId": "legacy-agent",
+      "sha256": "<64 lower-case hex digits>",
+      "label": null,
+      "createdAt": "2026-10-01T09:00:00.000Z",
+      "expiresAt": "2026-12-30T09:00:00.000Z",
       "revokedAt": null
     }
   ]
 }
 ```
 
+**Schema 1** (M3-D) is still read.
+- Its records have no `scheme` field and keep their original meaning: bearer. They are
+  never reinterpreted as Ed25519.
+- The first CLI change to the file rewrites it as schema 2, with the same records marked
+  `"scheme": "bearer"` and every other field unchanged.
+
 Validation is strict:
 
-- Every field is required and no other field is allowed.
+- `scheme` is exactly `ed25519` or `bearer` (schema 2). An Ed25519 record has `publicKey`
+  and no `sha256`; a bearer record has `sha256` and no `publicKey`. A schema 1 record has
+  neither `scheme` nor `publicKey`.
+- A public key must be canonical unpadded base64url of exactly 32 bytes.
+  - Those bytes must be the canonical encoding of a point on the curve (y below p, no
+    "negative zero"), decoded as RFC 8032 section 5.1.3 specifies.
+  - The point must not be one of the eight small-order points (the same list libsodium
+    uses), and Node must accept it as an Ed25519 key.
+  - Node alone accepts small-order points. With one of them as a public key, a fixed
+    signature verifies for every message, so such a key makes the store invalid.
+- Every field is required and no other field is allowed (so, for example, a `privateKey`
+  field makes the store invalid).
 - `agentId` follows the M3-C pattern.
 - Timestamps are ISO 8601 UTC with milliseconds. `expiresAt` is after `createdAt` and at
   most 365 days later.
-- Duplicate key ids and duplicate hashes are refused.
-- An agent can have at most 4 active credentials (revoked and expired ones do not count).
+- Duplicate key ids, duplicate hashes and duplicate public keys are refused.
+- An agent can have at most 4 active credentials of either scheme combined (revoked and
+  expired ones do not count).
 - The file can be at most 256 KB and hold at most 1,000 credentials.
 
 | Situation | Result |
@@ -109,23 +162,29 @@ set, nothing is written. On other systems the file mode is 0600.
 
 ```powershell
 npm run agent-credential -w @agentshield/api -- create --agent report-writer --label "nightly report job"
-npm run agent-credential -w @agentshield/api -- create --agent report-writer --days 30 --out C:\secure\report-writer.credential
+npm run agent-credential -w @agentshield/api -- create --agent report-writer --days 30 --out C:\secure\report-writer.key
 npm run agent-credential -w @agentshield/api -- list
 npm run agent-credential -w @agentshield/api -- revoke --key 3f9a1c2b7d4e6f80
 npm run agent-credential -w @agentshield/api -- rotate --key 3f9a1c2b7d4e6f80 [--revoke-old]
 ```
 
+`create` and `rotate` issue Ed25519 credentials. `--scheme bearer` issues a legacy bearer
+credential instead, and is refused unless `AGENT_BEARER_ALLOWED=true` (see migration below).
+
 Every command takes `--file <store>`. The CLI reads `AGENT_CREDENTIAL_FILE` from `.env`
 the same way the server does, so both use the same store.
 
-- **`create`** prints the credential exactly once, on standard output. With `--out` it
-  writes the credential to a new file readable only by you and does not print it. It
-  never replaces an existing file. The default expiry is 90 days; `--days` accepts 1 to
-  365.
-- **Delivery.** Move the credential to the agent's secret storage straight away and clear
-  your terminal. No command takes a secret as an argument, and none prints one except
-  `create` and `rotate` (once).
-- **`list`** shows key id, agent, status, label and dates. It never shows a hash or secret.
+- **`create`** prints the private key (`asag2_...`) exactly once, on standard output.
+  - With `--out` it writes the key to a new file and does not print it. The file is
+    restricted to you before any key material is written, and an existing file is never
+    replaced.
+  - The default expiry is 90 days; `--days` accepts 1 to 365.
+- **Delivery.** Move the key to the agent machine's secret storage straight away and clear
+  your terminal.
+  - No command takes a key or secret as an argument.
+  - None prints one, except `create` and `rotate` (once).
+- **`list`** shows key id, agent, scheme, status, label and dates. It never shows a hash, a
+  public key, a private key or a secret.
 - The CLI validates the store before every write, refuses to write over an invalid store,
   and keeps revoked records for the audit trail. A lock file stops two commands from
   changing the store at once. If a command was interrupted, delete the `.lock` file next
@@ -145,6 +204,107 @@ the same way the server does, so both use the same store.
   execute. Approving it returns `409 BLOCKED_ON_RECHECK` with rule
   `identity.credential-invalid`, and nothing runs. Rotating with `--revoke-old` therefore
   also stops the old credential's pending approvals.
+
+## Legacy bearer migration (`AGENT_BEARER_ALLOWED`)
+
+`AGENT_BEARER_ALLOWED` is off unless it is exactly `true` (so `TRUE`, `1` or ` true` all
+leave it off).
+
+**While it is off (the default):**
+- Bearer credentials, including every M3-D schema 1 record, still load and stay listed,
+  but they do not authenticate. The API returns the usual `401` and logs
+  `reason=bearer-disabled`.
+- At start-up and on every reload, the API warns how many active bearer credentials
+  cannot be used (`reason=bearer-disabled activeBearerCredentials=N`).
+- The CLI refuses `--scheme bearer`.
+
+**Ed25519 credentials do not depend on this setting at all.**
+
+To migrate an agent from bearer to Ed25519:
+
+1. If existing bearer agents must keep working in the meantime, set
+   `AGENT_BEARER_ALLOWED=true` temporarily and restart the API. It logs
+   `reason=bearer-allowed` at start-up as a reminder.
+2. For each bearer credential, run `rotate --key <bearer keyId>`. This issues an Ed25519
+   key for the same agent. Add `--revoke-old` to revoke the bearer credential in the same
+   step, or revoke it once the agent signs its requests.
+3. Remove `AGENT_BEARER_ALLOWED` (or set it to anything but `true`) and restart. Bearer
+   is then refused again.
+
+Nothing is converted automatically: a bearer record is never turned into an Ed25519 key.
+
+## Signed requests (M3-E E3)
+
+An agent signs each request with its Ed25519 private key and sends one header:
+
+```
+Authorization: AGENTSHIELD-SIG-V1 keyId="<keyId>", ts="<Unix ms>", nonce="<16 random bytes, base64url>", sig="<Ed25519 signature, base64url>"
+```
+
+The header format and the signed bytes are defined once, in `@agentshield/agent-protocol`
+(`packages/agent-protocol/src/canonical.ts`). The server verifies with that same code. The
+signature covers:
+- the method;
+- the `Host` header (lower-cased);
+- the exact request target (path and query, as sent, not normalised);
+- the timestamp, the nonce and the key id;
+- the SHA-256 of the exact raw body bytes.
+
+The server checks, in this order:
+
+1. **Header.** The exact format, at most 512 characters. A header with this scheme is only
+   ever checked as a signature: never as a bearer token, never against the operator token,
+   and never with a fallback to a dashboard cookie.
+2. **Timestamp.** It must not be earlier than the moment this API process started (the
+   start-up fence), and must be within the allowed clock skew of the server clock (default
+   ±30 seconds). The skew is set with `AGENT_SIGNATURE_MAX_SKEW_SECONDS`: a whole number
+   from 5 to 300; unset or empty means 30, and any other value stops the API at start-up.
+3. **Body.**
+   - The raw bytes are kept as received, before JSON parsing, within the existing 32 KB
+     limit (a larger body is refused with `413` before authentication).
+   - Other body errors also get fixed text before authentication: malformed JSON or a
+     malformed compressed body gets `400`, and an unsupported charset or
+     `Content-Encoding` gets `415`. Parser messages are never returned or logged.
+   - A body that was not read as JSON, and any `Content-Encoding` other than `identity`,
+     are refused.
+4. **Canonical request**, built from what was actually received.
+5. **Key.** The key id must name an active Ed25519 credential: not unknown, revoked,
+   expired, a bearer key, or unverifiable because the store is invalid. One Ed25519
+   verification always runs, against a dummy key when the key id is not usable, so
+   response time does not reveal which key ids exist.
+6. **Signature.** `crypto.verify` (Ed25519) over the canonical bytes. The signature is
+   accepted only if its R is not a small-order point and its S is below the group order,
+   as libsodium also requires. This is checked in addition to the verification, never
+   instead of it.
+7. **Replay.** Only now, after a valid signature, is the key id and nonce recorded. A nonce
+   already recorded for that key, until its timestamp falls out of the skew window, is a
+   replay.
+
+**Responses:**
+- Every failure gets the same `401 {"error":"Authentication required."}` as any other
+  failed authentication, and counts toward the failed-attempt limit.
+- The exceptions come from the replay cache's limits. A key with 600 live nonces gets
+  `429`; when 100,000 nonces are live in total, every signed request gets `503`. Both
+  carry `Retry-After` and are not counted as failed authentication, since the request was
+  signed correctly. Live nonces are never evicted to make room, because that would let
+  their requests be replayed.
+
+**What reaches the log:** a line such as
+`agent-auth status=failed scheme=signature reason=<reason> keyId=<keyId or none>`. The
+reasons are `bad-header`, `before-startup`, `stale`, `future`, `content-encoding`,
+`unreadable-body`, `bad-host`, `bad-request`, `unknown-key`, `scheme-mismatch`,
+`revoked`, `expired`, `store-unavailable`, `bad-signature`, `replay`, `nonce-key-quota`
+and `nonce-capacity`. The header, signature, nonce and any key material are never logged
+or echoed.
+
+**Where signed requests are accepted:** only on `POST /api/evaluate`; every other route
+answers `403 operator-required` to a signed agent. `GET /api/session` never verifies a
+signed header and uses no nonce.
+
+**The replay cache is in memory**, so it is per process and empty after a restart. The
+start-up fence closes that gap: any request captured before a restart carries an older
+timestamp and is refused. A request signed shortly before a restart and sent after it is
+refused too; the agent should sign it again.
 
 ## Identity on each request
 
@@ -213,9 +373,18 @@ If a credential may have leaked:
 
 ## Limitations
 
-- **Bearer credentials can be replayed.** Anyone who obtains a credential can act as that
-  agent until it is revoked or expires. Signed requests, which limit replay, are deferred
-  to the M3-E review.
+- **Bearer credentials can be replayed** (only while `AGENT_BEARER_ALLOWED=true`). Anyone
+  who obtains one can act as that agent until it is revoked or expires. Signed requests
+  never send the private key, and each is accepted once.
+- **Signed requests protect authenticity and integrity, not confidentiality.** The API is
+  plain HTTP on loopback, so a local process able to capture loopback traffic can read
+  request bodies and responses. Responses are not signed.
+- **The replay cache is per process and in memory.** It does not span several API
+  instances. After a restart the start-up fence, not the cache, refuses earlier requests.
+- **A request signed but never delivered** can still be sent by whoever captured it, once,
+  within its skew window.
+- **An Ed25519 private key is as sensitive as a bearer secret on the agent machine.**
+  Whoever holds it can sign as that agent until it is revoked or expires.
 - **The operator is fully trusted.** The operator issues credentials and approves
   actions; there is a single operator with no roles.
 - **Agents cannot yet read the status of their own approvals.** This is deferred to M3-E.
@@ -236,10 +405,13 @@ If a credential may have leaked:
 ## Proposed follow-up: detecting leaked agent credentials (U7, not implemented)
 
 The scanner, the data-leak guard and the repository secret scan do not know the `asag_`
-format yet. Changing them needs a separate review. The recommendation:
+or `asag2_` formats yet. Changing them needs a separate review. The recommendation:
 
-- **Pattern:** `(?<![A-Za-z0-9_])asag_[0-9a-f]{16}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])`.
-  The fixed prefix, exact lengths and the `.` separator make false positives unlikely.
+- **Patterns:**
+  - bearer: `(?<![A-Za-z0-9_])asag_[0-9a-f]{16}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])`;
+  - Ed25519 private key (M3-E E2): `(?<![A-Za-z0-9_])asag2_[0-9a-f]{16}\.[A-Za-z0-9_-]{64}(?![A-Za-z0-9_-])`.
+
+  The fixed prefixes, exact lengths and the `.` separator make false positives unlikely.
 - **Data-leak guard** (`packages/engine/src/scanner/scan.ts`, outbound secret detection):
   an action whose type, tool, destination, summary or payload carries an agent
   credential would be a hard BLOCK. This includes an agent trying to send out its own

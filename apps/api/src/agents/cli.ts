@@ -1,9 +1,11 @@
 import { closeSync, mkdirSync, openSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import {
+  bearerAllowedFromEnv,
   CredentialConfigError,
   credentialFilePath,
   issueCredential,
+  issueEd25519Credential,
   KEY_ID_PATTERN,
   MAX_ACTIVE_PER_AGENT,
   readCredentialFile,
@@ -11,27 +13,34 @@ import {
   serializeCredentialDocument,
   validateCredentialRecords,
   type CredentialRecord,
+  type CredentialScheme,
 } from "./credentials.js";
 import { FileSecurityError, writeRestrictedFileAtomically } from "./file-security.js";
 
 /**
- * Agent credential administration (M3-D):
+ * Agent credential administration (M3-D; Ed25519 since M3-E E2):
  *
  *   npm run agent-credential -w @agentshield/api -- <command> [options]
  *
- *   create --agent <id> [--label <text>] [--days <1-365>] [--out <file>]
+ *   create --agent <id> [--label <text>] [--days <1-365>] [--out <file>] [--scheme ed25519|bearer]
  *   list   [--json]
  *   revoke --key <keyId>
- *   rotate --key <keyId> [--label <text>] [--days <1-365>] [--out <file>] [--revoke-old]
+ *   rotate --key <keyId> [--label <text>] [--days <1-365>] [--out <file>] [--revoke-old] [--scheme ed25519|bearer]
  *
  * Every command accepts --file <store> (default: AGENT_CREDENTIAL_FILE, else
  * %LOCALAPPDATA%\AgentShield\agent-credentials.json).
  *
- * A new credential is shown exactly once: on standard output, or written to
- * --out (a new file readable only by the current user) and then not shown.
- * No command takes a secret as an argument, and list and revoke never show
- * secrets or hashes. The store is validated before every write, written
- * atomically, restricted to the current user, and revoked records are kept.
+ * New credentials are Ed25519: the key pair is generated here, the store keeps
+ * only the public key, and the private key (`asag2_<keyId>.<base64url PKCS#8 DER>`)
+ * is shown exactly once: on standard output, or written to --out (a new file
+ * readable only by the current user) and then not shown. `rotate` also issues
+ * Ed25519 by default, which is how a legacy bearer credential is replaced.
+ * `--scheme bearer` (legacy M3-D bearer secrets) is refused unless
+ * AGENT_BEARER_ALLOWED is exactly "true", for a temporary migration only.
+ * No command takes a secret or key as an argument, and list and revoke never
+ * show secrets, hashes or keys. The store is validated before every write,
+ * written atomically as schema 2, restricted to the current user, and revoked
+ * records are kept.
  */
 
 export interface CliIo {
@@ -45,18 +54,19 @@ class CliError extends Error {}
 class UsageError extends Error {}
 
 const COMMANDS: Record<string, { values: string[]; switches: string[] }> = {
-  create: { values: ["agent", "label", "days", "out", "file"], switches: [] },
+  create: { values: ["agent", "label", "days", "out", "file", "scheme"], switches: [] },
   list: { values: ["file"], switches: ["json"] },
   revoke: { values: ["key", "file"], switches: [] },
-  rotate: { values: ["key", "label", "days", "out", "file"], switches: ["revoke-old"] },
+  rotate: { values: ["key", "label", "days", "out", "file", "scheme"], switches: ["revoke-old"] },
 };
 
 const USAGE = [
   "Usage: agent-credential <command> [options]",
-  "  create --agent <id> [--label <text>] [--days <1-365>] [--out <file>]",
+  "  create --agent <id> [--label <text>] [--days <1-365>] [--out <file>] [--scheme ed25519|bearer]",
   "  list   [--json]",
   "  revoke --key <keyId>",
-  "  rotate --key <keyId> [--label <text>] [--days <1-365>] [--out <file>] [--revoke-old]",
+  "  rotate --key <keyId> [--label <text>] [--days <1-365>] [--out <file>] [--revoke-old] [--scheme ed25519|bearer]",
+  "New credentials are Ed25519. --scheme bearer needs AGENT_BEARER_ALLOWED=true (temporary legacy migration only).",
   "All commands accept --file <store>. The default store is AGENT_CREDENTIAL_FILE, else %LOCALAPPDATA%\\AgentShield\\agent-credentials.json.",
 ];
 
@@ -91,6 +101,20 @@ function days(options: Options): number | undefined {
   if (raw === undefined) return undefined;
   if (!/^\d{1,3}$/.test(raw)) throw new UsageError("--days must be a whole number from 1 to 365.");
   return Number(raw);
+}
+
+/** The scheme for a new credential: Ed25519 unless legacy bearer is asked for and explicitly allowed. */
+function scheme(io: CliIo, options: Options): CredentialScheme {
+  const value = options.values.get("scheme") ?? "ed25519";
+  if (value !== "ed25519" && value !== "bearer") throw new UsageError('--scheme must be "ed25519" or "bearer".');
+  if (value === "bearer" && !bearerAllowedFromEnv(io.env)) {
+    throw new CliError("Bearer credentials are disabled. Set AGENT_BEARER_ALLOWED=true only for a temporary legacy migration.");
+  }
+  return value;
+}
+
+function issue(kind: CredentialScheme, input: Parameters<typeof issueEd25519Credential>[0]) {
+  return kind === "ed25519" ? issueEd25519Credential(input) : issueCredential(input);
 }
 
 /** One credential command at a time: a second one refuses to run rather than lose an update. */
@@ -135,11 +159,17 @@ function deliver(io: CliIo, storePath: string, next: CredentialRecord[], issued:
     throw error;
   }
   const { record } = issued;
-  io.out(`Created credential ${record.keyId} for agent ${record.agentId}; it expires ${record.expiresAt}.`);
+  const what = record.scheme === "ed25519" ? "Ed25519 credential" : "legacy bearer credential";
+  io.out(`Created ${what} ${record.keyId} for agent ${record.agentId}; it expires ${record.expiresAt}.`);
+  if (record.scheme === "ed25519") io.out("The credential store keeps only the public key.");
   if (outPath !== undefined) {
     io.out(`The credential was written to ${outPath} (readable only by the current user). It is not shown here.`);
   } else {
-    io.out("This is the only time the credential is shown. Deliver it to the agent now; it cannot be recovered:");
+    io.out(
+      record.scheme === "ed25519"
+        ? "This is the only time the private key is shown. Store it on the agent machine now; it cannot be recovered:"
+        : "This is the only time the credential is shown. Deliver it to the agent now; it cannot be recovered:",
+    );
     io.out(issued.credential);
   }
 }
@@ -147,18 +177,20 @@ function deliver(io: CliIo, storePath: string, next: CredentialRecord[], issued:
 function create(io: CliIo, storePath: string, options: Options): void {
   const agentId = options.values.get("agent");
   if (agentId === undefined) throw new UsageError("--agent <id> is required.");
+  const kind = scheme(io, options);
   withStoreLock(storePath, () => {
     const now = io.now();
     const records = readCredentialFile(storePath, now);
     const active = records.filter((r) => r.agentId === agentId && recordStatus(r, now) === "active").length;
     if (active >= MAX_ACTIVE_PER_AGENT) throw new CliError(`That agent already has ${MAX_ACTIVE_PER_AGENT} active credentials. Revoke one first.`);
-    const issued = issueCredential({ agentId, now, takenKeyIds: new Set(records.map((r) => r.keyId)), label: options.values.get("label") ?? null, days: days(options) });
+    const issued = issue(kind, { agentId, now, takenKeyIds: new Set(records.map((r) => r.keyId)), label: options.values.get("label") ?? null, days: days(options) });
     const next = validateCredentialRecords([...records, issued.record], now);
     deliver(io, storePath, next, issued, options.values.get("out"));
   });
 }
 
 function rotate(io: CliIo, storePath: string, options: Options): void {
+  const kind = scheme(io, options);
   withStoreLock(storePath, () => {
     const now = io.now();
     const records = readCredentialFile(storePath, now);
@@ -168,7 +200,7 @@ function rotate(io: CliIo, storePath: string, options: Options): void {
     const kept = revokeOld ? records.map((r) => (r.keyId === old.keyId ? { ...r, revokedAt: new Date(now).toISOString() } : r)) : records;
     const active = kept.filter((r) => r.agentId === old.agentId && recordStatus(r, now) === "active").length;
     if (active >= MAX_ACTIVE_PER_AGENT) throw new CliError(`That agent already has ${MAX_ACTIVE_PER_AGENT} active credentials. Revoke one first, or use --revoke-old.`);
-    const issued = issueCredential({
+    const issued = issue(kind, {
       agentId: old.agentId,
       now,
       takenKeyIds: new Set(records.map((r) => r.keyId)),
@@ -203,10 +235,11 @@ function revoke(io: CliIo, storePath: string, options: Options): void {
 
 function list(io: CliIo, storePath: string, options: Options): void {
   const now = io.now();
-  // Never the hash: only public metadata.
+  // Never a hash, key or secret: only public metadata.
   const rows = readCredentialFile(storePath, now).map((r) => ({
     keyId: r.keyId,
     agentId: r.agentId,
+    scheme: r.scheme,
     status: recordStatus(r, now),
     label: r.label,
     createdAt: r.createdAt,
@@ -222,7 +255,7 @@ function list(io: CliIo, storePath: string, options: Options): void {
     return;
   }
   for (const r of rows) {
-    io.out(`${r.keyId}  ${r.agentId}  ${r.status}  created ${r.createdAt}  expires ${r.expiresAt}${r.revokedAt ? `  revoked ${r.revokedAt}` : ""}${r.label ? `  "${r.label}"` : ""}`);
+    io.out(`${r.keyId}  ${r.agentId}  ${r.scheme}  ${r.status}  created ${r.createdAt}  expires ${r.expiresAt}${r.revokedAt ? `  revoked ${r.revokedAt}` : ""}${r.label ? `  "${r.label}"` : ""}`);
   }
 }
 

@@ -12,6 +12,7 @@
     "agent-credential": "tsx src/agents/cli-main.ts"
   },
   "dependencies": {
+    "@agentshield/agent-protocol": "*",
     "@agentshield/engine": "*",
     "@agentshield/websec": "*",
     "cors": "^2.8.5",

@@ -9,7 +9,7 @@ import { createApprovalStore } from "../approvals.js";
 import { createPolicyStore } from "../policies/store.js";
 import { loadSecurityConfig, WEB_ORIGINS } from "../security/config.js";
 import { createSimulator } from "../simulator.js";
-import { asAgent, issueTestCredential, request, TEST_API_TOKEN, type TestCredential } from "../test-support.js";
+import { asAgent, issueTestCredential, issueTestEd25519Credential, request, TEST_API_TOKEN, type TestCredential } from "../test-support.js";
 import { runCli } from "./cli.js";
 import { createCredentialStore, createReloadingCredentialStore, serializeCredentialDocument, type CredentialRecord, type CredentialStore } from "./credentials.js";
 import { writeRestrictedFileAtomically } from "./file-security.js";
@@ -35,10 +35,12 @@ afterEach(() => vi.restoreAllMocks());
 function mutableCredentials(initial: TestCredential[], now: () => number = Date.now) {
   let records: CredentialRecord[] = initial.map((c) => c.record);
   let unavailable = false;
-  let current = createCredentialStore(records, now);
-  const rebuild = () => (current = createCredentialStore(records, now));
+  // These route tests authenticate with legacy bearer credentials (signed requests arrive in E3).
+  let current = createCredentialStore(records, { now, bearerAllowed: true });
+  const rebuild = () => (current = createCredentialStore(records, { now, bearerAllowed: true }));
   const store: CredentialStore = {
     verify: (credential) => (unavailable ? { ok: false, reason: "store-unavailable" } : current.verify(credential)),
+    publicKeyFor: (keyId) => (unavailable ? { ok: false, reason: "store-unavailable" } : current.publicKeyFor(keyId)),
     status: (keyId) => (unavailable ? "unavailable" : current.status(keyId)),
     list: () => current.list(),
   };
@@ -394,7 +396,7 @@ describe("M3-D: approvals", () => {
     const t = setup();
     const pending = await confirmFor(t);
     const rotated = issueTestCredential("writer");
-    const t2Store = createCredentialStore([rotated.record, { ...t.writerCredential.record, revokedAt: new Date().toISOString() }]);
+    const t2Store = createCredentialStore([rotated.record, { ...t.writerCredential.record, revokedAt: new Date().toISOString() }], { bearerAllowed: true });
     t.credentials.revoke(t.writerCredential.record.keyId);
     expect((await request(t.app).post(`/api/approvals/${pending.id}/approve`).send({})).status).toBe(409);
     expect(t2Store.verify(rotated.credential).ok).toBe(true);
@@ -412,10 +414,11 @@ describe("M3-D: hot reload through the API (temporary credential file)", () => {
     const path = join(dir, "agent-credentials.json");
     let clock = Date.now();
     const out: string[] = [];
-    const cli = (...argv: string[]) => runCli(argv, { env: {}, now: () => clock, out: (l) => out.push(l), err: (l) => out.push(l) });
-    expect(cli("create", "--agent", "writer", "--file", path)).toBe(0);
+    // Legacy bearer, opted in explicitly (AGENT_BEARER_ALLOWED=true) until signed requests arrive in E3.
+    const cli = (...argv: string[]) => runCli(argv, { env: { AGENT_BEARER_ALLOWED: "true" }, now: () => clock, out: (l) => out.push(l), err: (l) => out.push(l) });
+    expect(cli("create", "--agent", "writer", "--scheme", "bearer", "--file", path)).toBe(0);
     const credential = out.join("\n").match(/asag_[0-9a-f]{16}\.[A-Za-z0-9_-]{43}/)![0];
-    const store = createReloadingCredentialStore(path, { now: () => clock });
+    const store = createReloadingCredentialStore(path, { now: () => clock, bearerAllowed: true });
     const app = createApp({ apiToken: TEST_API_TOKEN, policyStore: createPolicyStore([writer], "file"), credentialStore: store });
     const evaluate = () => supertest(app).post("/api/evaluate").set("Authorization", `Bearer ${credential}`).send({ intent: { task: "Summarize" }, action });
     expect((await evaluate()).status).toBe(200);
@@ -470,6 +473,54 @@ describe("M3-D: no credential or hash ever leaves the server", () => {
     const server = readFileSync(new URL("../server.ts", import.meta.url), "utf8");
     expect(server).toContain("credentialStore = createReloadingCredentialStore(credentialFilePath(), {");
     expect(server).toMatch(/catch \(error\) \{[\s\S]*?agent-credentials status=invalid-config[\s\S]*?process\.exit\(1\);/);
-    expect(server).toContain("createApp({ apiToken: tokenFile.token, policyStore, credentialStore })");
+    expect(server).toContain("createApp({ apiToken: tokenFile.token, policyStore, credentialStore, signatureSkewMs })");
+  });
+});
+
+describe("M3-E E2: credential schemes at the API (no signature verification yet)", () => {
+  const policyStore = createPolicyStore([DEMO_AGENT_POLICY, writer], "file");
+  const evaluate = (app: ReturnType<typeof createApp>, value: string) =>
+    supertest(app).post("/api/evaluate").set("Authorization", `Bearer ${value}`).send({ intent: { task: "Summarize" }, action });
+
+  it("legacy bearer credentials are refused by default (AGENT_BEARER_ALLOWED unset), with the same 401", async () => {
+    const legacy = issueTestCredential("writer");
+    const app = createApp({ apiToken: TEST_API_TOKEN, policyStore, credentialStore: createCredentialStore([legacy.record]) });
+    const res = await evaluate(app, legacy.credential);
+    expect([res.status, res.body]).toEqual([401, { error: "Authentication required." }]);
+    expect(warnings).toEqual([`agent-auth status=failed reason=bearer-disabled keyId=${legacy.record.keyId}`]);
+    const allowed = createApp({ apiToken: TEST_API_TOKEN, policyStore, credentialStore: createCredentialStore([legacy.record], { bearerAllowed: true }) });
+    expect((await evaluate(allowed, legacy.credential)).status).toBe(200);
+  });
+
+  it("an Ed25519 key id with a bearer-style secret is refused as a scheme mismatch, even with bearer allowed", async () => {
+    const signing = issueTestEd25519Credential("writer");
+    const app = createApp({ apiToken: TEST_API_TOKEN, policyStore, credentialStore: createCredentialStore([signing.record], { bearerAllowed: true }) });
+    const forged = `asag_${signing.record.keyId}.${"A".repeat(43)}`;
+    expect((await evaluate(app, forged)).status).toBe(401);
+    expect(warnings).toEqual([`agent-auth status=failed reason=scheme-mismatch keyId=${signing.record.keyId}`]);
+  });
+
+  it("an Ed25519 private key sent as a bearer token is refused, never compared with the operator token, and flagged for rotation", async () => {
+    const signing = issueTestEd25519Credential("writer");
+    const app = createApp({ apiToken: TEST_API_TOKEN, policyStore, credentialStore: createCredentialStore([signing.record], { bearerAllowed: true }) });
+    const res = await evaluate(app, signing.credential);
+    expect([res.status, res.body]).toEqual([401, { error: "Authentication required." }]);
+    expect(JSON.stringify(res.body) + JSON.stringify(res.headers)).not.toContain(signing.credential.slice(23));
+    expect(warnings).toEqual([`agent-auth status=failed reason=private-key-sent-as-bearer keyId=${signing.record.keyId} action=rotate-this-credential`]);
+    expect(warnings.join("\n")).not.toContain(signing.credential.slice(23));
+    // GET /api/session never inspects it either (M3-D audit L2).
+    expect((await supertest(app).get("/api/session").set("Authorization", `Bearer ${signing.credential}`)).body.authenticated).toBe(false);
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("an operator token may not look like either agent credential", () => {
+    expect(() => createApp({ apiToken: `asag2_${"a".repeat(40)}` })).toThrowError(/must not start with "asag_" or "asag2_"/);
+    expect(() => createApp({ apiToken: `asag_${"a".repeat(40)}` })).toThrowError(/must not start with "asag_" or "asag2_"/);
+  });
+
+  it("the server reads AGENT_BEARER_ALLOWED (exactly \"true\") and passes it to the credential store", () => {
+    const server = readFileSync(new URL("../server.ts", import.meta.url), "utf8");
+    expect(server).toContain("const bearerAllowed = bearerAllowedFromEnv();");
+    expect(server).toMatch(/createReloadingCredentialStore\(credentialFilePath\(\), \{\s*bearerAllowed,/);
   });
 });

@@ -75,10 +75,12 @@ verified at this revision. The commands are written for Windows PowerShell; use 
 terminals. `npm install` needs internet access once; running the demo does not.
 
 ```powershell
-npm install                            # once (needs internet)
-npm run build -w @agentshield/engine   # build the engine before starting the API and web app
-npm run dev:api                        # terminal 1 -> API on http://127.0.0.1:4000 (loopback only)
-npm run dev:web                        # terminal 2 -> web app on http://localhost:5173
+npm install                                    # once (needs internet)
+npm run build -w @agentshield/agent-protocol   # build the signed-request protocol package (the API imports it)
+npm run build -w @agentshield/engine           # build the engine before starting the API and web app
+npm run build -w @agentshield/websec           # build website scanning (the API imports it; needs the engine built)
+npm run dev:api                                # terminal 1 -> API on http://127.0.0.1:4000 (loopback only)
+npm run dev:web                                # terminal 2 -> web app on http://localhost:5173
 ```
 
 Open http://localhost:5173 in a browser. Terminal 1 should print
@@ -95,7 +97,10 @@ Signing in sets an HttpOnly session cookie (30 idle minutes, 8 hours at most). O
 API with `Authorization: Bearer <token>` instead. Agents use their own credentials (see Agent identity below). Open the web app at `localhost`, the same host
 name the web app uses for the API, so the browser sends the session cookie. To replace the token,
 stop the API, delete the file, and start the API again.
-Rebuild the engine (`npm run build -w @agentshield/engine`) after changing engine source.
+The API and web app load `@agentshield/agent-protocol`, the engine and `@agentshield/websec` from
+their built `dist` output, so build them in that order after `npm install` (`npm run build` builds
+everything in the right order) and rebuild a package with `npm run build -w <package>` after
+changing its source.
 Note: the repo `.npmrc` sets `legacy-peer-deps=true`; that works around an npm
 arborist peer-resolution bug with Vitest 4 in this workspace.
 
@@ -119,6 +124,9 @@ session; a new terminal uses the default `http://localhost:4000` again, so open 
 
 ## Verify
 
+On a fresh clone, build first (`npm run build`, or the three package builds above): typechecking
+and testing the API need their `dist` output.
+
 ```powershell
 npm run typecheck
 npm test
@@ -129,11 +137,9 @@ node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-10-31, M3-D, each workspace run separately): engine 728 tests in
-9 files, API 468 in 16, web 23 in 3, all passing with none failed or skipped, and
-`npm run typecheck` passes for all four workspaces. The websec suite, the root `npm test` and
-`npm run build` were not re-run for M3-D (no websec code changed), so there is no combined M3-D
-total; at M3-C, `npm test` passed 1,523 tests (websec 395 in 13 files) and the build passed. `npm audit` needs
+Current verified state (2026-10-31, M3-E E1-E3 with audit fixes): `npm test` passes 1,865 tests in 49
+files (agent-protocol 98 in 1 file, engine 728 in 9, websec 395 in 13, API 621 in 23, web 23 in 3), with
+none failed or skipped, and `npm run build` and `npm run typecheck` pass for all five workspaces. `npm audit` needs
 network access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 
 ## Demo outline (about four minutes, seeded synthetic scenarios only)
@@ -562,10 +568,17 @@ Schema, enforcement and limitations: [`docs/agent-policies.md`](docs/agent-polic
 
 ## Agent identity (M3-D)
 
-Each agent has its own credential, `asag_<keyId>.<secret>`, sent as
-`Authorization: Bearer <credential>`. The API stores only a domain-separated SHA-256 of each
-credential (`%LOCALAPPDATA%\AgentShield\agent-credentials.json`, or `AGENT_CREDENTIAL_FILE`),
-restricted to the current Windows user, and compares digests in constant time. The agent is
+Each agent has its own credential. Since M3-E E2 new credentials are Ed25519 key pairs: the
+agent keeps the private key (`asag2_...`, PKCS#8) and the API stores only the public key. Since
+M3-E E3 agents sign each request (`Authorization: AGENTSHIELD-SIG-V1 ...`: method, host, exact
+target, timestamp within ±30 s, nonce, key id and raw-body SHA-256, verified with Ed25519); each
+signed request is accepted once (an in-memory replay cache, plus a start-up fence so nothing signed
+before a restart is accepted after it). Legacy
+M3-D bearer credentials (`asag_<keyId>.<secret>`, sent as `Authorization: Bearer`, stored as a
+domain-separated SHA-256 and compared in constant time) authenticate only while
+`AGENT_BEARER_ALLOWED=true`, a temporary migration setting that is off by default. The store
+(`%LOCALAPPDATA%\AgentShield\agent-credentials.json`, or `AGENT_CREDENTIAL_FILE`) is restricted to
+the current Windows user. The agent is
 taken from the credential, never from the request: a different `agentId` in the body is a `403`
 recorded as a security event, and nothing is evaluated.
 
@@ -578,7 +591,8 @@ recorded as a security event, and nothing is evaluated.
 
 Manage credentials with `npm run agent-credential -w @agentshield/api -- create|list|revoke|rotate`:
 
-- A new credential is shown once, or written to a current-user-only file with `--out`.
+- A new private key is shown once, or written to a current-user-only file with `--out`.
+  `--scheme bearer` (legacy) is refused unless `AGENT_BEARER_ALLOWED=true`.
 - Credentials expire after 90 days by default and 365 at most.
 - A revocation reaches a running API within 2 seconds, and a store that becomes invalid rejects
   every agent until it is fixed.

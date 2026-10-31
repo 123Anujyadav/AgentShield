@@ -22,13 +22,17 @@ import {
 } from "./credentials.js";
 import { isRestrictedToCurrentUser, writeRestrictedFileAtomically } from "./file-security.js";
 
-/** M3-D D1: agent credentials. Temporary files only; no real credential store is read or written. */
+/**
+ * M3-D D1: agent credentials (legacy bearer scheme). Temporary files only; no real credential
+ * store is read or written. These stores opt in to bearer explicitly; the M3-E E2 default
+ * (bearer disabled) and the Ed25519 scheme are tested in credentials.v2.test.ts.
+ */
 
 const NOW = Date.parse("2026-11-01T09:00:00.000Z");
 const DAY = 24 * 60 * 60 * 1000;
 const issue = (agentId: string, extra: { days?: number; now?: number; taken?: Set<string> } = {}) =>
   issueCredential({ agentId, now: extra.now ?? NOW, takenKeyIds: extra.taken ?? new Set(), days: extra.days });
-const doc = (credentials: unknown[], extra: Record<string, unknown> = {}) => JSON.stringify({ schemaVersion: 1, credentials, ...extra });
+const doc = (credentials: unknown[], extra: Record<string, unknown> = {}) => JSON.stringify({ schemaVersion: 2, credentials, ...extra });
 
 describe("M3-D: credential format and generation", () => {
   it("a generated credential is asag_<16 hex>.<43 base64url> with a 256-bit secret, and key ids are unique", () => {
@@ -82,7 +86,7 @@ describe("M3-D: hashing", () => {
   it("swapping two records' hashes makes both credentials fail", () => {
     const a = issue("writer");
     const b = issue("reader", { taken: new Set([a.record.keyId]) });
-    const swapped = createCredentialStore([{ ...a.record, sha256: b.record.sha256 }, { ...b.record, sha256: a.record.sha256 }], () => NOW);
+    const swapped = createCredentialStore([{ ...a.record, sha256: b.record.sha256 }, { ...b.record, sha256: a.record.sha256 }], { now: () => NOW, bearerAllowed: true });
     expect(swapped.verify(a.credential)).toEqual({ ok: false, reason: "wrong-secret" });
     expect(swapped.verify(b.credential)).toEqual({ ok: false, reason: "wrong-secret" });
   });
@@ -91,7 +95,7 @@ describe("M3-D: hashing", () => {
 describe("M3-D: verification", () => {
   it("returns the record's agent for a valid credential and a reason for each failure", () => {
     const a = issue("writer");
-    const store = createCredentialStore([a.record], () => NOW);
+    const store = createCredentialStore([a.record], { now: () => NOW, bearerAllowed: true });
     expect(store.verify(a.credential)).toEqual({ ok: true, agentId: "writer", keyId: a.record.keyId });
     const { secret } = parseCredential(a.credential)!;
     const otherSecret = secret.startsWith("A") ? `B${secret.slice(1)}` : `A${secret.slice(1)}`;
@@ -105,7 +109,7 @@ describe("M3-D: verification", () => {
     let now = NOW;
     const a = issue("writer", { days: 1 });
     const r = issue("writer", { taken: new Set([a.record.keyId]) });
-    const store = createCredentialStore([a.record, { ...r.record, revokedAt: new Date(NOW).toISOString() }], () => now);
+    const store = createCredentialStore([a.record, { ...r.record, revokedAt: new Date(NOW).toISOString() }], { now: () => now, bearerAllowed: true });
     expect(store.verify(a.credential).ok).toBe(true);
     expect(store.verify(r.credential)).toEqual({ ok: false, reason: "revoked" });
     now = NOW + DAY;
@@ -128,14 +132,14 @@ describe("M3-D: credential stores are validated strictly", () => {
   it("round-trips through the document format, which holds hashes only", () => {
     const text = serializeCredentialDocument([valid]);
     expect(parseCredentialDocument(text, NOW)).toEqual([valid]);
-    expect(Object.keys(JSON.parse(text).credentials[0]).sort()).toEqual(["agentId", "createdAt", "expiresAt", "keyId", "label", "revokedAt", "sha256"]);
+    expect(Object.keys(JSON.parse(text).credentials[0]).sort()).toEqual(["agentId", "createdAt", "expiresAt", "keyId", "label", "revokedAt", "scheme", "sha256"]);
   });
 
   it.each([
     ["not JSON", "{", /not valid JSON/],
     ["an array", "[]", /must be a JSON object/],
     ["an unknown top-level field", doc([valid], { extra: 1 }), /^The credential store has an unknown top-level field\.$/],
-    ["another schema version", JSON.stringify({ schemaVersion: 2, credentials: [] }), /schemaVersion must be 1/],
+    ["another schema version", JSON.stringify({ schemaVersion: 3, credentials: [] }), /schemaVersion must be 1 or 2/],
     ["credentials not an array", JSON.stringify({ schemaVersion: 1, credentials: {} }), /must be an array/],
     ["an unknown record field", doc([{ ...valid, secret: "x" }]), /^credentials\[0\] has an unknown field\.$/],
     ["a missing field", doc([{ ...valid, revokedAt: undefined }]), /revokedAt is required/],
@@ -246,7 +250,7 @@ describe("M3-D: credential files (temporary directory)", () => {
       writeRestrictedFileAtomically(path, serializeCredentialDocument(initial), { overwrite: true });
       let now = NOW;
       const events: CredentialReloadEvent[] = [];
-      const store = createReloadingCredentialStore(path, { now: () => now, onEvent: (e) => events.push(e), hasPolicy: (id) => id !== "orphan" });
+      const store = createReloadingCredentialStore(path, { now: () => now, bearerAllowed: true, onEvent: (e) => events.push(e), hasPolicy: (id) => id !== "orphan" });
       return { path, store, events, advance: (ms: number) => (now += ms), write: (records: CredentialRecord[]) => writeRestrictedFileAtomically(path, serializeCredentialDocument(records), { overwrite: true }) };
     }
 

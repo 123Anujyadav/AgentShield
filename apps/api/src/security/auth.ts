@@ -1,6 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Express, Request, RequestHandler, Response } from "express";
-import { CREDENTIAL_PREFIX, parseCredential, type CredentialStore } from "../agents/credentials.js";
+import { AUTH_SCHEME } from "@agentshield/agent-protocol";
+import { CREDENTIAL_PREFIX, parseCredential, SIGNING_CREDENTIAL_PREFIX, type CredentialStore } from "../agents/credentials.js";
+import type { SignedVerification } from "../agents/signature.js";
 import type { FailureLimiter, RateLimitFactory } from "./rate-limit.js";
 import type { SecurityConfig } from "./config.js";
 
@@ -17,6 +19,9 @@ import type { SecurityConfig } from "./config.js";
  *   against the operator token, and an agent is never an operator. Every failed
  *   agent credential gets the same 401 as any other failed authentication; the
  *   reason is logged on the server only, with the public key id at most.
+ * - M3-E E3: agents sign requests (`Authorization: AGENTSHIELD-SIG-V1 ...`, see
+ *   agents/signature.ts). A header with that scheme is only ever checked as a
+ *   signature: never as a bearer token, the operator token or a cookie fallback.
  *
  * The token, credentials and session ids are never logged, echoed, or put in a URL.
  */
@@ -135,21 +140,45 @@ export function createApiAuth(
   apiToken: string,
   sessions: SessionStore,
   config: SecurityConfig,
-  agents: { credentials: CredentialStore; failures: FailureLimiter; log?: (line: string) => void },
+  agents: {
+    credentials: CredentialStore;
+    failures: FailureLimiter;
+    /** M3-E E3: verifies a signed agent request (signature, timestamp, nonce). */
+    verifySigned: (req: Request) => SignedVerification;
+    /** Retry-After for the nonce-cache limits (429/503), in seconds. */
+    signedRetryAfterSeconds: number;
+    log?: (line: string) => void;
+  },
 ): ApiAuth {
   const allowedOrigins = new Set(config.allowedOrigins);
   const log = agents.log ?? ((line: string) => console.warn(line));
 
-  type Resolution = { auth: Authentication | null; agentFailure?: string };
+  /** `reject`: a validly signed request refused by the nonce-cache limits (429 or 503), not an authentication failure. */
+  type Resolution = { auth: Authentication | null; agentFailure?: string; reject?: 429 | 503 };
 
   /** Resolves the request's credentials. `agentFailure` is the server-log line for a failed agent credential. */
   function resolve(req: Request, options: { verifyAgents: boolean }): Resolution {
     const header = req.headers.authorization;
     if (header !== undefined) {
+      // M3-E E3: a signed agent request. Outside agent routes it is not verified at all (no nonce is used).
+      if (header.startsWith(AUTH_SCHEME)) {
+        if (!options.verifyAgents) return { auth: null };
+        const result = agents.verifySigned(req);
+        if (result.ok) return { auth: { kind: "agent", agentId: result.agentId, keyId: result.keyId } };
+        const agentFailure = `agent-auth status=failed scheme=signature reason=${result.reason} keyId=${result.keyId ?? "none"}`;
+        return { auth: null, agentFailure, ...(result.status !== 401 ? { reject: result.status } : {}) };
+      }
       const match = /^Bearer ([^\s]+)$/.exec(header);
       const presented = match?.[1];
       // A malformed or wrong Authorization header never falls back to the cookie.
       if (!presented) return { auth: null };
+      // M3-E E2: an Ed25519 private key must never be sent; it is never a bearer token, is never
+      // compared with the operator token, and its key id is logged so the operator can rotate it.
+      if (presented.startsWith(SIGNING_CREDENTIAL_PREFIX)) {
+        if (!options.verifyAgents) return { auth: null };
+        const keyId = /^asag2_([0-9a-f]{16})\./.exec(presented)?.[1] ?? "none";
+        return { auth: null, agentFailure: `agent-auth status=failed reason=private-key-sent-as-bearer keyId=${keyId} action=rotate-this-credential` };
+      }
       if (presented.startsWith(CREDENTIAL_PREFIX)) {
         // Never compared with the operator token; outside agent routes, not verified at all.
         if (!options.verifyAgents) return { auth: null };
@@ -182,7 +211,16 @@ export function createApiAuth(
     // M3-D audit L3: credentials are always verified first, so a valid credential is never
     // refused because of other callers' failures. Only failed Authorization-header attempts
     // count; past the limit they get 429 (and are no longer logged) until the window ends.
-    const { auth, agentFailure } = resolve(req, { verifyAgents: true });
+    const { auth, agentFailure, reject } = resolve(req, { verifyAgents: true });
+    if (!auth && reject !== undefined) {
+      // An authentic agent over the nonce-cache limits: refused, but not counted as a failed authentication.
+      if (agentFailure) log(agentFailure);
+      res.setHeader("Retry-After", String(agents.signedRetryAfterSeconds));
+      res.status(reject).json({
+        error: reject === 429 ? "Too many signed requests for this credential. Try again later." : "Signed requests are temporarily unavailable. Try again later.",
+      });
+      return;
+    }
     if (!auth) {
       if (req.headers.authorization !== undefined) {
         const client = req.socket.remoteAddress ?? "unknown";

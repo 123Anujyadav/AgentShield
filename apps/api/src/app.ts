@@ -2,7 +2,9 @@ import cors from "cors";
 import express from "express";
 import type { ActivityEvent, PendingApproval, ProposedAction, RequestActor, RequestedIntent, SimulatedExecution, UntrustedContent, UserIntent } from "@agentshield/engine";
 import { getScenario, MAX_SCAN_LENGTH, POLICY_BLOCK_RISK, SCENARIOS } from "@agentshield/engine";
-import { CREDENTIAL_PREFIX, emptyCredentialStore, type CredentialStore } from "./agents/credentials.js";
+import { CREDENTIAL_PREFIX, emptyCredentialStore, SIGNING_CREDENTIAL_PREFIX, type CredentialStore } from "./agents/credentials.js";
+import { createNonceCache, type NonceCache } from "./agents/nonce-cache.js";
+import { captureRawBody, createSignatureVerifier, DEFAULT_SIGNATURE_SKEW_SECONDS } from "./agents/signature.js";
 import { evaluateForAgent, IDENTITY_MISMATCH_RULE_ID, parseAgentId, recheckApproval } from "./policies/enforce.js";
 import { builtInPolicyStore, type PolicyStore } from "./policies/store.js";
 import {
@@ -100,13 +102,47 @@ function parseUntrustedContent(value: unknown): ParseResult {
   return { ok: true, value: { source: value.source, text: value.text } };
 }
 
+/**
+ * Request-body errors raised by express.json (body-parser), mapped to a safe client
+ * response (M3-E audit L2). Only body-parser's own errors qualify: a known `type`, or an
+ * http-errors error marked `expose` with a 4xx status (how a malformed gzip/deflate body
+ * arrives). Anything else is an internal error. Messages are fixed text: the parser's
+ * message, the body and any stack are never returned or logged.
+ */
+function bodyParserClientError(error: unknown): { status: 400 | 413 | 415; category: string; message: string } | null {
+  if (!isRecord(error)) return null;
+  switch (error.type) {
+    case "entity.parse.failed":
+      return { status: 400, category: "malformed-json", message: "Malformed JSON body." };
+    case "entity.too.large":
+      return { status: 413, category: "body-too-large", message: "Request body too large." };
+    case "charset.unsupported":
+    case "encoding.unsupported":
+      return { status: 415, category: "unsupported-body-encoding", message: "Unsupported request body encoding." };
+    case "request.aborted":
+    case "request.size.invalid":
+      return { status: 400, category: "malformed-body", message: "Malformed request body." };
+  }
+  const status = typeof error.status === "number" ? error.status : null;
+  if (error.expose === true && status !== null && status >= 400 && status < 500) {
+    if (status === 413) return { status: 413, category: "body-too-large", message: "Request body too large." };
+    if (status === 415) return { status: 415, category: "unsupported-body-encoding", message: "Unsupported request body encoding." };
+    return { status: 400, category: "malformed-body", message: "Malformed request body." };
+  }
+  return null;
+}
+
 export interface AppDeps {
   simulator?: Simulator;
   approvalStore?: ApprovalStore;
   /** M3-C: server-side agent policies. Defaults to the built-in demo agent only. */
   policyStore?: PolicyStore;
-  /** M3-D: agent credentials (hashes only). Defaults to none, so no agent can authenticate. */
+  /** M3-D: agent credentials (hashes and public keys only). Defaults to none, so no agent can authenticate. */
   credentialStore?: CredentialStore;
+  /** M3-E E3: replay protection for signed requests. Defaults to a fresh in-memory cache (600 per key, 100,000 total). */
+  nonceCache?: NonceCache;
+  /** M3-E E3: allowed clock skew for signed requests, in ms (server: AGENT_SIGNATURE_MAX_SKEW_SECONDS). Default 30 s. */
+  signatureSkewMs?: number;
   modelService?: ModelAnalysisService;
   modelConfig?: ModelConfig;
   /** Injectable so tests can fault-inject event writes. Defaults to a fresh in-memory list. */
@@ -139,8 +175,10 @@ export function createApp(deps: AppDeps = {}) {
     throw new Error(`The API token must be at least ${MIN_TOKEN_LENGTH} characters.`);
   }
   const apiToken = deps.apiToken ?? randomBytes(32).toString("base64url");
-  // M3-D: an operator token must never look like an agent credential, so the two can never be confused.
-  if (apiToken.startsWith(CREDENTIAL_PREFIX)) throw new Error(`The API token must not start with "${CREDENTIAL_PREFIX}".`);
+  // M3-D/M3-E: an operator token must never look like an agent credential of either scheme.
+  if (apiToken.startsWith(CREDENTIAL_PREFIX) || apiToken.startsWith(SIGNING_CREDENTIAL_PREFIX)) {
+    throw new Error(`The API token must not start with "${CREDENTIAL_PREFIX}" or "${SIGNING_CREDENTIAL_PREFIX}".`);
+  }
   const credentialStore = deps.credentialStore ?? emptyCredentialStore();
   const now = deps.now ?? Date.now;
   const sessions = createSessionStore({
@@ -150,7 +188,21 @@ export function createApp(deps: AppDeps = {}) {
     now,
   });
   const failures = createFailureLimiter({ windowMs: security.rateLimitWindowMs, now, limit: security.rateLimits.authFailure });
-  const auth = createApiAuth(apiToken, sessions, security, { credentials: credentialStore, failures });
+  // M3-E E3: signed agent requests. The start-up fence refuses timestamps from before this point.
+  const signatureSkewMs = deps.signatureSkewMs ?? DEFAULT_SIGNATURE_SKEW_SECONDS * 1000;
+  const verifySigned = createSignatureVerifier({
+    credentials: credentialStore,
+    nonces: deps.nonceCache ?? createNonceCache({ now }),
+    now,
+    skewMs: signatureSkewMs,
+    startedAt: now(),
+  });
+  const auth = createApiAuth(apiToken, sessions, security, {
+    credentials: credentialStore,
+    failures,
+    verifySigned,
+    signedRetryAfterSeconds: Math.ceil(signatureSkewMs / 1000),
+  });
   const limit = createRateLimiter({ windowMs: security.rateLimitWindowMs, now });
   const scanService = deps.scanService ?? new ScanService({ config: loadScanConfig() });
   let nextId = 1;
@@ -187,7 +239,8 @@ export function createApp(deps: AppDeps = {}) {
   app.use(hostCheck(security.allowedHostnames));
   app.use(originCheck(security.allowedOrigins));
   app.use(cors({ origin: [...security.allowedOrigins], credentials: true }));
-  app.use(express.json({ limit: "32kb" }));
+  // The exact body bytes are kept for signed-request verification (M3-E E3); the 32 KB limit applies to both.
+  app.use(express.json({ limit: "32kb", verify: captureRawBody }));
 
   app.get("/health", (_req, res) => {
     res.json({ status: "ok", service: "agentshield-api" });
@@ -632,12 +685,10 @@ export function createApp(deps: AppDeps = {}) {
       next(error);
       return;
     }
-    const isParseError =
-      error instanceof SyntaxError ||
-      (isRecord(error) && (error.type === "entity.parse.failed" || error.type === "entity.too.large"));
-    if (isParseError) {
-      console.warn("api-request status=bad-request category=malformed-json");
-      res.status(400).json({ error: "Malformed JSON body." });
+    const client = bodyParserClientError(error);
+    if (client) {
+      console.warn(`api-request status=${client.status} category=${client.category}`);
+      res.status(client.status).json({ error: client.message });
       return;
     }
     console.warn("api-request status=internal-error category=unhandled");

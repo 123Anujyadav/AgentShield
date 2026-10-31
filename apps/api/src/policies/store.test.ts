@@ -176,6 +176,6 @@ describe("M3-C: loading at start-up", () => {
     const server = readFileSync(new URL("../server.ts", import.meta.url), "utf8");
     expect(server).toContain("policyStore = loadPolicyStore();");
     expect(server).toMatch(/catch \(error\) \{[\s\S]*?agent-policy status=invalid-config[\s\S]*?process\.exit\(1\);/);
-    expect(server).toContain("createApp({ apiToken: tokenFile.token, policyStore, credentialStore })");
+    expect(server).toContain("createApp({ apiToken: tokenFile.token, policyStore, credentialStore, signatureSkewMs })");
   });
 });

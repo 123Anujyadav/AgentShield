@@ -7,9 +7,9 @@
   "scripts": {
     "dev:api": "npm run dev -w @agentshield/api",
     "dev:web": "npm run dev -w @agentshield/web",
-    "build": "npm run build -w @agentshield/engine && npm run build -w @agentshield/websec && npm run build -w @agentshield/api && npm run build -w @agentshield/web",
-    "test": "npm run test -w @agentshield/engine && npm run test -w @agentshield/websec && npm run test -w @agentshield/api && npm run test -w @agentshield/web",
-    "typecheck": "npm run typecheck -w @agentshield/engine && npm run typecheck -w @agentshield/websec && npm run typecheck -w @agentshield/api && npm run typecheck -w @agentshield/web",
+    "build": "npm run build -w @agentshield/agent-protocol && npm run build -w @agentshield/engine && npm run build -w @agentshield/websec && npm run build -w @agentshield/api && npm run build -w @agentshield/web",
+    "test": "npm run test -w @agentshield/agent-protocol && npm run test -w @agentshield/engine && npm run test -w @agentshield/websec && npm run test -w @agentshield/api && npm run test -w @agentshield/web",
+    "typecheck": "npm run typecheck -w @agentshield/agent-protocol && npm run typecheck -w @agentshield/engine && npm run typecheck -w @agentshield/websec && npm run typecheck -w @agentshield/api && npm run typecheck -w @agentshield/web",
     "security:scan": "node scripts/secret-scan.mjs",
     "security:scan:history": "node scripts/secret-scan.mjs --history",
     "security:self-test": "node scripts/secret-scan.mjs --self-test",
