@@ -16,7 +16,9 @@ export {
   MAX_GET_RETRIES,
   MAX_TIMEOUT_MS,
   MIN_TIMEOUT_MS,
+  createIdempotencyKey,
   type AgentShieldClientOptions,
+  type EvaluateOptions,
   type WaitOptions,
 } from "./client.js";
 export {
@@ -31,6 +33,7 @@ export {
   NetworkError,
   RateLimitedError,
   ResponseFormatError,
+  ConflictError,
   ServerError,
   ServiceUnavailableError,
   TimeoutError,

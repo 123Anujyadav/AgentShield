@@ -24,7 +24,8 @@
 export const DEFAULT_NONCE_PER_KEY_LIMIT = 600;
 export const DEFAULT_NONCE_GLOBAL_LIMIT = 100_000;
 
-export type NonceCheck = "accepted" | "replay" | "key-quota" | "global-full";
+/** "store-unavailable" (M3-E E11): a durable cache could not persist the nonce, so the request may not proceed. */
+export type NonceCheck = "accepted" | "replay" | "key-quota" | "global-full" | "store-unavailable";
 
 export interface NonceCache {
   /**
@@ -35,6 +36,11 @@ export interface NonceCache {
    * replay through.
    */
   checkAndInsert(keyId: string, nonce: string, expiresAt: number, now?: number): NonceCheck;
+  /**
+   * M3-E E11: while replay state may be incomplete after a restart, requests with a timestamp up to (and
+   * including) this time are refused. Absent or 0: not recovering.
+   */
+  readonly recoveringUntil?: number;
   /** Live and not-yet-pruned entries in total (for tests and diagnostics; never sent to clients). */
   readonly size: number;
   sizeFor(keyId: string): number;

@@ -37,6 +37,7 @@ import { loadScanConfig } from "./scans/config.js";
 import { registerScanRoutes } from "./scans/routes.js";
 import { ScanService } from "./scans/service.js";
 import { AuditWriteError, type AuditLog } from "./audit/file-audit-log.js";
+import { createIdempotencyStore, evaluationDigest, IDEMPOTENCY_KEY, type IdempotencyBegin, type IdempotencyStore } from "./idempotency.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -185,6 +186,8 @@ export interface AppDeps {
    * failed or full. Without one, events are kept in memory only (tests, demos).
    */
   auditLog?: AuditLog;
+  /** M3-E E11: evaluation idempotency records (the server passes a durable store). Defaults to memory only. */
+  idempotencyStore?: IdempotencyStore;
   /**
    * The local API token (see security/token.ts). Without one, a random token
    * that nobody knows is used, so every protected route refuses access
@@ -202,6 +205,7 @@ export interface AppDeps {
 export function createApp(deps: AppDeps = {}) {
   const app = express();
   const audit = deps.auditLog;
+  const idempotencyStore = deps.idempotencyStore ?? createIdempotencyStore();
   const simulator = deps.simulator ?? createSimulator();
   const approvalStore = deps.approvalStore ?? createApprovalStore();
   const policyStore = deps.policyStore ?? builtInPolicyStore();
@@ -362,6 +366,8 @@ export function createApp(deps: AppDeps = {}) {
     return caller?.kind === "agent" ? `agent:${caller.agentId}` : (req.socket.remoteAddress ?? "unknown");
   };
   app.post("/api/evaluate", limit("evaluate", security.rateLimits.evaluate, evaluateKey), async (req, res, next) => {
+    // M3-E E11: set once this request owns a new idempotency record, so a failure can release waiting duplicates.
+    let idem: { agentId: string; key: string } | null = null;
     try {
     const body: unknown = req.body;
     if (!isRecord(body)) {
@@ -378,6 +384,12 @@ export function createApp(deps: AppDeps = {}) {
     let untrustedContent: UntrustedContent | undefined;
     let actor: RequestActor;
     let credentialKeyId: string | undefined;
+    // M3-E E11: an optional idempotency key. It is in the body, so the request signature covers it.
+    const idempotencyKey = body.idempotencyKey;
+    if (idempotencyKey !== undefined && (typeof idempotencyKey !== "string" || !IDEMPOTENCY_KEY.test(idempotencyKey) || typeof body.scenarioId === "string")) {
+      res.status(400).json({ error: "idempotencyKey must be 16 to 64 base64url characters, on an agent's evaluation.", reason: "invalid-idempotency-key" });
+      return;
+    }
 
     if (typeof body.scenarioId === "string") {
       // M3-D: seeded scenarios are operator demos, run under the built-in demo agent.
@@ -435,6 +447,16 @@ export function createApp(deps: AppDeps = {}) {
         return;
       }
       untrustedContent = parsed.value;
+      // M3-E E11: only after authentication, the identity check, validation and the audit check.
+      if (typeof idempotencyKey === "string") {
+        const digest = evaluationDigest({ agentId: body.agentId ?? null, intent: body.intent, action: body.action, untrustedContent: body.untrustedContent ?? null });
+        const begun = idempotencyStore.begin(caller.agentId, idempotencyKey, digest, now());
+        if (begun.kind !== "new") {
+          await answerIdempotent(res, begun);
+          return;
+        }
+        idem = { agentId: caller.agentId, key: idempotencyKey };
+      }
     }
 
     // The agent's server-side policy is authoritative (M3-C): the request can only
@@ -494,16 +516,11 @@ export function createApp(deps: AppDeps = {}) {
           lifecycle: "CONFIRM_NOT_QUEUED",
           ...agentFields,
         });
-        res.status(503).json({
-          error: perAgent
-            ? "This agent already has the maximum number of pending approvals. Approve, reject or let them expire, then try again. Nothing was executed."
-            : "The approval queue is full. Approve, reject or let pending approvals expire, then try again. Nothing was executed.",
-          reason: "approval-queue-full",
-          evaluation,
-          event,
-          executed: false,
-          pendingApproval: null,
-        });
+        const message = perAgent
+          ? "This agent already has the maximum number of pending approvals. Approve, reject or let them expire, then try again. Nothing was executed."
+          : "The approval queue is full. Approve, reject or let pending approvals expire, then try again. Nothing was executed.";
+        if (idem) idempotencyStore.complete(idem.agentId, idem.key, { status: 503, body: { error: message, reason: "approval-queue-full", evaluation, executed: false, pendingApproval: null } });
+        res.status(503).json({ error: message, reason: "approval-queue-full", evaluation, event, executed: false, pendingApproval: null, ...(idem ? { idempotentReplay: false } : {}) });
         return;
       }
     }
@@ -522,6 +539,11 @@ export function createApp(deps: AppDeps = {}) {
       lifecycle: evaluation.decision === "ALLOW" ? (execution.executed ? "SIMULATED_EXECUTED" : "EVALUATED") : evaluation.decision === "CONFIRM" ? "PENDING_CONFIRMATION" : "BLOCKED",
       ...agentFields,
     });
+    if (idem) {
+      // M3-E E11: the decision fields a retry needs, including the approval reference (id and createdAt).
+      const reference = pendingApproval ? { id: pendingApproval.id, status: pendingApproval.status, createdAt: pendingApproval.createdAt, expiresAt: pendingApproval.expiresAt } : null;
+      idempotencyStore.complete(idem.agentId, idem.key, { status: 200, body: { evaluation, executed: execution.executed, execution, pendingApproval: reference } });
+    }
     // Advisory only: model analysis runs after the deterministic decision and
     // can never change decision, riskScore, execution, or approval state.
     const modelAnalysis = untrustedContent
@@ -529,11 +551,34 @@ export function createApp(deps: AppDeps = {}) {
       : failedAnalysis("mock", "mock (deterministic, offline)", "not-scanned", "unavailable");
 
     // The effective intent is not echoed: it can carry raw request metadata (Phase I redaction applies to events and approvals).
-    res.json({ evaluation, event, executed: execution.executed, execution, pendingApproval, modelAnalysis });
+    res.json({ evaluation, event, executed: execution.executed, execution, pendingApproval, modelAnalysis, ...(idem ? { idempotentReplay: false } : {}) });
     } catch (error) {
+      // The outcome was not recorded: duplicates waiting on this request, and later retries, get outcome-unknown.
+      if (idem) idempotencyStore.abandon(idem.agentId, idem.key);
       next(error);
     }
   });
+
+  /** M3-E E11: answers an evaluation whose idempotency key is already known, without evaluating anything. */
+  async function answerIdempotent(res: express.Response, begun: Exclude<IdempotencyBegin, { kind: "new" }>): Promise<void> {
+    const outcome = begun.kind === "replay" ? begun.outcome : begun.kind === "in-progress" ? await begun.wait : null;
+    if (outcome) {
+      res.status(outcome.status).json({ ...outcome.body, idempotentReplay: true });
+      return;
+    }
+    if (begun.kind === "conflict") {
+      res.status(409).json({ error: "This idempotency key was already used for a different request. Nothing was evaluated.", reason: "idempotency-key-reused" });
+    } else if (begun.kind === "unknown" || begun.kind === "in-progress") {
+      res.status(409).json({
+        error: "An evaluation with this idempotency key was started, but its outcome was not recorded (for example the server stopped). It was not repeated.",
+        reason: "idempotency-outcome-unknown",
+      });
+    } else if (begun.kind === "full") {
+      res.status(503).json({ error: "Too many recent idempotency keys for this agent or this server. Nothing was evaluated; try again later.", reason: "idempotency-capacity" });
+    } else {
+      res.status(503).json({ error: "Idempotent evaluations are temporarily unavailable. Nothing was evaluated.", reason: "idempotency-unavailable" });
+    }
+  }
 
   /**
    * M3-D (U3): a request named a different agent than its credential's. Recorded as a

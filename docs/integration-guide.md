@@ -99,7 +99,8 @@ const request: EvaluateRequest = {
 };
 
 const result: EvaluateResult = await client.evaluate(request);
-// result: { decision, riskScore, explanation, findings, executed, approvalId, approvalCreatedAt }
+// result: { decision, riskScore, explanation, findings, executed, approvalId, approvalCreatedAt,
+//           idempotencyKey, idempotentReplay }
 ```
 
 **What is sent.** Only `intent`, `action` and `untrustedContent`.
@@ -275,20 +276,37 @@ been retried.
 ## 7. Handle unconfirmed outcomes safely
 
 An **unconfirmed** evaluation is the one case where doing the obvious thing, sending it
-again, can be wrong: if the first attempt was processed, an `ALLOW` would execute twice.
+again **as a new evaluation**, can be wrong: if the first attempt was processed, an `ALLOW`
+would execute twice. Since M3-E E11 the SDK gives every evaluation an idempotency key, which
+makes a deliberate retry safe:
 
-1. **Do not retry automatically.** The SDK never does, and your code should not either.
-2. **Do not act on it.** You have no decision, so the action is not done and not
-   approved.
-3. **Tell a person.**
-   - The evaluation may have been recorded.
-   - For a `CONFIRM`, a pending approval may exist. `listApprovals({ status: "PENDING" })`
-     shows this agent's pending approvals. A person can compare their times with the
-     attempt, and the operator can see full details in the dashboard.
-   - The six-field approval view does not identify the request, so this cannot be matched
-     automatically.
-4. **Re-send only after that decision.** It is then a new evaluation, signed afresh. If
-   the first one did create an approval, the operator may see two.
+```ts
+import { ConflictError } from "@agentshield/agent-sdk";
+
+async function reconcile(original: EvaluateRequest, error: AgentShieldError): Promise<EvaluateResult | "unknown"> {
+  const key = error.details.idempotencyKey; // the key the lost attempt was sent with
+  if (!key) return "unknown";
+  try {
+    // The SAME request with the SAME key: AgentShield returns the earlier result if it completed
+    // (result.idempotentReplay === true), or evaluates once if the first attempt never arrived.
+    return await client.evaluate(original, { idempotencyKey: key });
+  } catch (retryError) {
+    // 409 idempotency-outcome-unknown: it started but its result was lost; it is not run again.
+    if (retryError instanceof ConflictError) return "unknown";
+    throw retryError;
+  }
+}
+```
+
+1. **Never resend with a new key** after an ambiguous failure: that is a new evaluation.
+2. **Retry with the same key and the same request**, within 15 minutes (the server's
+   retention). Reordering properties does not matter; changing content does
+   (`409 idempotency-key-reused`).
+3. **If the answer is `409 idempotency-outcome-unknown`**, the first attempt started but its
+   result was lost (for example the API stopped). Do not act on it; tell a person, as before.
+4. **The SDK never does this retry on its own.** Retrying is your decision.
+
+Details and limits: [replay-and-idempotency.md](replay-and-idempotency.md).
 
 The reference agent reports this outcome as `unconfirmed`, with the text "The evaluation
 may or may not have been processed, so it was not sent again".
@@ -305,7 +323,8 @@ may or may not have been processed, so it was not sent again".
 - [ ] `CONFIRM` waits for an operator, and the agent never approves or rejects.
 - [ ] `BLOCK`, `REJECTED`, `EXPIRED`, `BLOCKED_ON_RECHECK` and `APPROVED_NOT_EXECUTED` do
       nothing.
-- [ ] Unconfirmed evaluations are never retried automatically.
+- [ ] Unconfirmed evaluations are never resent as new evaluations; a deliberate retry reuses
+      `error.details.idempotencyKey` with the same request.
 - [ ] Server text is sanitised before display, and finding evidence is not echoed to
       untrusted places.
 - [ ] Credentials are short-lived, rotated with overlap, and revoked when no longer

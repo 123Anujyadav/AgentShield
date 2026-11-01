@@ -7,6 +7,7 @@ import {
   AuthenticationError,
   BadRequestError,
   ConfigurationError,
+  ConflictError,
   ForbiddenError,
   InvalidArgumentError,
   NetworkError,
@@ -103,10 +104,10 @@ describe("M3-E E5: evaluate", () => {
   it("sends exactly the documented fields, signed over the exact body bytes, and returns the decision", async () => {
     const h = harness(() => json(200, evaluateResponse));
     const result = await h.client.evaluate({ ...request, agentId: "someone-else" } as EvaluateRequest);
-    expect(result).toEqual({ decision: "CONFIRM", riskScore: 80, explanation: "Needs confirmation.", findings: evaluateResponse.evaluation.findings, executed: false, approvalId: "apr-7", approvalCreatedAt: "2026-11-01T09:00:00.000Z" });
+    expect(result).toEqual({ decision: "CONFIRM", riskScore: 80, explanation: "Needs confirmation.", findings: evaluateResponse.evaluation.findings, executed: false, approvalId: "apr-7", approvalCreatedAt: "2026-11-01T09:00:00.000Z", idempotencyKey: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/), idempotentReplay: false });
     const [call] = h.calls;
     expect([call!.method, call!.url, call!.headers["Content-Type"], call!.redirect]).toEqual(["POST", `${BASE}/api/evaluate`, "application/json", "error"]);
-    expect(JSON.parse(call!.body!.toString())).toEqual({ intent: request.intent, action: request.action, untrustedContent: request.untrustedContent });
+    expect(JSON.parse(call!.body!.toString())).toEqual({ intent: request.intent, action: request.action, untrustedContent: request.untrustedContent, idempotencyKey: result.idempotencyKey });
     expect(verified(call!)).toBe(true);
   });
 
@@ -128,7 +129,7 @@ describe("M3-E E5: evaluate", () => {
     const h = harness(() => json(503, { error: "x", reason: "approval-queue-full" }, { "retry-after": "1" }), { getRetries: 5 });
     const error = await caught(h.client.evaluate(request));
     expect(error).toBeInstanceOf(ServiceUnavailableError);
-    expect((error as ServiceUnavailableError).details).toEqual({ status: 503, reason: "approval-queue-full", retryAfterSeconds: 1 });
+    expect((error as ServiceUnavailableError).details).toEqual({ status: 503, reason: "approval-queue-full", retryAfterSeconds: 1, idempotencyKey: expect.any(String) });
     expect([h.calls.length, h.sleeps]).toEqual([1, []]);
   });
 
@@ -162,7 +163,7 @@ describe("M3-E E5: evaluate", () => {
   it("maps 400 and 403 to typed errors with the server's reason, and rejects an unexpected response shape", async () => {
     const forbidden = await caught(harness(() => json(403, { error: "x", reason: "agent-identity-mismatch" })).client.evaluate(request));
     expect(forbidden).toBeInstanceOf(ForbiddenError);
-    expect((forbidden as ForbiddenError).details).toEqual({ status: 403, reason: "agent-identity-mismatch" });
+    expect((forbidden as ForbiddenError).details).toEqual({ status: 403, reason: "agent-identity-mismatch", idempotencyKey: expect.any(String) });
     expect(await caught(harness(() => json(400, { error: "x", reason: "invalid-agent-id" })).client.evaluate(request))).toBeInstanceOf(BadRequestError);
     expect(await caught(harness(() => json(200, { evaluation: { decision: "MAYBE" } })).client.evaluate(request))).toBeInstanceOf(ResponseFormatError);
     expect(await caught(harness(() => new Response("not json", { status: 200 })).client.evaluate(request))).toBeInstanceOf(ResponseFormatError);
@@ -344,5 +345,56 @@ describe("M3-E E5: configuration and exposure", () => {
     expect(everything).not.toContain(key.secretPart.slice(-43));
     expect(everything).not.toContain("asag2_");
     expect(JSON.parse(JSON.stringify(h.client))).toEqual({ baseUrl: BASE, keyId: key.keyId });
+  });
+});
+
+describe("M3-E E11: idempotency keys on evaluate", () => {
+  it("each new evaluation gets a fresh 128-bit key inside the signed body", async () => {
+    const h = harness(() => json(200, evaluateResponse));
+    const first = await h.client.evaluate(request);
+    const second = await h.client.evaluate(request);
+    expect(first.idempotencyKey).not.toBe(second.idempotencyKey);
+    expect(Buffer.from(first.idempotencyKey, "base64url")).toHaveLength(16);
+    for (const call of h.calls) expect(verified(call)).toBe(true); // the key is covered by the body hash
+  });
+
+  it("a deliberate retry with the same key sends byte-identical bodies, each attempt freshly signed", async () => {
+    const h = harness(() => json(200, { ...evaluateResponse, idempotentReplay: true }));
+    const key = "retry-key-0123456789AB";
+    const first = await h.client.evaluate(request, { idempotencyKey: key });
+    const again = await h.client.evaluate(request, { idempotencyKey: key });
+    expect([first.idempotencyKey, again.idempotencyKey, again.idempotentReplay]).toEqual([key, key, true]);
+    expect(h.calls[0]!.body!.equals(h.calls[1]!.body!)).toBe(true);
+    expect(h.calls[0]!.headers.Authorization).not.toBe(h.calls[1]!.headers.Authorization);
+  });
+
+  it("refuses an invalid key before sending anything", async () => {
+    const h = harness(() => json(200, evaluateResponse));
+    for (const idempotencyKey of ["short", "x".repeat(65), "has spaces in it 1234", 42]) {
+      expect(await caught(h.client.evaluate(request, { idempotencyKey } as never))).toBeInstanceOf(InvalidArgumentError);
+    }
+    expect(h.calls).toEqual([]);
+  });
+
+  it("a failed evaluate carries its key (to retry deliberately) and is still never retried automatically", async () => {
+    const network = harness(() => Promise.reject(new TypeError("fetch failed")), { getRetries: 5 });
+    const error = await caught(network.client.evaluate(request, { idempotencyKey: "lost-response-key-0001" }));
+    expect(error).toBeInstanceOf(NetworkError);
+    expect((error as NetworkError).details.idempotencyKey).toBe("lost-response-key-0001");
+    expect(network.calls).toHaveLength(1);
+    const timeout = harness((_c, _i, signal) => new Promise((_r, reject) => signal.addEventListener("abort", () => reject(signal.reason))), { timeoutMs: 100, getRetries: 5 });
+    const timedOut = await caught(timeout.client.evaluate(request));
+    expect(timedOut).toBeInstanceOf(TimeoutError);
+    expect((timedOut as TimeoutError).details.idempotencyKey).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    expect(timeout.calls).toHaveLength(1);
+  });
+
+  it("409 is a ConflictError with the server's reason; a non-boolean idempotentReplay is a format error", async () => {
+    for (const reason of ["idempotency-key-reused", "idempotency-outcome-unknown"]) {
+      const error = await caught(harness(() => json(409, { error: "x", reason })).client.evaluate(request));
+      expect(error).toBeInstanceOf(ConflictError);
+      expect((error as ConflictError).details).toMatchObject({ status: 409, reason });
+    }
+    expect(await caught(harness(() => json(200, { ...evaluateResponse, idempotentReplay: "yes" })).client.evaluate(request))).toBeInstanceOf(ResponseFormatError);
   });
 });

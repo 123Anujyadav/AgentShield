@@ -77,7 +77,7 @@ None found.
 | L2 | **A backward clock jump stalled several mechanisms.** Credential-store reloading stalled, so a revocation was held back for as long as the jump. The rate-limit windows froze too, returning 429 to everyone. | **Fixed:** a backward jump counts as due, or starts a new window. Tests in `credentials.test.ts` and `security.test.ts`. |
 | L3 | **Empty summaries could be saved.** A document of only invisible or control characters produced an empty summary that could be saved. | **Fixed:** refused locally. |
 | L4 | **A local refusal was blamed on the server.** The SDK's local refusal of a request over 32 KB was reported as "AgentShield refused the request". | **Fixed:** a `request-too-large` reason saying nothing was sent. |
-| L5 | **Future-dated replays across a restart.** A request with a future-dated timestamp, accepted just before a restart, passes the start-up fence (`ts ≥ startedAt`) and an empty cache, so it can be replayed once afterwards. | Deferred (D3). |
+| L5 | **Future-dated replays across a restart.** A request with a future-dated timestamp, accepted just before a restart, passes the start-up fence (`ts ≥ startedAt`) and an empty cache, so it can be replayed once afterwards. | **Fixed in M3-E E11** (durable replay journal; [replay-and-idempotency.md](replay-and-idempotency.md)). |
 | L6 | **A Windows ACL race on `--out`.** `--out` into a directory other users can read leaves a short window: the temporary file has inherited ACLs until `icacls` runs, and a handle opened in that window keeps read access. The default `%LOCALAPPDATA%` location is not affected. | Deferred (D4). |
 | L7 | **Approval recheck does not tie key to agent.** The recheck confirms the requesting key id is active, not that it still belongs to the same agent. This only matters if an operator rewrites the store to move a key id to another agent. | Deferred (the operator is trusted). |
 | L8 | **Cancellation and wait deadlines are imprecise.** Cancelling does not interrupt an SDK sleep or a request in progress. `waitForApproval` can end up to 30 s early, with no final poll, or overrun by one request. | Deferred. |
@@ -179,8 +179,8 @@ reference agent have no third-party runtime dependencies.
 |---|---|---|
 | D1 | Shared limits can be exhausted by several agents, or by many keys (L11) | Quotas per agent and per key with fair sharing, when multi-agent use is real |
 | D2 | ~~The audit log is in memory and can be flushed (M5)~~ | Done in M3-E E10. Remaining: the log is not tamper-proof, and there is no paging API for history beyond the view ([audit-log.md](audit-log.md#security-review-and-residual-risks)). |
-| D3 | Future-dated replay across a restart (L5) | Persist the newest accepted timestamp per key, or cap future skew below past skew |
+| D3 | ~~Future-dated replay across a restart (L5)~~ | Done in M3-E E11: accepted nonces are persisted before a request proceeds, with a recovery fence when state may be incomplete |
 | D4 | Windows ACL race on `--out` to shared directories (L6) | Refuse `--out` to directories other users can access, or write through a restricted subdirectory |
-| D5 | No idempotency; the approval view does not identify its request (threat 12) | Server-side idempotency keys and a request digest in the agent view |
+| D5 | ~~No idempotency~~ (done in M3-E E11: per-agent idempotency keys, SDK keys on every evaluation). Remaining: the approval view does not identify its request (threat 12) | Server-side idempotency keys and a request digest in the agent view |
 | D6 | The secret scan is not enforced (L10) | A pre-commit hook or CI job running `npm run security:verify` |
 | D7 | Persistent, shared state; TLS; operator roles (threats 4, 7, 13, 14) | Required before any deployment beyond a single local machine |

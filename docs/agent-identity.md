@@ -301,8 +301,8 @@ The server checks, in this order:
 `agent-auth status=failed scheme=signature reason=<reason> keyId=<keyId or none>`. The
 reasons are `bad-header`, `before-startup`, `stale`, `future`, `content-encoding`,
 `unreadable-body`, `bad-host`, `bad-request`, `unknown-key`, `scheme-mismatch`,
-`revoked`, `expired`, `store-unavailable`, `bad-signature`, `replay`, `nonce-key-quota`
-and `nonce-capacity`. The header, signature, nonce and any key material are never logged
+`revoked`, `expired`, `store-unavailable`, `bad-signature`, `replay`, `nonce-key-quota`,
+`nonce-capacity`, and (M3-E E11) `replay-recovering` and `replay-store-unavailable`. The header, signature, nonce and any key material are never logged
 or echoed.
 
 **Where signed requests are accepted:** only on `POST /api/evaluate` and
@@ -310,9 +310,13 @@ or echoed.
 signed agent. `GET /api/session` never verifies a
 signed header and uses no nonce.
 
-**The replay cache is in memory**, so it is per process and empty after a restart. The
-start-up fence closes that gap: any request captured before a restart carries an older
-timestamp and is refused. A request signed shortly before a restart and sent after it is
+**The replay cache is durable (M3-E E11).** Each accepted nonce is written to a journal and
+fsynced before the request proceeds, and live nonces are reloaded at start-up, so a request
+accepted before a restart is refused after it, even one dated in the future. A new, deleted
+or damaged journal makes the API refuse requests dated up to start-up + skew (503,
+`reason=replay-recovering`). A journal that cannot be written refuses signed requests (503,
+`reason=replay-store-unavailable`). See [replay-and-idempotency.md](replay-and-idempotency.md). The start-up fence also remains: any
+request captured before a restart carries an older timestamp and is refused. A request signed shortly before a restart and sent after it is
 refused too; the agent should sign it again.
 
 ## An agent's own approvals (M3-E E4)
@@ -443,8 +447,8 @@ If a credential may have leaked:
 - **Signed requests protect authenticity and integrity, not confidentiality.** The API is
   plain HTTP on loopback, so a local process able to capture loopback traffic can read
   request bodies and responses. Responses are not signed.
-- **The replay cache is per process and in memory.** It does not span several API
-  instances. After a restart the start-up fence, not the cache, refuses earlier requests.
+- **The replay cache is per process** (durable since M3-E E11, one process per journal). It
+  does not span several API instances with separate journals.
 - **A request signed but never delivered** can still be sent by whoever captured it, once,
   within its skew window.
 - **An Ed25519 private key is as sensitive as a bearer secret on the agent machine.**

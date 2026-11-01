@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
 import { AgentCredential } from "./credential.js";
 import {
@@ -5,6 +6,7 @@ import {
   AuthenticationError,
   BadRequestError,
   ConfigurationError,
+  ConflictError,
   ForbiddenError,
   InvalidArgumentError,
   NetworkError,
@@ -78,6 +80,23 @@ export interface AgentShieldClientOptions {
   now?: () => number;
   /** Delay function (default setTimeout). For tests. */
   sleep?: (ms: number) => Promise<void>;
+}
+
+/** M3-E E11: 16 to 64 base64url characters. */
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{16,64}$/;
+
+/** A new idempotency key: 128 random bits, base64url (22 characters). */
+export function createIdempotencyKey(): string {
+  return randomBytes(16).toString("base64url");
+}
+
+export interface EvaluateOptions {
+  /**
+   * M3-E E11: the idempotency key for this logical evaluation. Omit it for a new evaluation (one is
+   * created). Pass the key of an earlier attempt, with the same request, only to retry that evaluation:
+   * AgentShield then returns the earlier result instead of evaluating again.
+   */
+  idempotencyKey?: string;
 }
 
 export interface WaitOptions {
@@ -156,6 +175,7 @@ function errorFor(status: number, reason: string | undefined, retryAfter: number
   if (status === 401) return new AuthenticationError(status);
   if (status === 403) return new ForbiddenError(status, reason);
   if (status === 400 || status === 413 || status === 415) return new BadRequestError(status, reason);
+  if (status === 409) return new ConflictError(status, reason);
   if (status === 429) return new RateLimitedError(status, retryAfter, reason);
   if (status === 503) return new ServiceUnavailableError(status, retryAfter, reason);
   return new ServerError(status);
@@ -197,12 +217,23 @@ export class AgentShieldClient {
    * automatically. If it times out, it may or may not have been processed: check
    * listApprovals before sending it again.
    */
-  async evaluate(request: EvaluateRequest): Promise<EvaluateResult> {
+  async evaluate(request: EvaluateRequest, options: EvaluateOptions = {}): Promise<EvaluateResult> {
     if (!isRecord(request) || !isRecord(request.intent) || !isRecord(request.action)) throw new InvalidArgumentError("evaluate needs an intent and an action.");
     requireString(request.intent.task, "intent.task");
     for (const field of ["type", "tool", "destination", "summary"] as const) requireString(request.action[field], `action.${field}`);
+    if (!isRecord(options)) throw new InvalidArgumentError("evaluate options must be an object.");
+    if (options.idempotencyKey !== undefined && (typeof options.idempotencyKey !== "string" || !IDEMPOTENCY_KEY.test(options.idempotencyKey))) {
+      throw new InvalidArgumentError("idempotencyKey must be 16 to 64 base64url characters.");
+    }
+    // M3-E E11: every evaluation carries an idempotency key, inside the signed body.
+    const idempotencyKey = options.idempotencyKey ?? createIdempotencyKey();
     // Only the documented fields are sent. The agent's identity comes from the credential.
-    const payload = { intent: request.intent, action: request.action, ...(request.untrustedContent !== undefined ? { untrustedContent: request.untrustedContent } : {}) };
+    const payload = {
+      intent: request.intent,
+      action: request.action,
+      ...(request.untrustedContent !== undefined ? { untrustedContent: request.untrustedContent } : {}),
+      idempotencyKey,
+    };
     let text: string;
     try {
       text = JSON.stringify(payload);
@@ -211,7 +242,15 @@ export class AgentShieldClient {
     }
     const body = Buffer.from(text, "utf8");
     if (body.length > MAX_EVALUATE_BODY_BYTES) throw new InvalidArgumentError(`The evaluation is larger than ${MAX_EVALUATE_BODY_BYTES} bytes.`);
-    return parseEvaluateResult(await this.#send("POST", "/api/evaluate", body, { retry: false }));
+    try {
+      return parseEvaluateResult(await this.#send("POST", "/api/evaluate", body, { retry: false }), idempotencyKey);
+    } catch (error) {
+      // Never retried here. The key lets the caller retry this same evaluation deliberately and safely.
+      if (error instanceof Error && "details" in error && typeof (error as AgentShieldError).details === "object") {
+        (error as AgentShieldError).details.idempotencyKey = idempotencyKey;
+      }
+      throw error;
+    }
   }
 
   /** One of this agent's approvals, or null if it does not exist or is not this agent's (the server does not say which). */

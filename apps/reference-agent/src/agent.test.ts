@@ -32,7 +32,9 @@ describe("M3-E E6: the reference agent's request", () => {
     const [sent] = t.server.requests;
     expect(sent!.authorization).toMatch(new RegExp(`^AGENTSHIELD-SIG-V1 keyId="${testCredential("reference-agent").keyId}", ts="\\d{13}", nonce="[A-Za-z0-9_-]{22}", sig="[A-Za-z0-9_-]{86}"$`));
     const body = JSON.parse(sent!.body!);
-    expect(Object.keys(body)).toEqual(["intent", "action", "untrustedContent"]);
+    expect(Object.keys(body)).toEqual(["intent", "action", "untrustedContent", "idempotencyKey"]);
+    // M3-E E11: a fresh SDK idempotency key, inside the signed body.
+    expect(body.idempotencyKey).toMatch(/^[A-Za-z0-9_-]{22}$/);
     expect(body.action).toEqual({ ...SUMMARY_ACTION, summary: expect.stringMatching(/^Save a \d+-character summary of a document to the simulated workspace$/) });
     expect(body.intent).toEqual({ task: "Summarize a document into the simulated workspace", allowedActions: ["create_summary"], allowedDestinations: ["simulated-workspace"] });
     expect(body.untrustedContent).toEqual({ source: "document", text: DOCUMENT.text });

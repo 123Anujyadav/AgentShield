@@ -90,7 +90,11 @@ export type SignatureRejection =
   | "bad-signature"
   | "replay"
   | "nonce-key-quota"
-  | "nonce-capacity";
+  | "nonce-capacity"
+  /** M3-E E11: replay state may be incomplete after a restart; requests signed before it is complete are refused. */
+  | "replay-recovering"
+  /** M3-E E11: the durable replay store could not record the nonce. */
+  | "replay-store-unavailable";
 
 export type SignedVerification =
   | { ok: true; agentId: string; keyId: string }
@@ -145,12 +149,17 @@ export function createSignatureVerifier(deps: SignatureVerifierDeps): (req: Requ
     if (!key.ok) return fail(key.reason, keyId);
     if (!valid) return fail("bad-signature", keyId);
 
+    // M3-E E11: after a restart whose replay state may be incomplete, refuse anything a previous process
+    // could have accepted (its timestamps were at most its clock + skew, so at most recoveringUntil).
+    const recoveringUntil = deps.nonces.recoveringUntil ?? 0;
+    if (recoveringUntil > 0 && ts <= recoveringUntil) return fail("replay-recovering", keyId, 503);
     // The same clock reading as the timestamp check: accepted above means now <= ts + skew = expiresAt,
     // so an earlier copy of this request is still live here (M3-E E9).
     const outcome = deps.nonces.checkAndInsert(keyId, nonce, ts + deps.skewMs, now);
     if (outcome === "replay") return fail("replay", keyId);
     if (outcome === "key-quota") return fail("nonce-key-quota", keyId, 429);
     if (outcome === "global-full") return fail("nonce-capacity", keyId, 503);
+    if (outcome === "store-unavailable") return fail("replay-store-unavailable", keyId, 503);
     return { ok: true, agentId: key.agentId, keyId };
   };
 }

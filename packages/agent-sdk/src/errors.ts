@@ -11,6 +11,7 @@ export type AgentShieldErrorCode =
   | "authentication"
   | "forbidden"
   | "bad-request"
+  | "conflict"
   | "rate-limited"
   | "service-unavailable"
   | "server"
@@ -24,7 +25,13 @@ export class AgentShieldError extends Error {
   constructor(
     readonly code: AgentShieldErrorCode,
     message: string,
-    readonly details: { status?: number; reason?: string; retryAfterSeconds?: number } = {},
+    readonly details: {
+      status?: number;
+      reason?: string;
+      retryAfterSeconds?: number;
+      /** M3-E E11: for a failed evaluate, the idempotency key it was sent with (retry with it to reconcile safely). */
+      idempotencyKey?: string;
+    } = {},
   ) {
     super(message);
     this.name = "AgentShieldError";
@@ -96,6 +103,19 @@ export class ServiceUnavailableError extends AgentShieldError {
   constructor(status: number, retryAfterSeconds?: number, reason?: string) {
     super("service-unavailable", "AgentShield is temporarily unavailable (503).", { status, retryAfterSeconds, reason });
     this.name = "ServiceUnavailableError";
+  }
+}
+
+/**
+ * HTTP 409 (M3-E E11), for an evaluate with an idempotency key:
+ * - `idempotency-key-reused`: the key was already used for a different request; this request was not evaluated.
+ * - `idempotency-outcome-unknown`: an evaluation with this key was started but its outcome was not recorded
+ *   (for example the server stopped); it was not repeated, and its outcome remains unknown.
+ */
+export class ConflictError extends AgentShieldError {
+  constructor(status: number, reason?: string) {
+    super("conflict", `AgentShield refused the request as a conflict (${status}${reason ? `, ${reason}` : ""}).`, { status, reason });
+    this.name = "ConflictError";
   }
 }
 

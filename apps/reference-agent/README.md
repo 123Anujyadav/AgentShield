@@ -257,10 +257,11 @@ Nothing needs a real credential, an external service or a running AgentShield.
 - **The workspace is in memory.** Saved summaries and the list of approvals being followed
   are lost when the process ends. A restarted agent cannot resume an earlier approval; it
   can only run the task again.
-- **An unconfirmed evaluation stays unconfirmed.** The server has no idempotency keys yet,
-  and an approval view does not say which request it belongs to. So the agent cannot match
-  an `unconfirmed` evaluation to an approval. It reports the situation and leaves the
-  decision to a person.
+- **An unconfirmed evaluation stays unconfirmed here.** The SDK sends an idempotency key with
+  every evaluation (M3-E E11), and a caller could retry with it to recover the result (see
+  [`docs/integration-guide.md`](../../docs/integration-guide.md#7-handle-unconfirmed-outcomes-safely)).
+  This agent deliberately does not retry: it reports the situation and leaves the decision to
+  a person.
 - **AgentShield executes, not the agent.** "Executed" means AgentShield's simulator ran the
   action. The reference agent's own effect is only to record the summary locally.
 - **The summary is simple.** It is extractive and deterministic, by design: the point is

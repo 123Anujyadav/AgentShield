@@ -147,9 +147,9 @@ node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-11-01, M3-E E10): `npm test` passes 2,112 tests in 63 files
-(agent-protocol 98 in 1 file, agent-sdk 51 in 3, reference-agent 90 in 4, engine 728 in 9, websec
-395 in 13, API 727 in 30, web 23 in 3), with none failed or skipped, and `npm run build` and
+Current verified state (2026-11-01, M3-E E11): `npm test` passes 2,157 tests in 67 files
+(agent-protocol 98 in 1 file, agent-sdk 56 in 3, reference-agent 90 in 4, engine 728 in 9, websec
+395 in 13, API 767 in 34, web 23 in 3), with none failed or skipped, and `npm run build` and
 `npm run typecheck` pass for all seven workspaces. `npm audit` needs
 network access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 
@@ -587,8 +587,10 @@ Each agent has its own credential. Since M3-E E2 new credentials are Ed25519 key
 agent keeps the private key (`asag2_...`, PKCS#8) and the API stores only the public key. Since
 M3-E E3 agents sign each request (`Authorization: AGENTSHIELD-SIG-V1 ...`: method, host, exact
 target, timestamp within ±30 s, nonce, key id and raw-body SHA-256, verified with Ed25519); each
-signed request is accepted once (an in-memory replay cache, plus a start-up fence so nothing signed
-before a restart is accepted after it). Legacy
+signed request is accepted once (a replay cache that since M3-E E11 is persisted before a request
+proceeds, so a restart cannot reset it, plus a start-up fence). Evaluations can carry an
+`idempotencyKey` (the SDK sends one) so a lost response can be retried without evaluating twice;
+see [`docs/replay-and-idempotency.md`](docs/replay-and-idempotency.md). Legacy
 M3-D bearer credentials (`asag_<keyId>.<secret>`, sent as `Authorization: Bearer`, stored as a
 domain-separated SHA-256 and compared in constant time) authenticate only while
 `AGENT_BEARER_ALLOWED=true`, a temporary migration setting that is off by default. The store
@@ -630,7 +632,8 @@ signed requests are each accepted once. Details, lifecycle, incident response an
   environment variable, and signs every request with the shared protocol package.
 - **What it offers:** `evaluate`, `getApproval`, `listApprovals`, `iterateApprovals` and
   `waitForApproval`, and nothing that approves, rejects or executes.
-- **Retries:** `evaluate` is never retried. GET requests are retried a few times, each
+- **Retries:** `evaluate` is never retried automatically; since M3-E E11 every evaluation carries
+  an idempotency key, so a caller can retry the same evaluation safely. GET requests are retried a few times, each
   with a fresh signature.
 - **Dependencies:** none outside Node 22 and the workspace.
 

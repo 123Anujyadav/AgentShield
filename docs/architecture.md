@@ -163,8 +163,28 @@ as failed authentication:
 
 Live nonces are never evicted to make room.
 
-**Restarts.** The replay cache is per process and empty after a restart. The start-up fence
-covers that gap: any request signed before the restart is refused after it.
+**Restarts (M3-E E11).** Every accepted nonce is appended to a durable journal and fsynced
+before the request proceeds, and live nonces are loaded back at start-up, so a restart
+cannot reset replay protection. If replay state may be incomplete (a new or deleted journal,
+an unreadable record), requests dated up to start-up + skew are refused (503) until then.
+The start-up fence still refuses anything signed before the restart. Details:
+[replay-and-idempotency.md](replay-and-idempotency.md).
+
+## 3a. Evaluation idempotency (M3-E E11)
+
+An agent's evaluation may carry `idempotencyKey` in its signed body (the SDK sends one).
+Records are per agent and bound to a digest of the request. The rules:
+- **A retry with the same key and request** returns the stored result
+  (`idempotentReplay: true`), including the original approval reference, without
+  evaluating again.
+- **Another request with that key** is refused (`409 idempotency-key-reused`).
+- **A concurrent duplicate** waits for the first.
+- **A key that started but whose result was lost** is `409 idempotency-outcome-unknown`,
+  never re-run.
+
+The "started" record is stored durably before the evaluation runs. Records last 15
+minutes. It runs after authentication, validation and the audit check, and never bypasses
+them. Details: [replay-and-idempotency.md](replay-and-idempotency.md).
 
 ## 4. Authentication and authorization boundaries
 
@@ -290,7 +310,8 @@ the same agent, so history survives key rotation.
     https.
   - Redirects are never followed, and responses are capped at 1 MB.
 - **Signing.** Every attempt is signed afresh: new timestamp, new nonce, new signature.
-  - `evaluate` is never retried.
+  - `evaluate` is never retried automatically; it always carries an idempotency key, and the key
+    of a failed attempt is in `error.details.idempotencyKey` for a deliberate retry.
   - GETs are retried a bounded number of times: network errors, timeouts, short
     `Retry-After`, and once after a `401` (when `getRetries` is at least 1).
 - **Typed errors** with fixed messages. See [troubleshooting.md](troubleshooting.md).
@@ -326,6 +347,7 @@ reference: [`apps/reference-agent/README.md`](../apps/reference-agent/README.md)
 | Policies | Built in, or `AGENT_POLICY_FILE` | Yes; changes need a restart |
 | Pending and final approvals | API memory | **No** |
 | Activity events | Durable audit log (`AUDIT_LOG_FILE`, append-only, M3-E E10); the API view holds the newest 1,000 in memory | Yes; the view is restored at start-up ([audit-log.md](audit-log.md)) |
-| Replay (nonce) cache | API memory | **No**; the start-up fence covers it |
+| Replay (nonce) cache | Durable journal (`REPLAY_STORE_FILE`, M3-E E11) and memory | Yes; live nonces are reloaded |
+| Idempotency records | Durable journal (`IDEMPOTENCY_STORE_FILE`, M3-E E11) and memory | Yes, for 15 minutes |
 | Rate-limit counters, sessions | API memory | **No** |
 | Reference agent's saved summaries and followed approvals | Agent memory | **No** (agent restart) |

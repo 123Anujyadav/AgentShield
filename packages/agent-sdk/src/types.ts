@@ -47,6 +47,13 @@ export interface EvaluateResult {
    * a different approval: compare this with the `createdAt` of the approval you read (M3-E E9).
    */
   approvalCreatedAt: string | null;
+  /** M3-E E11: the idempotency key this evaluation was sent with. */
+  idempotencyKey: string;
+  /**
+   * M3-E E11: true when AgentShield returned the stored result of an earlier evaluation with the same key
+   * (nothing was evaluated or executed again).
+   */
+  idempotentReplay: boolean;
 }
 
 export type ApprovalStatus = "PENDING" | "EXECUTED" | "APPROVED_NOT_EXECUTED" | "REJECTED" | "EXPIRED" | "BLOCKED_ON_RECHECK";
@@ -110,7 +117,7 @@ function parseFinding(value: unknown): Finding {
 }
 
 /** The decision fields of an evaluate response; the rest of the server's response is not exposed. */
-export function parseEvaluateResult(value: unknown): EvaluateResult {
+export function parseEvaluateResult(value: unknown, idempotencyKey: string): EvaluateResult {
   if (!isRecord(value) || !isRecord(value.evaluation)) throw new ResponseFormatError();
   const { decision, riskScore, explanation, findings } = value.evaluation;
   if (decision !== "ALLOW" && decision !== "CONFIRM" && decision !== "BLOCK") throw new ResponseFormatError();
@@ -124,5 +131,6 @@ export function parseEvaluateResult(value: unknown): EvaluateResult {
     approvalId = pending.id;
     approvalCreatedAt = pending.createdAt;
   }
-  return { decision, riskScore, explanation, findings: findings.map(parseFinding), executed: value.executed, approvalId, approvalCreatedAt };
+  if (value.idempotentReplay !== undefined && typeof value.idempotentReplay !== "boolean") throw new ResponseFormatError();
+  return { decision, riskScore, explanation, findings: findings.map(parseFinding), executed: value.executed, approvalId, approvalCreatedAt, idempotencyKey, idempotentReplay: value.idempotentReplay === true };
 }

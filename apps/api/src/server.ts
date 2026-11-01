@@ -3,6 +3,9 @@ import { redactSecretValue } from "@agentshield/engine";
 import { bearerAllowedFromEnv, createReloadingCredentialStore, credentialFilePath, CredentialConfigError, type CredentialStore } from "./agents/credentials.js";
 import { signatureSkewMsFromEnv, SignatureConfigError } from "./agents/signature.js";
 import { createApp } from "./app.js";
+import { openDurableNonceCache, replayStorePathFromEnv, type DurableNonceCache } from "./agents/durable-nonce-cache.js";
+import { createIdempotencyStore, idempotencyStorePathFromEnv, type IdempotencyStore } from "./idempotency.js";
+import { JournalConfigError } from "./storage/journal.js";
 import { AuditConfigError, auditLogMaxBytesFromEnv, auditLogPathFromEnv, openFileAuditLog, type AuditLog } from "./audit/file-audit-log.js";
 import { API_HOST } from "./host.js";
 import { loadLocalEnv } from "./load-env.js";
@@ -78,11 +81,38 @@ if (recovery.staleLockReplaced) console.warn("audit-log status=warning reason=st
 if (!recovery.permissionsRestricted) console.warn("audit-log status=warning reason=permissions-not-restricted note=other-accounts-may-read-the-audit-log");
 // Release the single-writer lock on a normal exit, including Ctrl+C and termination.
 process.on("exit", () => auditLog.close());
+
+// M3-E E11: durable replay protection (accepted nonces survive a restart) and evaluation idempotency records.
+// Either store failing to open safely stops start-up.
+let nonceCache: DurableNonceCache;
+let idempotencyStore: IdempotencyStore;
+try {
+  nonceCache = openDurableNonceCache({ path: replayStorePathFromEnv(), now: Date.now, skewMs: signatureSkewMs });
+  idempotencyStore = createIdempotencyStore({ path: idempotencyStorePathFromEnv() });
+} catch (error) {
+  const reason = error instanceof JournalConfigError ? error.message : "unexpected error";
+  console.error(`agent-state status=invalid-config reason=${reason}`);
+  process.exit(1);
+}
+const replay = nonceCache.recovery;
+console.warn(`replay-store status=ready liveNonces=${replay.loaded} corrupt=${replay.corrupt}${replay.truncatedTail ? " truncatedTail=recovered" : ""}`);
+if (replay.recoveringUntil > 0) {
+  console.warn(`replay-store status=recovering until=${new Date(replay.recoveringUntil).toISOString()} effect=signed-requests-dated-before-then-refused`);
+}
+const idem = idempotencyStore.recovery;
+if (idem) {
+  console.warn(`idempotency-store status=ready records=${idem.records} corrupt=${idem.corrupt}${idem.truncatedTail ? " truncatedTail=recovered" : ""}`);
+  if (idem.recoveringUntil > 0) console.warn(`idempotency-store status=recovering until=${new Date(idem.recoveringUntil).toISOString()} effect=new-idempotency-keys-refused`);
+}
+process.on("exit", () => {
+  nonceCache.close();
+  idempotencyStore.close();
+});
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => process.exit(0));
 
 const port = Number(process.env.PORT ?? 4000);
 // Loopback only (API_HOST), and every /api route requires the API token or a session.
-const server = createApp({ apiToken: tokenFile.token, policyStore, credentialStore, signatureSkewMs, auditLog }).listen(port, API_HOST, () => {
+const server = createApp({ apiToken: tokenFile.token, policyStore, credentialStore, signatureSkewMs, auditLog, nonceCache, idempotencyStore }).listen(port, API_HOST, () => {
   const { address, port: boundPort } = server.address() as AddressInfo;
   console.log(`AgentShield API listening on http://${address}:${boundPort} (loopback only, API token required)`);
   console.log(`API token file${tokenFile.created ? " (created)" : ""}: ${tokenFile.path}`);

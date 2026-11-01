@@ -148,6 +148,7 @@ Every error is an `AgentShieldError` with a `code` and, when the server answered
 | `BadRequestError` (400 / 413 / 415) | An invalid request; not processed |
 | `RateLimitedError` (429) | Rate limited (`details.retryAfterSeconds`) |
 | `ServiceUnavailableError` (503) | For example, the replay cache or approval queue is full |
+| `ConflictError` (409) | M3-E E11: `idempotency-key-reused` (not processed) or `idempotency-outcome-unknown` (started, result lost; not re-run) |
 | `ServerError` | Any other HTTP error |
 | `TimeoutError` | No answer within `timeoutMs` (default 10 s) |
 | `NetworkError` | AgentShield could not be reached |
@@ -176,12 +177,22 @@ try {
 Every attempt is signed again, with a new timestamp, a new 128-bit nonce and a new
 signature. A nonce is never reused.
 
-**`evaluate` is never retried.** The server does not yet deduplicate evaluations, so a
-repeated evaluation could run an action twice.
-- After a `TimeoutError` or `NetworkError`, the evaluation may or may not have been
-  processed: check `listApprovals` before deciding to send it again.
-- A `401`, `400`, `403`, `413`, `415` or `429` means it was not processed, so re-sending
+**`evaluate` is never retried automatically.** Since M3-E E11 every evaluation carries an
+idempotency key in its signed body. Pass `{ idempotencyKey }` to reuse one; otherwise a new
+128-bit key is created. The key is returned as `result.idempotencyKey`, and on any failure
+as `error.details.idempotencyKey`.
+- **After a `TimeoutError`, `NetworkError`, `5xx` or `ResponseFormatError`,** the SDK cannot
+  know whether the evaluation ran. Retry deliberately with the same request and
+  `{ idempotencyKey: error.details.idempotencyKey }`. AgentShield returns the earlier result
+  (`result.idempotentReplay === true`), evaluates once if the first attempt never arrived, or
+  answers `ConflictError` `idempotency-outcome-unknown` if it started but its result was
+  lost.
+- **Never retry with a new key.** That is a new evaluation and can run the action twice.
+- **A `401`, `400`, `403`, `413`, `415` or `429`** means it was not processed, so resending
   is the caller's decision.
+- **Same key, different request:** `ConflictError` `idempotency-key-reused`.
+- **Retention.** Keys last 15 minutes on the server; details are in
+  [`docs/replay-and-idempotency.md`](../../docs/replay-and-idempotency.md).
 
 **GET requests** (`getApproval`, `listApprovals`) are retried up to `getRetries` extra
 times (default 2, at most 5):
@@ -224,5 +235,6 @@ new AgentShieldClient({
 - **Signatures protect the request, not the response.** On the default loopback HTTP
   setup, a local process that can capture loopback traffic can read requests and
   responses.
-- **A timed-out evaluate is ambiguous.** It may or may not have run. Server-side
-  idempotency keys are not implemented yet.
+- **A timed-out evaluate is ambiguous until reconciled.** Retrying with the same idempotency
+  key recovers the result within 15 minutes, unless the server lost it
+  (`idempotency-outcome-unknown`).

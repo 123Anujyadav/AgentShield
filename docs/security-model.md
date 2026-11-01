@@ -140,9 +140,10 @@ Each item names the mechanism and its limit.
 
 ## Replay protection limitations
 
-- **The replay cache is per process and in memory.** It does not span several API
-  instances. Running more than one API process against the same credentials would let a
-  request be accepted once by each.
+- **The replay cache is per process.** Since M3-E E11 it is persisted, so a restart does not
+  reset it, and a lock file stops two processes from sharing one journal. Running more than
+  one API process, each with its own journal, against the same credentials would still let
+  a request be accepted once by each. See [replay-and-idempotency.md](replay-and-idempotency.md).
 - **After a restart, the start-up fence** (not the cache) refuses earlier requests. A
   request signed just before a restart and sent after it is refused; the SDK re-signs a
   GET once in that case.
@@ -179,17 +180,26 @@ An operator's **approval is a request to run**, not a guarantee that anything ra
 go-ahead for any follow-up work. Treat every other status, and every failure to observe
 one, as "not done". The reference agent does exactly this.
 
-### Evaluations are not idempotent
+### Evaluations and idempotency (M3-E E11)
 
-The server does not deduplicate evaluations, so the SDK never retries `evaluate`.
+**Never resent with a new key.** The SDK still never retries `evaluate` automatically. After a
+timeout, network error, `5xx` or malformed response, the evaluation may or may not have been
+processed, and an `ALLOW` may already have executed. Resending it **without** idempotency
+could run the action twice.
 
-**When the outcome is unknown.** After a timeout, network error, `5xx` or malformed
-response, the evaluation may or may not have been processed. An `ALLOW` may already have
-executed. Re-sending it could run the action twice.
+**Retry with the same key instead.** Every SDK evaluation carries an idempotency key, and the
+key of a failed attempt is in `error.details.idempotencyKey`. Retrying with that key and the
+same request returns the original result if the first attempt completed, and never runs a
+second evaluation for the key.
+- If the first attempt started but its result was lost (for example the API stopped), the
+  answer is `409 idempotency-outcome-unknown`.
+- That case is still for a person to reconcile.
 
-**Reconciling is manual.** An approval's six-field view does not say which request created
-it, so an agent cannot automatically match an unconfirmed evaluation to an approval. A
-person must decide.
+**Limits.** Records last 15 minutes, with explicit capacity limits.
+- A key reused after that is a new evaluation.
+- Requests without a key are not idempotent.
+
+Details: [replay-and-idempotency.md](replay-and-idempotency.md).
 
 ## Credential rotation and revocation
 
@@ -236,7 +246,8 @@ processes would each have their own replay cache, approval store and events.
 
 **Agent restarts** lose whatever the agent kept in memory. For the reference agent, that is
 its saved summaries and the approvals it was following. Design your agent's own
-persistence with the evaluation's non-idempotency in mind.
+persistence so that a retry after a restart reuses the original idempotency key (keys last 15
+minutes on the server).
 
 ## Reporting and verification status
 

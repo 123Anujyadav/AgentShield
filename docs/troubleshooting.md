@@ -19,7 +19,7 @@ Every evaluation ends in exactly one of these four kinds. Handle them differentl
 | **Confirmed** | `evaluate` returned a decision. For a CONFIRM, `waitForApproval` returned a final status. | AgentShield decided. `executed` says whether its simulated handler ran. | Act only on `ALLOW` with `executed: true`, or on an observed `EXECUTED` with `executed: true`. Everything else is "not done". |
 | **Refused** | `AuthenticationError` (401), `ForbiddenError` (403), `BadRequestError` (400, 413, 415), `RateLimitedError` (429), or `InvalidArgumentError` (local) | The request was **not processed**. Nothing was evaluated or executed. | Fix the cause. Re-sending is your decision; after a 429, wait at least `details.retryAfterSeconds`. |
 | **Pending** | `evaluate` returned `CONFIRM` with an `approvalId`, and the approval is still `PENDING`. `waitForApproval` may throw `WaitTimeoutError`. | An operator has not decided yet. Nothing has run. | Wait, possibly again later. Never proceed without an observed `EXECUTED`. |
-| **Unconfirmed** | `evaluate` threw `TimeoutError`, `NetworkError`, `ServiceUnavailableError` (503), `ServerError` (5xx and other statuses) or `ResponseFormatError` | **Unknown.** The evaluation may or may not have been processed, and an `ALLOW` may already have executed. | Do **not** retry automatically, and do not act on it. Tell a person (see [integration-guide.md](integration-guide.md#7-handle-unconfirmed-outcomes-safely)). |
+| **Unconfirmed** | `evaluate` threw `TimeoutError`, `NetworkError`, `ServiceUnavailableError` (503), `ServerError` (5xx and other statuses), `ResponseFormatError`, or `ConflictError` with `idempotency-outcome-unknown` | **Unknown.** The evaluation may or may not have been processed, and an `ALLOW` may already have executed. | Do not act on it and never resend it as a new evaluation. Retry deliberately with `error.details.idempotencyKey` and the same request to recover the result (see [integration-guide.md](integration-guide.md#7-handle-unconfirmed-outcomes-safely)); if that is outcome-unknown, tell a person. |
 
 **The reference agent's status names** map onto these kinds:
 - **Confirmed:** `completed`, `blocked`, `not-executed`, `rejected`, `expired` and
@@ -165,6 +165,19 @@ GETs are retried after a short `Retry-After`.
 - **409 and 410** come only from the operator's approve and reject routes (already final,
   blocked on recheck, or expired). Agents observe the result through the approval status
   instead.
+
+### Replay protection and idempotency (M3-E E11)
+
+| Answer | Meaning | What to do |
+|---|---|---|
+| `503 Signed requests are temporarily unavailable` with log `reason=replay-recovering` | The replay journal was new, deleted or damaged at start-up, so requests dated up to start-up + skew (30 s) are refused. Not processed. | Wait (at most the skew) and send a freshly signed request. The SDK re-signs every attempt. |
+| The same 503 with log `reason=replay-store-unavailable` | The replay journal could not be written (disk full, I/O error). Every signed request is refused until a restart. Not processed. | Fix the cause (see the log), restart the API |
+| `400 {"reason":"invalid-idempotency-key"}` | `idempotencyKey` is not 16 to 64 base64url characters, or was sent with an operator scenario | Use the SDK, or a valid key |
+| `409 {"reason":"idempotency-key-reused"}` | The key was already used for a different request. Not evaluated. | Use the same request for a retry, or a new key for a new evaluation |
+| `409 {"reason":"idempotency-outcome-unknown"}` | An evaluation with this key started, but its result was not recorded (the API stopped, or the evaluation failed). It was not run again. | Unconfirmed: do not act on it; tell a person |
+| `503 {"reason":"idempotency-capacity"}` | Too many live keys for this agent (1,000) or the server (10,000). Not evaluated. | Wait for keys to expire (15 minutes), or slow down |
+| `503 {"reason":"idempotency-unavailable"}` | The idempotency journal could not be written, or it is recovering from a damaged record. Not evaluated. | See the API log (`idempotency-store status=...`); restart once fixed |
+| Start-up fails with `agent-state status=invalid-config reason=...` | A replay or idempotency journal is a symlink or not a regular file, cannot be written, is locked by another running API, or is too large | Fix the cause named in the reason |
 
 ### Audit storage (M3-E E10)
 
