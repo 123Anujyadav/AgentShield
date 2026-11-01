@@ -478,10 +478,12 @@ If a credential may have leaked:
   end-to-end tests against the API app on a loopback port) and Windows permission checks
   on temporary files.
 
-## Proposed follow-up: detecting leaked agent credentials (U7, not implemented)
+## Proposed follow-up: detecting leaked agent credentials (U7, partly implemented)
 
-The scanner, the data-leak guard and the repository secret scan do not know the `asag_`
-or `asag2_` formats yet. Changing them needs a separate review. The recommendation:
+Since M3-E E13 the **repository secret scan** detects both formats (`agentshield-signing-key`,
+`agentshield-bearer-credential`), including in the pre-commit hook. The **scanner and the
+data-leak guard** still do not know them; changing those needs a separate review. The
+recommendation:
 
 - **Patterns:**
   - bearer: `(?<![A-Za-z0-9_])asag_[0-9a-f]{16}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])`;

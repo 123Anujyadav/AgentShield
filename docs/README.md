@@ -37,6 +37,7 @@ Read these in order:
 | [agent-policies.md](agent-policies.md) | The policy file schema, enforcement and recheck |
 | [approval-persistence.md](approval-persistence.md) | Durable approvals: transitions, crash recovery, `OUTCOME_UNKNOWN`, limits, integration |
 | [replay-and-idempotency.md](replay-and-idempotency.md) | Durable replay protection and evaluation idempotency: contract, storage, crash behaviour, residual risks |
+| [storage-integrity.md](storage-integrity.md) | Integrity chains (corruption detection), filesystem hardening, operator recovery, and why tamper evidence needs a new trust boundary |
 | [audit-log.md](audit-log.md) | The durable audit log: file format, recovery, failure handling, operation, residual risks |
 | [`packages/agent-sdk/README.md`](../packages/agent-sdk/README.md) | The SDK's API, options, errors and retries |
 | [`apps/reference-agent/README.md`](../apps/reference-agent/README.md) | The reference agent's configuration, workflow, statuses and boundaries |

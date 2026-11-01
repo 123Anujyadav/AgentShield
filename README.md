@@ -143,14 +143,15 @@ npm run typecheck
 npm test
 npm run build
 npm run security:verify                                   # secret scan of tracked files and history, then git diff --check
+npm run security:hooks                                    # once per clone: pre-commit scan of staged changes (M3-E E13)
 node --test benchmarks/scanner/run-scanner-benchmark.test.mjs   # needs the engine built first
 node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-11-01, M3-E E12): `npm test` passes 2,186 tests in 69 files
-(agent-protocol 98 in 1 file, agent-sdk 56 in 3, reference-agent 91 in 4, engine 728 in 9, websec
-395 in 13, API 795 in 36, web 23 in 3), with none failed or skipped, and `npm run build` and
+Current verified state (2026-11-01, M3-E E13): `npm test` passes 2,282 tests in 72 files
+(agent-protocol 120 in 2 files, agent-sdk 56 in 3, reference-agent 91 in 4, engine 728 in 9, websec
+395 in 13, API 869 in 38, web 23 in 3), with none failed or skipped, and `npm run build` and
 `npm run typecheck` pass for all seven workspaces. `npm audit` needs
 network access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 

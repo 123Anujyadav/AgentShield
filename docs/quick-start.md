@@ -48,6 +48,7 @@ npm install          # once; needs internet access
 npm run build        # builds every workspace in dependency order
 npm run typecheck
 npm test
+npm run security:hooks   # once per clone: a pre-commit hook refuses staged secrets and .env files
 ```
 
 **Build order.** `npm run build` builds the packages in this order:

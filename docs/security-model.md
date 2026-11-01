@@ -64,7 +64,8 @@ Each item names the mechanism and its limit.
 - **Secrets leaking through action fields.** The data-leak guard hard-blocks documented
   credential patterns and email addresses in outbound action fields.
   - **Limit:** only the documented patterns are detected. AgentShield's own `asag_` and
-    `asag2_` formats are not detected yet (proposal U7 in agent-identity.md).
+    `asag2_` formats are not detected in action fields yet (proposal U7 in agent-identity.md);
+    since M3-E E13 the repository secret scan and its pre-commit hook do detect them.
 - **Leaking secrets through the SDK.**
   - Credential errors have fixed messages.
   - `AgentCredential` serialises to its key id only.
@@ -238,8 +239,10 @@ hardened for remote access.
 
 **It keeps:** credentials and policies, which are files; every activity event written to the
 durable audit log (M3-E E10); the replay journal and idempotency records (E11); and every
-approval with its state (E12, [approval-persistence.md](approval-persistence.md)). Policy changes need a restart. The audit log is not
-tamper-proof: a local user with write access can change it ([audit-log.md](audit-log.md)).
+approval with its state (E12, [approval-persistence.md](approval-persistence.md)). Policy changes need a restart. Since M3-E E13 every state file carries
+an integrity chain that detects corruption and unsophisticated edits (modified, deleted, inserted or
+reordered records), and each store recovers fail-safe. **None of them is tamper-proof**: the API's
+own account (or an administrator) can rewrite them undetectably. See [storage-integrity.md](storage-integrity.md).
 
 **One process per credential store.** The design assumes one API process. Several
 processes would each have their own replay cache, approval store and events.

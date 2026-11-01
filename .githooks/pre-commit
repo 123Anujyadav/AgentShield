@@ -1,0 +1,7 @@
+#!/bin/sh
+# AgentShield (M3-E E13): refuse a commit whose staged changes contain a credential-shaped value
+# (API keys, private keys, tokens, AgentShield agent credentials) or an environment, credential or
+# state file. Matched values are never printed. Install once with: npm run security:hooks
+# Bypass (git commit --no-verify) is possible by design; npm run security:verify remains the gate before pushing.
+repo_root=$(git rev-parse --show-toplevel) || exit 1
+exec node "$repo_root/scripts/secret-scan.mjs" --staged

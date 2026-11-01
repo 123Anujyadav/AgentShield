@@ -66,8 +66,12 @@ export interface ApprovalRecovery {
   pending: number;
   /** Approvals that were being carried out when the API stopped (now OUTCOME_UNKNOWN). */
   interrupted: number;
-  /** Unreadable or invalid records. */
+  /** Unreadable or invalid records, including (M3-E E13) records whose integrity chain did not verify. */
   corrupt: number;
+  unverified: number;
+  legacyMigrated: boolean;
+  damagedCopy: string | null;
+  permissionsRestricted: boolean;
   /** PENDING approvals made OUTCOME_UNKNOWN because a damaged record may have held their decision. */
   quarantined: number;
   truncatedTail: boolean;
@@ -87,6 +91,7 @@ export interface DurableApprovalStoreOptions {
   maxBytes?: number;
   compactAtBytes?: number;
   io?: JournalIo;
+  checkPermissions?: boolean;
 }
 
 function idNumber(id: unknown): number {
@@ -121,6 +126,7 @@ export function openDurableApprovalStore(options: DurableApprovalStoreOptions): 
     label: "approval store",
     maxBytes,
     maxRecordBytes: Math.min(MAX_APPROVAL_RECORD_BYTES, maxBytes),
+    checkPermissions: options.checkPermissions === true,
     ...(options.io ? { io: options.io } : {}),
   });
   const records = new Map<string, ApprovalRecord>();
@@ -130,7 +136,10 @@ export function openDurableApprovalStore(options: DurableApprovalStoreOptions): 
   let corrupt = 0;
   let highest = 0;
 
-  for (const line of journal.records) {
+  for (const [index, line] of journal.records.entries()) {
+    // M3-E E13: an unverified record is applied only as far as it is safe (a transition to a final state),
+    // and every pending approval it names is quarantined below, exactly like a damaged record.
+    const trusted = journal.verified[index] === true;
     let entry: unknown;
     try {
       entry = JSON.parse(line);
@@ -167,7 +176,7 @@ export function openDurableApprovalStore(options: DurableApprovalStoreOptions): 
         ok = true;
       }
     }
-    if (!ok) {
+    if (!ok || !trusted) {
       corrupt += 1;
       const named = [...line.matchAll(/apr-([1-9][0-9]{0,8})/g)].map((m) => `apr-${m[1]}`);
       if (named.length === 0) damagedUnknown = true;
@@ -211,8 +220,10 @@ export function openDurableApprovalStore(options: DurableApprovalStoreOptions): 
 
   const compactAt = options.compactAtBytes ?? APPROVAL_STORE_COMPACT_AT_BYTES;
   const snapshot = () => [JSON.stringify({ v: 1, t: "seq", next: store.nextId }), ...[...store.records.values()].map((r) => JSON.stringify({ v: 1, t: "create", r }))];
-  // Record the recovered state, and drop unreadable lines so they are not re-read at every start.
-  if (interrupted > 0 || quarantined > 0 || corrupt > 0) journal.rewrite(snapshot());
+  // Record the recovered state, and drop unreadable lines so they are not re-read at every start. A damaged
+  // journal is preserved first; a cut-short final record or a pre-E13 journal is rewritten too (M3-E E13).
+  const damagedCopy = corrupt > 0 ? journal.preserveCopy() : null;
+  if (interrupted > 0 || quarantined > 0 || corrupt > 0 || journal.truncatedTail || journal.integrity.legacy) journal.rewrite(snapshot());
   let nextCompactAt = Math.max(compactAt, journal.bytes * 2);
 
   const append = (entry: object) => {
@@ -252,7 +263,18 @@ export function openDurableApprovalStore(options: DurableApprovalStoreOptions): 
   let pending = 0;
   for (const record of store.records.values()) if (record.status === "PENDING") pending += 1;
   return Object.assign(store, {
-    recovery: { records: store.records.size, pending, interrupted, corrupt, quarantined, truncatedTail: journal.truncatedTail },
+    recovery: {
+      records: store.records.size,
+      pending,
+      interrupted,
+      corrupt,
+      quarantined,
+      unverified: journal.integrity.unverified,
+      legacyMigrated: journal.integrity.legacy,
+      damagedCopy,
+      permissionsRestricted: journal.permissionsRestricted,
+      truncatedTail: journal.truncatedTail,
+    },
     close: () => journal.close(),
   });
 }

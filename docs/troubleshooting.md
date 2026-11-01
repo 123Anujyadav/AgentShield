@@ -167,6 +167,18 @@ GETs are retried after a short `Retry-After`.
   blocked on recheck, or expired). Agents observe the result through the approval status
   instead.
 
+### Storage integrity and filesystem checks (M3-E E13)
+
+| Log line or answer | Meaning | What to do |
+|---|---|---|
+| `<store> status=integrity-failure ... copy=<path>` | A state file's integrity chain did not verify (damage or an edit). The store recovered fail-safe: approvals quarantined, replay fenced, idempotency keys unknown, or audit events left out of the view. The original was copied to `<path>`. | Compare the copy; follow [storage-integrity.md](storage-integrity.md) (Operator recovery). If interference is suspected, rotate the API token and agent credentials. |
+| `audit-log status=integrity-failure ...` | Unverified audit events are kept in the file but not shown | Archive the audit log once investigated |
+| `<store> status=migrated ...` | A pre-E13 journal was rewritten with the integrity chain | Nothing |
+| `... status=warning reason=permissions-not-restricted` | Other accounts can read that state file | Restrict it to your account, or let AgentShield recreate it |
+| Start-up fails: `... path is not safe: A parent directory of the file is a symbolic link or junction` | A store's directory is reached through a link | Use a real directory (set the store's `*_FILE` variable to a path without links) |
+| A request answers 503 after `lock-lost` in the log | A store's lock file was removed or replaced while the API ran, so the API stopped writing | Make sure only one API runs; restart it |
+| `git commit` fails with `secret scan FAILED` or `REFUSED <file>` | The pre-commit hook found a credential-shaped value, or a forbidden file, in the staged changes | Unstage it (`git restore --staged <file>`) and remove the secret; never commit `.env` |
+
 ### Approval storage (M3-E E12)
 
 | Answer | Meaning | What to do |

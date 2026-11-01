@@ -168,7 +168,10 @@ answer is `503 approval-store-full`.
 
 ## Residual risks
 
-- **No tamper protection.** A local user who can write the journal can forge or remove records.
+- **No tamper protection.** Since M3-E E13 the journal carries an integrity chain: a modified,
+  deleted, inserted or reordered record quarantines the pending approvals it names
+  (`OUTCOME_UNKNOWN`, never executable), and the damaged file is preserved ([storage-integrity.md](storage-integrity.md)). A local user who
+  recomputes the chain can still forge or remove records undetected.
 - **Storage that ignores fsync** can lose the latest transition after a power failure. The
   write-ahead record means an approval that was running then becomes `OUTCOME_UNKNOWN`, not
   `PENDING`.

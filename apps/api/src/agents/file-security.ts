@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, renameSync, rmSync, writeSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { chmodSync, closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, writeSync } from "node:fs";
+import { basename, dirname, join, parse, resolve } from "node:path";
 
 /**
  * Files that only the current user may read (M3-D): the agent credential store
@@ -77,6 +77,32 @@ export function isRestrictedToCurrentUser(path: string): boolean {
   return entries.length === 1 && entries[0]!.toLowerCase() === `${name.toLowerCase()}:(f)`;
 }
 
+/**
+ * M3-E E13: refuses a path when any existing ancestor directory is a symbolic link or junction. A link
+ * anywhere above a state file would let whoever controls it redirect where the file is created, read
+ * and replaced. Directories that do not exist yet are skipped (they are created as real directories);
+ * call again after creating them. The file itself is checked separately by its callers.
+ */
+export function assertNoLinkedAncestors(path: string): void {
+  let current = dirname(resolve(path));
+  const root = parse(current).root;
+  for (;;) {
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new FileSecurityError("A parent directory of the file cannot be inspected.");
+      stat = null;
+    }
+    if (stat?.isSymbolicLink()) throw new FileSecurityError("A parent directory of the file is a symbolic link or junction; it is not followed.");
+    if (stat && !stat.isDirectory()) throw new FileSecurityError("A parent of the file is not a directory.");
+    if (current === root) return;
+    const parent = dirname(current);
+    if (parent === current) return;
+    current = parent;
+  }
+}
+
 const RENAME_ATTEMPTS = 5;
 
 function pause(ms: number): void {
@@ -91,7 +117,9 @@ function pause(ms: number): void {
  */
 export function writeRestrictedFileAtomically(path: string, content: string, options: { overwrite: boolean }): void {
   const directory = dirname(path);
+  assertNoLinkedAncestors(path);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
+  assertNoLinkedAncestors(path); // again, now that every directory exists
   if (!options.overwrite && existsSync(path)) throw new FileSecurityError("The output file already exists; it was not replaced.");
   const temporary = join(directory, `.${basename(path)}.${randomBytes(8).toString("hex")}.tmp`);
   closeSync(openSync(temporary, "wx", 0o600));

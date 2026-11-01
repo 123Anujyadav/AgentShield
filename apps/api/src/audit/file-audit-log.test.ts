@@ -13,6 +13,9 @@ import {
   openFileAuditLog,
   parseAuditRecord,
   serializeAuditRecord,
+  serializeChainedAuditRecord,
+  AUDIT_CHAIN_GENESIS,
+  auditLineHash,
   type AuditFileIo,
   type AuditLog,
 } from "./file-audit-log.js";
@@ -81,8 +84,10 @@ describe("M3-E E10: appending and recovering", () => {
     expect(log.nextSequence).toBe(3);
     const stored = lines();
     expect(stored).toHaveLength(2);
-    expect(stored[0]).toMatch(/^\{"v":1,"seq":1,"sha256":"[0-9a-f]{64}","event":\{"id":"evt-1",/);
-    expect(parseAuditRecord(stored[1]!)).toEqual({ seq: 2, event: event(2) });
+    // M3-E E13: v2 records, each chained to the previous record line.
+    expect(stored[0]).toMatch(/^\{"v":2,"seq":1,"prev":"[0-9a-f]{64}","sha256":"[0-9a-f]{64}","event":\{"id":"evt-1",/);
+    expect(parseAuditRecord(stored[0]!)?.prev).toBe(AUDIT_CHAIN_GENESIS);
+    expect(parseAuditRecord(stored[1]!)).toEqual({ seq: 2, event: event(2), prev: auditLineHash(stored[0]!) });
     expect(readFileSync(path, "utf8").endsWith("\n")).toBe(true);
   });
 
@@ -112,6 +117,17 @@ describe("M3-E E10: appending and recovering", () => {
     const again = reopen(log);
     expect(again.loaded.map((e) => e.id)).toEqual(["evt-1", "evt-3"]);
     expect(again.recovery).toMatchObject({ malformed: 1, truncatedTail: false });
+  });
+
+  it("M3-E E13: the sequence number of a damaged chained (v2) record is never reused either", () => {
+    let log = openLog();
+    log.append(event(1));
+    log.close();
+    writeFileSync(path, readFileSync(path, "utf8") + serializeChainedAuditRecord(event(2), AUDIT_CHAIN_GENESIS).slice(0, 60));
+    log = openLog();
+    expect(log.recovery).toMatchObject({ records: 1, malformed: 1, truncatedTail: true });
+    expect(log.nextSequence).toBe(3);
+    log.close();
   });
 
   it("malformed and corrupted records are skipped and counted by line number; valid ones still load", () => {
@@ -215,7 +231,7 @@ describe("M3-E E10: failures never pass for durable writes", () => {
   });
 
   it("the storage limit: full before it would be exceeded, old events are never dropped, the file never grows past it", () => {
-    const record = Buffer.byteLength(serializeAuditRecord(event(1)));
+    const record = Buffer.byteLength(serializeChainedAuditRecord(event(1), AUDIT_CHAIN_GENESIS));
     const log = openLog({ maxBytes: record * 3 + 10, maxRecordBytes: record + 5 });
     log.append(event(1));
     log.append(event(2));

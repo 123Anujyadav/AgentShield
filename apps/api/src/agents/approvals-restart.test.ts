@@ -10,7 +10,7 @@ import { createIdempotencyStore, type IdempotencyStore } from "../idempotency.js
 import { createPolicyStore } from "../policies/store.js";
 import { loadSecurityConfig } from "../security/config.js";
 import { createSimulator, type Simulator } from "../simulator.js";
-import { DEFAULT_JOURNAL_IO, type JournalIo } from "../storage/journal.js";
+import { chainValue, DEFAULT_JOURNAL_IO, journalGenesis, type JournalIo } from "../storage/journal.js";
 import { request, signedRequest, TEST_API_TOKEN, testSigningKey, type TestSigningKey } from "../test-support.js";
 import { createCredentialStore, type CredentialRecord, type CredentialStore } from "./credentials.js";
 
@@ -97,6 +97,16 @@ function startApi(options: Options = {}) {
   return api;
 }
 
+/**
+ * Re-chains a journal after a test edits it, as if the edited content had been written legitimately
+ * (M3-E E13: an edit without a valid chain is detected and quarantined, see the integrity tests).
+ */
+function rechain(path: string, label: string) {
+  let chain = journalGenesis(label);
+  const lines = readFileSync(path, "utf8").split("\n").filter(Boolean).map((line) => line.replace(/\t[0-9a-f]{64}$/, ""));
+  writeFileSync(path, lines.map((record) => `${record}\t${(chain = chainValue(chain, record))}\n`).join(""));
+}
+
 /** A restart: the running process stops, a new one starts on the same files. */
 function restart(options: Options = {}) {
   running?.stop();
@@ -169,6 +179,7 @@ describe("M3-E E12: approval states survive restarts", () => {
     // The approval's expiry passes while the API is down.
     const past = new Date(Date.now() - 60_000).toISOString();
     writeFileSync(approvalsPath(), readFileSync(approvalsPath(), "utf8").replace(/"expiresAt":"[^"]+"/, `"expiresAt":"${past}"`));
+    rechain(approvalsPath(), "approval store");
     const api = startApi();
     expect((await api.agentRead(created.id)).body.approval.status).toBe("EXPIRED");
     expect((await api.approve(created.id)).status).toBe(410);

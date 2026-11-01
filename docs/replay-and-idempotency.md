@@ -207,7 +207,10 @@ The outcome is then exactly one of:
 - **Storage that ignores fsync** can lose the latest records after a power failure. For replay
   protection, the start-up fence still refuses anything signed before the restart; the
   future-dated window is open only for records actually lost.
-- **No tamper protection.** A local user who can write the journals can remove records (allowing a
+- **No tamper protection.** Since M3-E E13 the journals carry an integrity chain: damaged or
+  edited records trigger the recovery fence (replay) or make their keys outcome-unknown
+  (idempotency), see [storage-integrity.md](storage-integrity.md). But a local user who recomputes the chain, or removes whole records
+  from the end, is not detected: they can still remove records (allowing a
   replay or a re-run) or add them (refusing requests). The files are restricted to the current
   user, the same trust level as the API token and credential store.
 - **Clock changes.** The fallback uses the current skew. Raising

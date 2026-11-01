@@ -350,6 +350,7 @@ reference: [`apps/reference-agent/README.md`](../apps/reference-agent/README.md)
 | Agent private key | The agent's own file or environment | Not held by the API at all |
 | Policies | Built in, or `AGENT_POLICY_FILE` | Yes; changes need a restart |
 | Pending and final approvals | Durable journal (`APPROVAL_STORE_FILE`, M3-E E12) and memory | Yes |
+| Integrity of all state files (E13) | A SHA-256 integrity chain per file: corruption detection, not authenticity ([storage-integrity.md](storage-integrity.md)) | n/a |
 | Activity events | Durable audit log (`AUDIT_LOG_FILE`, append-only, M3-E E10); the API view holds the newest 1,000 in memory | Yes; the view is restored at start-up ([audit-log.md](audit-log.md)) |
 | Replay (nonce) cache | Durable journal (`REPLAY_STORE_FILE`, M3-E E11) and memory | Yes; live nonces are reloaded |
 | Idempotency records | Durable journal (`IDEMPOTENCY_STORE_FILE`, M3-E E11) and memory | Yes, for 15 minutes |

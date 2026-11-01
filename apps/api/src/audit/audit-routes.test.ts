@@ -212,15 +212,15 @@ describe("M3-E E10: the server opens the durable audit log at start-up", () => {
 
   it("M3-E E11: opens the durable replay and idempotency stores before listening, fails closed, and passes them to the app", () => {
     const server = readFileSync(fileURLToPath(new URL("../server.ts", import.meta.url)), "utf8");
-    expect(server).toContain("nonceCache = openDurableNonceCache({ path: replayStorePathFromEnv(), now: Date.now, skewMs: signatureSkewMs });");
-    expect(server).toContain("idempotencyStore = createIdempotencyStore({ path: idempotencyStorePathFromEnv() });");
+    expect(server).toContain("nonceCache = openDurableNonceCache({ path: replayStorePathFromEnv(), now: Date.now, skewMs: signatureSkewMs, checkPermissions: true });");
+    expect(server).toContain("idempotencyStore = createIdempotencyStore({ path: idempotencyStorePathFromEnv(), checkPermissions: true });");
     expect(server).toMatch(/catch \(error\) \{[\s\S]*?agent-state status=invalid-config[\s\S]*?process\.exit\(1\);/);
     expect(server.indexOf("openDurableNonceCache(")).toBeLessThan(server.indexOf(".listen("));
   });
 
   it("M3-E E12: opens the durable approval store before listening, fails closed, and passes it to the app", () => {
     const server = readFileSync(fileURLToPath(new URL("../server.ts", import.meta.url)), "utf8");
-    expect(server).toContain("approvalStore = openDurableApprovalStore({ path: approvalStorePathFromEnv() });");
+    expect(server).toContain("approvalStore = openDurableApprovalStore({ path: approvalStorePathFromEnv(), checkPermissions: true });");
     expect(server.indexOf("openDurableApprovalStore(")).toBeLessThan(server.indexOf(".listen("));
     expect(server.indexOf("openDurableApprovalStore(")).toBeLessThan(server.indexOf("agent-state status=invalid-config"));
   });

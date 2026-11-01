@@ -82,7 +82,7 @@ None found.
 | L7 | **Approval recheck does not tie key to agent.** The recheck confirms the requesting key id is active, not that it still belongs to the same agent. This only matters if an operator rewrites the store to move a key id to another agent. | Deferred (the operator is trusted). |
 | L8 | **Cancellation and wait deadlines are imprecise.** Cancelling does not interrupt an SDK sleep or a request in progress. `waitForApproval` can end up to 30 s early, with no final poll, or overrun by one request. | Deferred. |
 | L9 | **Unusable base URLs are accepted.** A trailing-dot host or port 0 is accepted by the constructor, then every request fails. | Deferred. |
-| L10 | **The secret scan is not enforced.** It runs only when someone runs `npm run security:verify`; there is no hook or CI. | Deferred (D6). |
+| L10 | **The secret scan is not enforced.** It runs only when someone runs `npm run security:verify`; there is no hook or CI. **Addressed in M3-E E13:** a tracked pre-commit hook scans staged changes (`npm run security:hooks`); no CI. | Deferred (D6). |
 | L11 | **The global replay cache can be filled.** 100,000 live nonces fit about 167 busy keys, after which every agent gets `503`. | Deferred (D1). |
 
 ### Informational
@@ -182,5 +182,27 @@ reference agent have no third-party runtime dependencies.
 | D3 | ~~Future-dated replay across a restart (L5)~~ | Done in M3-E E11: accepted nonces are persisted before a request proceeds, with a recovery fence when state may be incomplete |
 | D4 | Windows ACL race on `--out` to shared directories (L6) | Refuse `--out` to directories other users can access, or write through a restricted subdirectory |
 | D5 | ~~No idempotency~~ (done in M3-E E11: per-agent idempotency keys, SDK keys on every evaluation). Remaining: the approval view does not identify its request (threat 12) | Server-side idempotency keys and a request digest in the agent view |
-| D6 | The secret scan is not enforced (L10) | A pre-commit hook or CI job running `npm run security:verify` |
+| D6 | ~~The secret scan is not enforced (L10)~~ | Local pre-commit hook done in M3-E E13; CI remains a recommendation |
 | D7 | Shared (multi-process) state; TLS; operator roles (threats 4, 13, 14). Persistent local state is done (E10–E12). | Required before any deployment beyond a single local machine |
+
+## M3-E E13: storage integrity and repository hardening
+
+**Findings before implementation** (all reproduced in code and covered by tests):
+
+| # | Finding | Status |
+|---|---|---|
+| E13-1 | Parent directories of the state files were never checked: a junction or symbolic link above a journal, the audit log or a credential-store write silently redirected it | **Fixed:** every ancestor directory is checked before and after creating directories |
+| E13-2 | The single-writer lock was checked only at open: removed or replaced while the API ran, a second process could write the same journal | **Fixed:** the lock is verified before every write; a lost lock stops writing (503) |
+| E13-3 | A record cut short by a crash stayed in the file and was read as damage at the next restart, quarantining the approval it named (an E12 defect) | **Fixed:** stores rewrite the journal after such a crash |
+| E13-4 | The journals had no protection against silently modified, deleted or reordered records; a single changed character in an approval could be accepted | **Fixed as corruption detection:** an integrity chain on all four state files, fail-safe recovery, damaged copies preserved |
+| E13-5 | The secret scan had no pre-commit enforcement and did not know AgentShield's own credential formats | **Fixed:** a staged scan with a pre-commit hook, refusal of env, credential and state files, and `asag_`/`asag2_` patterns |
+
+**Tamper evidence: reported, not implemented.** Authenticating the journals needs a key outside
+the reach of the API's Windows account, which owns the files. The options are a separate signing
+service account, a TPM-bound key, or an external anchor, and each brings a key-management model
+this prototype does not have. See [storage-integrity.md](storage-integrity.md). The implemented chain is corruption detection, and is
+documented as such.
+
+**Residual:** the API's account or an administrator can still rewrite any state file
+undetectably; whole records removed from the end of a file are not detected; and the hook can be
+skipped with `--no-verify`.

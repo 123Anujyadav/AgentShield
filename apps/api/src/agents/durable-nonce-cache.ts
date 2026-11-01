@@ -43,6 +43,12 @@ export function replayStorePathFromEnv(env: NodeJS.ProcessEnv = process.env): st
 export interface ReplayRecovery {
   /** Live nonces loaded back into the cache. */
   loaded: number;
+  /** M3-E E13: records whose integrity chain did not verify (they are still honoured as nonces). */
+  unverified: number;
+  /** M3-E E13: a pre-E13 journal (no integrity chain) was rewritten in the chained form. */
+  legacyMigrated: boolean;
+  /** M3-E E13: where the damaged journal was preserved before recovery, or null. */
+  damagedCopy: string | null;
   /** Lines that are not valid records (excluding a final record cut short by a crash). */
   corrupt: number;
   /** Valid, live records that could not be loaded (limits lowered since they were written). */
@@ -55,6 +61,7 @@ export interface ReplayRecovery {
 
 export interface DurableNonceCache extends NonceCache {
   readonly recovery: ReplayRecovery;
+  readonly permissionsRestricted: boolean;
   readonly recoveringUntil: number;
   close(): void;
 }
@@ -62,6 +69,8 @@ export interface DurableNonceCache extends NonceCache {
 export interface DurableNonceCacheOptions {
   path: string;
   now: () => number;
+  /** Check the journal's file permissions (slow on Windows; the server sets it). */
+  checkPermissions?: boolean;
   /** The allowed clock skew, in ms (the verifier's). */
   skewMs: number;
   perKeyLimit?: number;
@@ -76,7 +85,13 @@ const recordOf = (keyId: string, nonce: string, expiresAt: number) => `n1 ${keyI
 export function openDurableNonceCache(options: DurableNonceCacheOptions): DurableNonceCache {
   const { now, skewMs } = options;
   const memory = createNonceCache({ now, perKeyLimit: options.perKeyLimit ?? DEFAULT_NONCE_PER_KEY_LIMIT, globalLimit: options.globalLimit ?? DEFAULT_NONCE_GLOBAL_LIMIT });
-  const journal: Journal = openJournal(options.path, { label: "replay store", maxBytes: options.maxBytes ?? REPLAY_STORE_MAX_BYTES, maxRecordBytes: 128, ...(options.io ? { io: options.io } : {}) });
+  const journal: Journal = openJournal(options.path, {
+    label: "replay store",
+    maxBytes: options.maxBytes ?? REPLAY_STORE_MAX_BYTES,
+    maxRecordBytes: 128,
+    checkPermissions: options.checkPermissions === true,
+    ...(options.io ? { io: options.io } : {}),
+  });
   const compactAt = options.compactAtBytes ?? REPLAY_STORE_COMPACT_AT_BYTES;
 
   // Live records, for compaction.
@@ -86,20 +101,23 @@ export function openDurableNonceCache(options: DurableNonceCacheOptions): Durabl
   let dropped = 0;
   let loaded = 0;
   let markedUntil = 0;
-  for (const line of journal.records) {
+  journal.records.forEach((line, index) => {
+    // An unverified record (M3-E E13) is still honoured as a nonce (refusing more is safe), but replay
+    // state can no longer be trusted to be complete: it triggers the recovery fence below.
+    if (!journal.verified[index]) corrupt += 1;
     const marker = MARKER.exec(line);
     if (marker) {
       markedUntil = Math.max(markedUntil, Number(marker[1]));
-      continue;
+      return;
     }
     const match = RECORD.exec(line);
     if (!match) {
-      corrupt += 1;
-      continue;
+      if (journal.verified[index]) corrupt += 1;
+      return;
     }
     const [, keyId, nonce, expiresText] = match;
     const expiresAt = Number(expiresText);
-    if (expiresAt < startedAt) continue;
+    if (expiresAt < startedAt) return;
     const outcome = memory.checkAndInsert(keyId!, nonce!, expiresAt, startedAt);
     if (outcome === "accepted") {
       loaded += 1;
@@ -107,7 +125,7 @@ export function openDurableNonceCache(options: DurableNonceCacheOptions): Durabl
     } else if (outcome !== "replay") {
       dropped += 1;
     }
-  }
+  });
   // A recovery window from an earlier start that has not passed yet stays in force.
   const recoveringUntil = Math.max(markedUntil >= startedAt ? markedUntil : 0, journal.created || corrupt > 0 || dropped > 0 ? startedAt + skewMs : 0);
   const liveRecords = (at: number) => {
@@ -118,7 +136,9 @@ export function openDurableNonceCache(options: DurableNonceCacheOptions): Durabl
   };
   // While recovering, record the window durably (so a restart inside it keeps it) and drop unreadable lines
   // (so they do not start a new window at every restart). A failure here stops start-up.
-  if (recoveringUntil > 0 && (journal.created || corrupt > 0 || dropped > 0)) journal.rewrite(liveRecords(startedAt));
+  // M3-E E13: a damaged journal is preserved for investigation before it is rewritten.
+  const damagedCopy = corrupt > 0 ? journal.preserveCopy() : null;
+  if ((recoveringUntil > 0 && (journal.created || corrupt > 0 || dropped > 0)) || journal.truncatedTail || journal.integrity.legacy) journal.rewrite(liveRecords(startedAt));
   let nextCompactAt = Math.max(compactAt, journal.bytes * 2);
 
   function compact(at: number): void {
@@ -127,7 +147,18 @@ export function openDurableNonceCache(options: DurableNonceCacheOptions): Durabl
   }
 
   return {
-    recovery: { loaded, corrupt, dropped, truncatedTail: journal.truncatedTail, created: journal.created, recoveringUntil },
+    recovery: {
+      loaded,
+      corrupt,
+      dropped,
+      unverified: journal.integrity.unverified,
+      legacyMigrated: journal.integrity.legacy,
+      damagedCopy,
+      truncatedTail: journal.truncatedTail,
+      created: journal.created,
+      recoveringUntil,
+    },
+    permissionsRestricted: journal.permissionsRestricted,
     recoveringUntil,
     checkAndInsert(keyId: string, nonce: string, expiresAt: number, at?: number): NonceCheck {
       if (journal.failed) return "store-unavailable";

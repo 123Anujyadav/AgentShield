@@ -70,6 +70,11 @@ export interface IdempotencyStore {
 export interface IdempotencyRecovery {
   records: number;
   corrupt: number;
+  /** M3-E E13: records whose integrity chain did not verify: their keys are outcome-unknown. */
+  unverified: number;
+  legacyMigrated: boolean;
+  damagedCopy: string | null;
+  permissionsRestricted: boolean;
   truncatedTail: boolean;
   /** While recovering (a corrupted record was found), keys without a record are refused until then. */
   recoveringUntil: number;
@@ -112,6 +117,7 @@ export interface IdempotencyStoreOptions {
   compactAtBytes?: number;
   now?: () => number;
   io?: JournalIo;
+  checkPermissions?: boolean;
 }
 
 // A space never occurs in an agent id or a key, so this cannot collide.
@@ -162,17 +168,22 @@ export function createIdempotencyStore(options: IdempotencyStoreOptions = {}): I
       label: "idempotency store",
       maxBytes: options.maxBytes ?? IDEMPOTENCY_STORE_MAX_BYTES,
       maxRecordBytes: Math.max(maxRecordBytes, 512),
+      checkPermissions: options.checkPermissions === true,
       ...(options.io ? { io: options.io } : {}),
     });
     const startedAt = now();
     let corrupt = 0;
     let markedUntil = 0;
-    for (const line of journal.records) {
+    /** M3-E E13: keys named by unverified records: never replayed from storage, never evaluated as new. */
+    const untrusted = new Set<string>();
+    for (const [index, line] of journal.records.entries()) {
+      const trusted = journal.verified[index] === true;
+      if (!trusted) corrupt += 1;
       let record: Record<string, unknown>;
       try {
         record = JSON.parse(line) as Record<string, unknown>;
       } catch {
-        corrupt += 1;
+        if (trusted) corrupt += 1;
         continue;
       }
       const valid =
@@ -182,10 +193,11 @@ export function createIdempotencyStore(options: IdempotencyStoreOptions = {}): I
         continue;
       }
       if (!valid) {
-        corrupt += 1;
+        if (trusted) corrupt += 1;
         continue;
       }
       const k = id(record.a as string, record.k as string);
+      if (!trusted) untrusted.add(k);
       if (record.t === "b" && typeof record.d === "string" && /^[0-9a-f]{64}$/.test(record.d) && Number.isSafeInteger(record.c)) {
         const entry: Entry = { agentId: record.a as string, key: record.k as string, digest: record.d, createdAt: record.c as number, outcome: null };
         if (!expired(entry, startedAt) && !entries.has(k)) {
@@ -198,16 +210,35 @@ export function createIdempotencyStore(options: IdempotencyStoreOptions = {}): I
           entry.outcome = { status: record.s, body: record.b as Record<string, unknown> };
           unrecorded.delete(k);
         }
-      } else {
+      } else if (trusted) {
         corrupt += 1;
+      }
+    }
+    // An unverified record may be a forged result or a forged start: such a key is outcome-unknown.
+    for (const k of untrusted) {
+      const entry = entries.get(k);
+      if (entry) {
+        entry.outcome = null;
+        unrecorded.add(k);
       }
     }
     // A corrupted record may have been a key's "started" record: until such records could have expired,
     // keys without a record are refused rather than evaluated a second time.
     const recoveringUntil = Math.max(markedUntil >= startedAt ? markedUntil : 0, corrupt > 0 ? startedAt + ttlMs : 0);
-    recovery = { records: entries.size, corrupt, truncatedTail: journal.truncatedTail, recoveringUntil };
-    // Record the window durably and drop unreadable lines, so a restart neither forgets nor restarts the window.
-    if (corrupt > 0) journal.rewrite(liveRecords(startedAt));
+    const damagedCopy = corrupt > 0 ? journal.preserveCopy() : null;
+    recovery = {
+      records: entries.size,
+      corrupt,
+      unverified: journal.integrity.unverified,
+      legacyMigrated: journal.integrity.legacy,
+      damagedCopy,
+      permissionsRestricted: journal.permissionsRestricted,
+      truncatedTail: journal.truncatedTail,
+      recoveringUntil,
+    };
+    // Record the window durably and drop unreadable lines, so a restart neither forgets nor restarts the
+    // window; a cut-short final record or a pre-E13 journal is rewritten too (M3-E E13).
+    if (corrupt > 0 || journal.truncatedTail || journal.integrity.legacy) journal.rewrite(liveRecords(startedAt));
     nextCompactAt = Math.max(compactAt, journal.bytes * 2);
   }
 

@@ -77,6 +77,10 @@ const recovery = auditLog.recovery;
 console.warn(`audit-log status=ready records=${recovery.records} bytes=${recovery.bytes} maxBytes=${recovery.maxBytes} path=${auditLogPathFromEnv()}`);
 if (recovery.truncatedTail) console.warn("audit-log status=recovered reason=truncated-final-record effect=partial-record-kept-and-skipped");
 if (recovery.malformed > 0) console.warn(`audit-log status=warning reason=malformed-records count=${recovery.malformed} lines=${recovery.malformedLines.join(",")}`);
+// M3-E E13: the integrity chain (corruption detection, not authenticity) did not verify: never silent.
+if (recovery.unverified > 0) {
+  console.error(`audit-log status=integrity-failure unverified=${recovery.unverified} lines=${recovery.unverifiedLines.join(",")} effect=left-out-of-the-event-view action=investigate-and-archive`);
+}
 if (recovery.duplicates > 0) console.warn(`audit-log status=warning reason=duplicate-records count=${recovery.duplicates}`);
 if (recovery.staleLockReplaced) console.warn("audit-log status=warning reason=stale-lock-replaced");
 if (!recovery.permissionsRestricted) console.warn("audit-log status=warning reason=permissions-not-restricted note=other-accounts-may-read-the-audit-log");
@@ -90,25 +94,36 @@ let idempotencyStore: IdempotencyStore;
 // M3-E E12: durable approvals (pending, decided and expired approvals survive a restart; ids are never reused).
 let approvalStore: DurableApprovalStore;
 try {
-  nonceCache = openDurableNonceCache({ path: replayStorePathFromEnv(), now: Date.now, skewMs: signatureSkewMs });
-  idempotencyStore = createIdempotencyStore({ path: idempotencyStorePathFromEnv() });
-  approvalStore = openDurableApprovalStore({ path: approvalStorePathFromEnv() });
+  nonceCache = openDurableNonceCache({ path: replayStorePathFromEnv(), now: Date.now, skewMs: signatureSkewMs, checkPermissions: true });
+  idempotencyStore = createIdempotencyStore({ path: idempotencyStorePathFromEnv(), checkPermissions: true });
+  approvalStore = openDurableApprovalStore({ path: approvalStorePathFromEnv(), checkPermissions: true });
 } catch (error) {
   const reason = error instanceof JournalConfigError ? error.message : "unexpected error";
   console.error(`agent-state status=invalid-config reason=${reason}`);
   process.exit(1);
 }
+/** M3-E E13: integrity and permission findings for a journal, logged loudly (never silently accepted). */
+function reportJournal(name: string, r: { unverified: number; corrupt: number; legacyMigrated: boolean; damagedCopy: string | null }, permissionsRestricted: boolean): void {
+  if (r.unverified > 0 || r.corrupt > 0) {
+    console.error(`${name} status=integrity-failure unverified=${r.unverified} damaged=${r.corrupt} effect=recovered-fail-safe copy=${r.damagedCopy ?? "none"} action=investigate`);
+  }
+  if (r.legacyMigrated) console.warn(`${name} status=migrated reason=pre-E13-journal-rewritten-with-integrity-chain`);
+  if (!permissionsRestricted) console.warn(`${name} status=warning reason=permissions-not-restricted note=other-accounts-may-read-it`);
+}
 const replay = nonceCache.recovery;
+reportJournal("replay-store", replay, nonceCache.permissionsRestricted);
 console.warn(`replay-store status=ready liveNonces=${replay.loaded} corrupt=${replay.corrupt}${replay.truncatedTail ? " truncatedTail=recovered" : ""}`);
 if (replay.recoveringUntil > 0) {
   console.warn(`replay-store status=recovering until=${new Date(replay.recoveringUntil).toISOString()} effect=signed-requests-dated-before-then-refused`);
 }
 const idem = idempotencyStore.recovery;
+if (idem) reportJournal("idempotency-store", idem, idem.permissionsRestricted);
 if (idem) {
   console.warn(`idempotency-store status=ready records=${idem.records} corrupt=${idem.corrupt}${idem.truncatedTail ? " truncatedTail=recovered" : ""}`);
   if (idem.recoveringUntil > 0) console.warn(`idempotency-store status=recovering until=${new Date(idem.recoveringUntil).toISOString()} effect=new-idempotency-keys-refused`);
 }
 const approvals = approvalStore.recovery;
+reportJournal("approval-store", approvals, approvals.permissionsRestricted);
 console.warn(`approval-store status=ready approvals=${approvals.records} pending=${approvals.pending} corrupt=${approvals.corrupt}${approvals.truncatedTail ? " truncatedTail=recovered" : ""}`);
 if (approvals.interrupted > 0) console.warn(`approval-store status=recovered interrupted=${approvals.interrupted} effect=marked-OUTCOME_UNKNOWN-never-run`);
 if (approvals.quarantined > 0) console.warn(`approval-store status=recovered quarantined=${approvals.quarantined} effect=damaged-records-marked-OUTCOME_UNKNOWN`);

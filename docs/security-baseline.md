@@ -14,9 +14,33 @@ All commands run locally. Nothing is uploaded to a third-party service.
 | `npm run security:scan:history` | The same, plus every commit reachable from any ref |
 | `npm run security:self-test` | End-to-end tests of the scanner CLI in temporary repositories |
 | `npm run security:verify` | Pre-push verification: history scan plus `git diff --check` |
+| `npm run security:staged` | M3-E E13: scan only the staged changes (what the next commit contains) |
+| `npm run security:hooks` | M3-E E13: install the tracked pre-commit hook (`git config core.hooksPath .githooks`) |
 
-Run `npm run security:verify` before every push, and `npm run security:self-test`
-after any change to `scripts/secret-scan.mjs`.
+Run `npm run security:hooks` once per clone, `npm run security:verify` before every push, and
+`npm run security:self-test` after any change to `scripts/secret-scan.mjs`.
+
+## Pre-commit enforcement (M3-E E13)
+
+`.githooks/pre-commit` runs `scripts/secret-scan.mjs --staged` before every commit, once
+installed with `npm run security:hooks`.
+
+**What it scans.** The staged (index) version of every added, copied, modified or renamed file:
+what will actually be committed, even if the working copy was cleaned afterwards.
+
+**What it refuses outright, by name, without reading the content:**
+- environment files (`.env`, `.env.*`, except `.env.example`);
+- `agent-credentials.json`, `api-token` and `*.key` files;
+- AgentShield state files: `approvals.journal`, `idempotency.journal`,
+  `replay-nonces.journal` and `audit-events.jsonl`.
+
+**Output.** It prints the file, line, category and allowlist decision, never the matched value,
+with a hint to unstage the file (`git restore --staged <file>`).
+
+**Limits:**
+- the hook is local: it must be installed per clone, and `git commit --no-verify` skips it;
+- it is not CI. `npm run security:verify` before pushing remains the gate, and history is
+  scanned there.
 
 ## Exit codes
 
@@ -50,6 +74,8 @@ scanner ever disagree about a matched line, the scan stops with exit `2`.
 | `google-api-key` | `AIza` followed by 35 characters |
 | `bearer-token` | `Bearer` followed by a 24+ character token |
 | `model-api-key-assignment` | A non-empty `MODEL_API_KEY=` assignment |
+| `agentshield-signing-key` | M3-E E13: an AgentShield Ed25519 agent private key (`asag2_<16 hex>.<64 base64url>`) |
+| `agentshield-bearer-credential` | M3-E E13: a legacy AgentShield bearer credential (`asag_<16 hex>.<43 base64url>`) |
 
 Every match on a line is checked, not only the first.
 

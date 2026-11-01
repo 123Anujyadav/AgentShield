@@ -9,6 +9,7 @@
  * Usage:
  *   node scripts/secret-scan.mjs                  tracked files only
  *   node scripts/secret-scan.mjs --history        tracked files + all history
+ *   node scripts/secret-scan.mjs --staged         only the staged changes (the pre-commit hook, M3-E E13)
  *   node scripts/secret-scan.mjs --self-test      end-to-end tests in temporary repositories
  *   node scripts/secret-scan.mjs --history --fingerprints
  *                                                 also print SHA-256 fingerprints (local use only)
@@ -46,7 +47,16 @@ export const PATTERNS = [
   ["google-api-key", "AIza[0-9A-Za-z_-]{35}"],
   ["bearer-token", `Bearer[ ${TAB}]+[A-Za-z0-9._-]{24,}`],
   ["model-api-key-assignment", `MODEL_API_KEY[ ${TAB}]*=[ ${TAB}]*[A-Za-z0-9][A-Za-z0-9_-]{7,}`],
+  // M3-E E13: AgentShield's own agent credentials (E2): an Ed25519 private key, and a legacy bearer secret.
+  ["agentshield-signing-key", "asag2_[0-9a-f]{16}[.][A-Za-z0-9_-]{64}"],
+  ["agentshield-bearer-credential", "asag_[0-9a-f]{16}[.][A-Za-z0-9_-]{43}"],
 ].map(([category, source]) => ({ category, source }));
+
+/**
+ * M3-E E13: staged files refused by name alone, before (and instead of) reading them: environment files
+ * (except the committed example) and AgentShield state files that may hold credentials or private data.
+ */
+const FORBIDDEN_STAGED_PATH = /(^|\/)\.env($|\.(?!example$)[^/]*$)|(^|\/)(agent-credentials\.json|api-token|[^/]*\.key|approvals\.journal|idempotency\.journal|replay-nonces\.journal|audit-events\.jsonl)$/;
 
 /**
  * Reviewed allowlist. Each entry matches exactly one matched value (SHA-256 of
@@ -248,6 +258,54 @@ function report(label, findings, showFingerprints) {
   return failing;
 }
 
+/**
+ * M3-E E13: scans what is about to be committed: the index version of every added, copied, modified or
+ * renamed file (not the working copy, which may differ). Forbidden paths are refused without being read.
+ */
+function scanStaged(top, allowlist) {
+  const files = nulList(runGit(top, ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR", "--", ".", ...PROTECTED_PATHSPECS]).stdout);
+  const findings = [];
+  const refused = [];
+  let scanned = 0;
+  let binary = 0;
+  for (const file of files) {
+    if (PROTECTED_PATH.test(file)) throw new ScanError("git listed a protected dataset path despite the exclusion");
+    if (FORBIDDEN_STAGED_PATH.test(file)) {
+      refused.push(file);
+      continue;
+    }
+    const result = spawnSync("git", ["show", `:${file}`], { cwd: top, maxBuffer: 256 * 1024 * 1024, windowsHide: true });
+    if (result.error || result.status !== 0) throw new ScanError(`git show could not read the staged version of a file (status ${result.status})`);
+    const buffer = result.stdout;
+    if (buffer.includes(0)) {
+      binary += 1;
+      continue;
+    }
+    scanned += 1;
+    buffer.toString("utf8").split(/\r?\n/).forEach((line, index) => {
+      for (const hit of classifyLine(line, allowlist)) findings.push({ where: `${file}:${index + 1} (staged)`, ...hit });
+    });
+  }
+  return { findings, refused, scanned, binary };
+}
+
+function scanStagedCommand({ fingerprints }) {
+  const top = runGit(process.cwd(), ["rev-parse", "--show-toplevel"]).stdout.trim();
+  if (!top) throw new ScanError("unexpected git rev-parse output");
+  const staged = scanStaged(top, ALLOWLIST);
+  console.log(`staged: scanned ${staged.scanned} staged text files (${staged.binary} binary skipped)`);
+  for (const file of staged.refused) console.error(`REFUSED ${file}: environment, credential and AgentShield state files must never be committed (content not read)`);
+  const failing = report("staged findings", staged.findings, fingerprints);
+  if (failing > 0 || staged.refused.length > 0) {
+    console.error(
+      `secret scan FAILED: ${failing} credential-shaped value(s) not on the allowlist and ${staged.refused.length} forbidden file(s) staged (values redacted).` +
+        " Unstage them (git restore --staged <file>) and remove the secret; see docs/security-baseline.md.",
+    );
+    process.exit(1);
+  }
+  console.log("secret scan passed: no credential-shaped value or forbidden file is staged");
+}
+
 function scan({ history, fingerprints }) {
   const top = runGit(process.cwd(), ["rev-parse", "--show-toplevel"]).stdout.trim();
   if (!top) throw new ScanError("unexpected git rev-parse output");
@@ -292,6 +350,8 @@ function fakeValues() {
     "google-api-key": `${"AI"}za${z(35)}`,
     "bearer-token": `${"Bear"}er ${z(30)}`,
     "model-api-key-assignment": `${"MODEL_API"}_KEY=${z(12)}`,
+    "agentshield-signing-key": `${"asag2"}_${"0".repeat(16)}.${z(64)}`,
+    "agentshield-bearer-credential": `${"asag"}_${"0".repeat(16)}.${z(43)}`,
   };
 }
 
@@ -425,6 +485,31 @@ function selfTest() {
       }
     }
     check("malformed git grep output is an error", malformed === 3);
+
+    // M3-E E13: the staged scan (pre-commit hook).
+    const stagedRepo = repo({ "readme.md": "clean\n" });
+    writeFileSync(join(stagedRepo, "config.js"), `const k = "${fake["github-token"]}";\n`);
+    git(stagedRepo, "add", "config.js");
+    const stagedHit = cli(stagedRepo, ["--staged"]);
+    check("staged: a staged secret fails", stagedHit.status === 1 && !stagedHit.leaked && stagedHit.output.includes("FINDING github-token at config.js:1 (staged)"));
+    // The index is what is committed: a secret only in the staged version is found even if the file was cleaned afterwards.
+    writeFileSync(join(stagedRepo, "config.js"), "const k = process.env.TOKEN;\n");
+    check("staged: the index version is scanned, not the working copy", cli(stagedRepo, ["--staged"]).status === 1);
+    git(stagedRepo, "add", "config.js");
+    check("staged: a cleaned, restaged file passes", cli(stagedRepo, ["--staged"]).status === 0);
+    for (const name of [".env", "apps/api/.env.local", "agent-credentials.json", "secure/agent.key", "approvals.journal"]) {
+      const forbidden = repo({ "readme.md": "clean\n" });
+      mkdirSync(dirname(join(forbidden, name)), { recursive: true });
+      writeFileSync(join(forbidden, name), `MARKER_NOT_PRINTED=${"Z".repeat(12)}\n`);
+      git(forbidden, "add", "-f", name);
+      const refusal = cli(forbidden, ["--staged"]);
+      check(`staged: ${name} is refused without its content being printed`, refusal.status === 1 && refusal.output.includes(`REFUSED ${name}`) && !refusal.output.includes("MARKER_NOT_PRINTED") && !refusal.leaked);
+    }
+    const example = repo({ "readme.md": "clean\n" });
+    writeFileSync(join(example, ".env.example"), "MODEL_API_KEY=\n");
+    git(example, "add", ".env.example");
+    check("staged: .env.example is allowed", cli(example, ["--staged"]).status === 0);
+    check("staged: nothing staged passes", cli(repo({ "readme.md": "clean\n" }), ["--staged"]).status === 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -439,6 +524,7 @@ function selfTest() {
 function main() {
   const args = process.argv.slice(2);
   if (args.includes("--self-test")) return selfTest();
+  if (args.includes("--staged")) return scanStagedCommand({ fingerprints: args.includes("--fingerprints") });
   return scan({ history: args.includes("--history"), fingerprints: args.includes("--fingerprints") });
 }
 

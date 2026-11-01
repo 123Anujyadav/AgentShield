@@ -5,7 +5,8 @@ API stores these events in a local, append-only file, so they survive restarts a
 dropped to make room.
 
 Scope: the single-process local prototype. This is not distributed storage, and it is not
-tamper-proof (see Residual risks).
+tamper-proof (see Residual risks). Since M3-E E13 records are chained (v2, a `prev` hash), so
+corruption and unsophisticated edits are detected and reported; see [storage-integrity.md](storage-integrity.md).
 
 ## What was there before (E10 inspection)
 
@@ -72,14 +73,24 @@ Tests and demos use this; the server always passes the file.
 **Lines.** UTF-8 JSON Lines, one record per line, each ending in LF:
 
 ```text
-{"v":1,"seq":42,"sha256":"<64 hex digits>","event":{"id":"evt-42","timestamp":"2026-11-01T09:00:00.000Z",...}}
+{"v":2,"seq":42,"prev":"<64 hex digits>","sha256":"<64 hex digits>","event":{"id":"evt-42","timestamp":"2026-11-01T09:00:00.000Z",...}}
 ```
+
+Logs written before M3-E E13 hold v1 records (the same without `prev`). They are still read,
+but only as a prefix: new records are chained after them, and a v1 record after a v2 one is
+unverified.
 
 **Fields.**
 - `seq` is 1, 2, 3, ... in write order. It always equals the number in `event.id`.
 - `sha256` is the SHA-256 of the exact `event` JSON text. It detects partial and corrupted
   records. It does **not** detect deliberate changes, since anyone who can edit the file can
   recompute it.
+- `prev` (M3-E E13) is the SHA-256 of the previous valid record line, or of a fixed genesis
+  value for the first record. A record whose `prev` does not match is **unverified**: it stays
+  in the file, is left out of the view, and is reported at start-up
+  (`audit-log status=integrity-failure`). This detects deleted, inserted and reordered records,
+  but not whole records removed from the end, nor a rewrite that recomputes every hash (see
+  [storage-integrity.md](storage-integrity.md)).
 - JSON escapes every control character, so no field value can end a line or start a forged
   record.
 
@@ -122,6 +133,7 @@ start-up.
 | A final record without its LF (a crash or power loss during a write) | Kept: an LF is appended so it stays a separate, malformed line, and the next record starts on its own line. Reported as `reason=truncated-final-record`. |
 | A malformed line: not JSON, wrong version, checksum mismatch, id not matching `seq`, missing fields | Skipped and counted. Start-up warns with the count and line numbers, never the content. The line stays in the file. |
 | A duplicate or out-of-order `seq` | Skipped (the first wins) and counted (`reason=duplicate-records`) |
+| A record whose `prev` does not name the previous valid record (E13) | Kept in the file, left out of the view, counted and reported as `status=integrity-failure` with line numbers |
 | Any skipped line | New ids continue after the highest `seq` seen anywhere in the file, so an id is never reused |
 
 Nothing in the file is deleted or rewritten during recovery.
@@ -177,10 +189,10 @@ at the next start.
 |---|---|---|
 | Log injection | JSON escaping of every field. The record shape is matched exactly. A line separator inside a field (U+2028/U+2029, left unescaped by JSON) is handled. | None found |
 | Path traversal | The path comes only from operator configuration (`AUDIT_LOG_FILE`), never from requests; it must be absolute | An operator can point it anywhere their account can write |
-| Symlink attacks | The final path component may not be a symlink or junction, the file is checked after opening, and `O_NOFOLLOW` is used on POSIX | A symlinked **parent** directory is followed. Use a directory only you control (the default is in your profile). |
+| Symlink attacks | The final path component may not be a symlink or junction, the file is checked after opening, and `O_NOFOLLOW` is used on POSIX | Since E13 a symlinked or junction **parent** directory is refused too. An administrator can still change the directory tree. |
 | Sensitive data | Events are redacted before storage, and the store adds nothing. Tests check that the file has no credential, key, Authorization header or token. | Redaction covers only the documented secret patterns (see the main README) |
 | Partial writes | Detected at start-up; kept and skipped. The process stops appending after a failed write. | None found |
-| Corrupted records | The checksum detects accidental damage; skipped and counted, never deleted | **No tamper protection.** A local user with write access can change, remove or forge records and recompute checksums. |
+| Corrupted records | The checksum detects accidental damage; since E13 the `prev` chain also detects deleted, inserted and reordered records. Unverified events are reported and left out of the view, never deleted. | **No tamper protection.** A local user with write access can change, remove or forge records and recompute checksums. |
 | Disk exhaustion | A hard size limit with a fail-closed refusal; old events are never dropped | Other files can still fill the disk; that surfaces as write failures, also fail-closed |
 | Event loss in crashes | Each event is fsynced before it is shown or the request completes | A crash between an action and its event write loses that event (the action is in-process memory only). Storage that ignores fsync can lose recent records. |
 | Concurrent writers | Synchronous appends in one process; the lock file stops a second process | Two processes on different paths are not detected. A lock taken over from a recycled process id is possible but unlikely. |

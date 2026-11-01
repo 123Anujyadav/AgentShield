@@ -38,7 +38,7 @@ function restart(cache: DurableNonceCache, extra: Partial<Parameters<typeof open
   return openCache(extra);
 }
 /** Nonce records only (a new store also records its recovery window as `r1 <until>`). */
-const lines = () => readFileSync(path, "utf8").split("\n").filter((l) => l.startsWith("n1 "));
+const lines = () => readFileSync(path, "utf8").split("\n").filter((l) => l.startsWith("n1 ")).map((l) => l.replace(/\t[0-9a-f]{64}$/, ""));
 
 describe("M3-E E11: durable replay cache", () => {
   it("records each accepted nonce durably; a repeat is a replay, before and after a restart", () => {
@@ -150,7 +150,8 @@ describe("M3-E E11: durable replay cache", () => {
   });
 
   it("a full store refuses rather than dropping live records", () => {
-    const cache = openCache({ maxBytes: 160, compactAtBytes: 10_000 });
+    // Each line carries a 65-byte integrity chain value (M3-E E13): room for the recovery marker and two records.
+    const cache = openCache({ maxBytes: 400, compactAtBytes: 10_000 });
     expect(cache.checkAndInsert(KEY_A, nonce(1), T + SKEW, T)).toBe("accepted");
     expect(cache.checkAndInsert(KEY_A, nonce(2), T + SKEW, T)).toBe("accepted");
     expect(cache.checkAndInsert(KEY_A, nonce(3), T + SKEW, T)).toBe("store-unavailable");

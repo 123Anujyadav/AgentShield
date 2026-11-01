@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, rmSync, writeSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import type { ActivityEvent } from "@agentshield/engine";
-import { FileSecurityError, isRestrictedToCurrentUser, writeRestrictedFileAtomically } from "../agents/file-security.js";
+import { assertNoLinkedAncestors, FileSecurityError, isRestrictedToCurrentUser, writeRestrictedFileAtomically } from "../agents/file-security.js";
+import { lockStillHeld } from "../storage/journal.js";
 import { defaultTokenDirectory } from "../security/token.js";
 
 /**
@@ -74,6 +75,15 @@ export interface AuditRecovery {
   records: number;
   /** Lines skipped because they are not valid records (including a terminated partial record). */
   malformed: number;
+  /**
+   * M3-E E13: records whose integrity chain (`prev`) does not match the previous record: modified,
+   * inserted, reordered, or following a deleted record. Kept in the file, left out of the API view.
+   */
+  unverified: number;
+  /** 1-based line numbers of the first unverified records. */
+  unverifiedLines: number[];
+  /** M3-E E13: the file holds pre-E13 (v1, unchained) records; new records are chained after them. */
+  legacyRecords: number;
   /** 1-based line numbers of the first skipped lines. */
   malformedLines: number[];
   /** Valid-looking records skipped because their sequence number was not greater than the previous one. */
@@ -139,6 +149,13 @@ export function auditLogMaxBytesFromEnv(env: NodeJS.ProcessEnv = process.env): n
 // The `s` flag matters: JSON.stringify leaves U+2028 and U+2029 unescaped, and without it `.` would not
 // match them, so a record whose fields contain one would be unreadable after a restart (M3-E E10).
 const RECORD = /^\{"v":1,"seq":([1-9][0-9]{0,14}),"sha256":"([0-9a-f]{64})","event":(\{.*\})\}$/s;
+/**
+ * M3-E E13: v2 adds `prev`, the SHA-256 of the previous valid record line (or of the genesis value), so a
+ * modified, deleted, inserted or reordered record is detected. Corruption detection only: no key is
+ * involved, so anyone able to rewrite the file can recompute it.
+ */
+const RECORD_V2 = /^\{"v":2,"seq":([1-9][0-9]{0,14}),"prev":"([0-9a-f]{64})","sha256":"([0-9a-f]{64})","event":(\{.*\})\}$/s;
+export const AUDIT_CHAIN_GENESIS = createHash("sha256").update("agentshield-audit-v2 genesis", "utf8").digest("hex");
 const EVENT_ID = /^evt-([1-9][0-9]{0,14})$/;
 const DECISIONS = new Set(["ALLOW", "CONFIRM", "BLOCK"]);
 
@@ -150,7 +167,7 @@ export function sequenceOf(id: unknown): number | null {
   return match ? Number(match[1]) : null;
 }
 
-/** The exact line stored for an event. */
+/** The line a pre-E13 (v1, unchained) log stored for an event. Kept for reading old logs and for tests. */
 export function serializeAuditRecord(event: ActivityEvent): string {
   const seq = sequenceOf(event.id);
   if (seq === null) throw new AuditWriteError("invalid-event-id");
@@ -158,10 +175,25 @@ export function serializeAuditRecord(event: ActivityEvent): string {
   return `{"v":${AUDIT_RECORD_VERSION},"seq":${seq},"sha256":"${sha256(body)}","event":${body}}\n`;
 }
 
-/** Parses one line; null when it is not a complete, valid record. */
-export function parseAuditRecord(line: string): { seq: number; event: ActivityEvent } | null {
-  const match = RECORD.exec(line);
+/** M3-E E13: the line stored for an event, chained to the previous record line's hash. */
+export function serializeChainedAuditRecord(event: ActivityEvent, prev: string): string {
+  const seq = sequenceOf(event.id);
+  if (seq === null) throw new AuditWriteError("invalid-event-id");
+  const body = JSON.stringify(event);
+  return `{"v":2,"seq":${seq},"prev":"${prev}","sha256":"${sha256(body)}","event":${body}}\n`;
+}
+
+/** The hash a following record's `prev` must carry for this line (the line without its LF). */
+export function auditLineHash(line: string): string {
+  return sha256(line);
+}
+
+/** Parses one line; null when it is not a complete, valid record. `prev` is null for a v1 (legacy) record. */
+export function parseAuditRecord(line: string): { seq: number; event: ActivityEvent; prev: string | null } | null {
+  const v2 = RECORD_V2.exec(line);
+  const match = v2 ? [v2[0], v2[1], v2[3], v2[4]] : RECORD.exec(line);
   if (!match) return null;
+  const prev = v2 ? v2[2]! : null;
   const [, seqText, digest, body] = match;
   if (sha256(body!) !== digest) return null;
   let event: unknown;
@@ -177,7 +209,7 @@ export function parseAuditRecord(line: string): { seq: number; event: ActivityEv
   if (typeof e.timestamp !== "string" || Number.isNaN(Date.parse(e.timestamp))) return null;
   if (typeof e.decision !== "string" || !DECISIONS.has(e.decision) || typeof e.riskScore !== "number" || !Array.isArray(e.findings)) return null;
   for (const field of ["intentTask", "actionType", "tool", "destination", "explanation"]) if (typeof e[field] !== "string") return null;
-  return { seq, event: event as ActivityEvent };
+  return { seq, event: event as ActivityEvent, prev };
 }
 
 function isAlive(pid: number): boolean {
@@ -246,8 +278,12 @@ export function openFileAuditLog(path: string, options: AuditLogOptions = {}): A
   }
 
   try {
+    // M3-E E13: no ancestor directory may be a link (checked again once every directory exists).
+    assertNoLinkedAncestors(path);
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  } catch {
+    assertNoLinkedAncestors(path);
+  } catch (error) {
+    if (error instanceof FileSecurityError) throw new AuditConfigError(`The audit log path is not safe: ${error.message}`);
     throw new AuditConfigError("The audit log directory cannot be created.");
   }
 
@@ -270,7 +306,9 @@ export function openFileAuditLog(path: string, options: AuditLogOptions = {}): A
 
   const lockPath = `${path}.lock`;
   const { staleReplaced } = acquireLock(lockPath);
-  const releaseLock = () => rmSync(lockPath, { force: true });
+  const releaseLock = () => {
+    if (lockStillHeld(lockPath)) rmSync(lockPath, { force: true });
+  };
 
   let fd: number;
   try {
@@ -300,6 +338,12 @@ export function openFileAuditLog(path: string, options: AuditLogOptions = {}): A
     let duplicates = 0;
     let lastSeq = 0;
     let highestSeen = 0;
+    const unverifiedLines: number[] = [];
+    let unverified = 0;
+    let legacyRecords = 0;
+    let seenChained = false;
+    // The hash the next record's `prev` must carry: the previous valid record line's, or the genesis value.
+    let expectedPrev = AUDIT_CHAIN_GENESIS;
     const truncatedTail = content.length > 0 && content[content.length - 1] !== 0x0a;
     const lines = content.toString("utf8").split("\n");
     // After the final LF the split leaves an empty string; a non-empty last part is the partial record.
@@ -309,11 +353,22 @@ export function openFileAuditLog(path: string, options: AuditLogOptions = {}): A
       if (!record) {
         malformed += 1;
         if (malformedLines.length < MAX_REPORTED_LINES) malformedLines.push(index + 1);
-        const seq = /^\{"v":1,"seq":([1-9][0-9]{0,14}),/.exec(line)?.[1];
+        const seq = /^\{"v":[12],"seq":([1-9][0-9]{0,14}),/.exec(line)?.[1];
         if (seq) highestSeen = Math.max(highestSeen, Number(seq));
         return;
       }
       highestSeen = Math.max(highestSeen, record.seq);
+      // M3-E E13: v1 records are accepted only before the first chained record; a chained record must name
+      // the previous valid record line. Anything else is kept in the file but not trusted.
+      const chainOk = record.prev === null ? !seenChained : record.prev === expectedPrev;
+      if (record.prev === null) legacyRecords += 1;
+      else seenChained = true;
+      expectedPrev = auditLineHash(line);
+      if (!chainOk) {
+        unverified += 1;
+        if (unverifiedLines.length < MAX_REPORTED_LINES) unverifiedLines.push(index + 1);
+        return;
+      }
       if (record.seq <= lastSeq) {
         duplicates += 1;
         return;
@@ -339,6 +394,9 @@ export function openFileAuditLog(path: string, options: AuditLogOptions = {}): A
       records: loaded.length,
       malformed,
       malformedLines,
+      unverified,
+      unverifiedLines,
+      legacyRecords,
       duplicates,
       truncatedTail,
       staleLockReplaced: staleReplaced,
@@ -351,6 +409,7 @@ export function openFileAuditLog(path: string, options: AuditLogOptions = {}): A
     let nextSeq = Math.max(lastSeq, highestSeen) + 1;
     let failed = false;
     let closed = false;
+    let prevHash = expectedPrev;
 
     return {
       loaded,
@@ -367,7 +426,13 @@ export function openFileAuditLog(path: string, options: AuditLogOptions = {}): A
         if (failed || closed) throw new AuditWriteError("unavailable");
         const seq = sequenceOf(event.id);
         if (seq === null || seq < nextSeq) throw new AuditWriteError("out-of-order");
-        const line = Buffer.from(serializeAuditRecord(event), "utf8");
+        // M3-E E13: if the lock was removed or replaced, another process may be writing: stop (fail closed).
+        if (!lockStillHeld(lockPath)) {
+          failed = true;
+          throw new AuditWriteError("lock-lost");
+        }
+        const text = serializeChainedAuditRecord(event, prevHash);
+        const line = Buffer.from(text, "utf8");
         if (line.length > maxRecordBytes) throw new AuditWriteError("record-too-large");
         if (bytes + line.length > maxBytes) throw new AuditWriteError("storage-full");
         let written = 0;
@@ -387,6 +452,7 @@ export function openFileAuditLog(path: string, options: AuditLogOptions = {}): A
         }
         bytes += line.length;
         nextSeq = seq + 1;
+        prevHash = auditLineHash(text.slice(0, -1));
       },
       close(): void {
         if (closed) return;
