@@ -3,6 +3,7 @@ import { redactSecretValue } from "@agentshield/engine";
 import { bearerAllowedFromEnv, createReloadingCredentialStore, credentialFilePath, CredentialConfigError, type CredentialStore } from "./agents/credentials.js";
 import { signatureSkewMsFromEnv, SignatureConfigError } from "./agents/signature.js";
 import { createApp } from "./app.js";
+import { AuditConfigError, auditLogMaxBytesFromEnv, auditLogPathFromEnv, openFileAuditLog, type AuditLog } from "./audit/file-audit-log.js";
 import { API_HOST } from "./host.js";
 import { loadLocalEnv } from "./load-env.js";
 import { loadPolicyStore, PolicyConfigError, type PolicyStore } from "./policies/store.js";
@@ -58,9 +59,30 @@ try {
   process.exit(1);
 }
 
+// M3-E E10: durable audit events (append-only JSON Lines, restricted to the current user). A log that
+// cannot be opened safely stops start-up; recovered problems are reported by count and line number only.
+let auditLog: AuditLog;
+try {
+  auditLog = openFileAuditLog(auditLogPathFromEnv(), { maxBytes: auditLogMaxBytesFromEnv() });
+} catch (error) {
+  const reason = error instanceof AuditConfigError ? error.message : "unexpected error";
+  console.error(`audit-log status=invalid-config reason=${reason}`);
+  process.exit(1);
+}
+const recovery = auditLog.recovery;
+console.warn(`audit-log status=ready records=${recovery.records} bytes=${recovery.bytes} maxBytes=${recovery.maxBytes} path=${auditLogPathFromEnv()}`);
+if (recovery.truncatedTail) console.warn("audit-log status=recovered reason=truncated-final-record effect=partial-record-kept-and-skipped");
+if (recovery.malformed > 0) console.warn(`audit-log status=warning reason=malformed-records count=${recovery.malformed} lines=${recovery.malformedLines.join(",")}`);
+if (recovery.duplicates > 0) console.warn(`audit-log status=warning reason=duplicate-records count=${recovery.duplicates}`);
+if (recovery.staleLockReplaced) console.warn("audit-log status=warning reason=stale-lock-replaced");
+if (!recovery.permissionsRestricted) console.warn("audit-log status=warning reason=permissions-not-restricted note=other-accounts-may-read-the-audit-log");
+// Release the single-writer lock on a normal exit, including Ctrl+C and termination.
+process.on("exit", () => auditLog.close());
+for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => process.exit(0));
+
 const port = Number(process.env.PORT ?? 4000);
 // Loopback only (API_HOST), and every /api route requires the API token or a session.
-const server = createApp({ apiToken: tokenFile.token, policyStore, credentialStore, signatureSkewMs }).listen(port, API_HOST, () => {
+const server = createApp({ apiToken: tokenFile.token, policyStore, credentialStore, signatureSkewMs, auditLog }).listen(port, API_HOST, () => {
   const { address, port: boundPort } = server.address() as AddressInfo;
   console.log(`AgentShield API listening on http://${address}:${boundPort} (loopback only, API token required)`);
   console.log(`API token file${tokenFile.created ? " (created)" : ""}: ${tokenFile.path}`);

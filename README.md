@@ -17,8 +17,9 @@ protection or complete prompt-injection prevention.
   created with it), except the two agent routes, which require a signed agent credential.
   There are no user accounts or roles, and it is not hardened for exposure beyond this
   machine. See [`docs/security-model.md`](docs/security-model.md).
-- **Not persistent.** Pending approvals and activity events are in memory and reset when the
-  API restarts.
+- **Not persistent (approvals).** Pending approvals are in memory and reset when the API
+  restarts. Since M3-E E10, activity events are also written to a local append-only audit file
+  and survive restarts; see [`docs/audit-log.md`](docs/audit-log.md).
 - **Not a live model.** The advisory model is a mock by default. Two separately authorized,
   one-request live Muse Spark smoke tests were run on 2026-10-29: the first returned an unusable
   (cut-off) answer, the second a valid advisory answer. Live mode is off again; see
@@ -146,9 +147,9 @@ node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-11-01, M3-E E9): `npm test` passes 2,088 tests in 61 files
+Current verified state (2026-11-01, M3-E E10): `npm test` passes 2,112 tests in 63 files
 (agent-protocol 98 in 1 file, agent-sdk 51 in 3, reference-agent 90 in 4, engine 728 in 9, websec
-395 in 13, API 703 in 28, web 23 in 3), with none failed or skipped, and `npm run build` and
+395 in 13, API 727 in 30, web 23 in 3), with none failed or skipped, and `npm run build` and
 `npm run typecheck` pass for all seven workspaces. `npm audit` needs
 network access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 
@@ -342,7 +343,8 @@ first transition to `EXPIRED` records an `EXPIRED` lifecycle event in the timeli
 Expiry is lazy: that event's timestamp is when expiry was detected (listing, approve, or
 reject), not the exact instant the TTL elapsed. Event delivery is retry-based: a failed write
 keeps a pending marker and is retried when a later listing, approve, or reject occurs. It is
-not guaranteed across API restarts (approvals and markers are in memory), and if a write
+not guaranteed across API restarts (approvals and markers are in memory, although every
+event that was written is kept in the durable audit log since M3-E E10), and if a write
 succeeds in the event store but then reports an error, a retry may record a duplicate event,
 so strict exactly-once delivery is not promised.
 Client-supplied findings, scores, decisions, or replacement actions are ignored.
@@ -357,7 +359,8 @@ session created with it; `/health` is the only unauthenticated route. Requests w
 header is not `localhost`, `127.0.0.1` or `[::1]` are refused (DNS-rebinding defence), as are
 requests from any browser origin other than the web app; cookie-authenticated writes must carry
 the web app's `Origin`. Requests are rate limited per minute (all `/api` 600, sign-in 10,
-evaluate 60, approve/reject 60), and only the newest 1,000 events are kept in memory; each limit
+evaluate 60, approve/reject 60), and the dashboard's event view holds the newest 1,000 events
+(since M3-E E10 every event is also kept in the durable audit log, up to its size limit); each limit
 is configurable in `.env.example`. Since M3-E E9 the evaluate limit counts each agent separately
 (the operator per client address), and one agent can hold at most 100 of the 500 approval
 records as pending, so a single agent cannot exhaust either for everyone else. Limits: there is one shared credential, no user identity, and

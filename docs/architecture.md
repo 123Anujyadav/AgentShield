@@ -325,7 +325,7 @@ reference: [`apps/reference-agent/README.md`](../apps/reference-agent/README.md)
 | Agent private key | The agent's own file or environment | Not held by the API at all |
 | Policies | Built in, or `AGENT_POLICY_FILE` | Yes; changes need a restart |
 | Pending and final approvals | API memory | **No** |
-| Activity events (newest 1,000) | API memory | **No** |
+| Activity events | Durable audit log (`AUDIT_LOG_FILE`, append-only, M3-E E10); the API view holds the newest 1,000 in memory | Yes; the view is restored at start-up ([audit-log.md](audit-log.md)) |
 | Replay (nonce) cache | API memory | **No**; the start-up fence covers it |
 | Rate-limit counters, sessions | API memory | **No** |
 | Reference agent's saved summaries and followed approvals | Agent memory | **No** (agent restart) |

@@ -97,9 +97,9 @@ Each item names the mechanism and its limit.
   address is shared, so a local process can exhaust a shared limit. Since M3-E E9 the
   evaluate limit and the pending-approval share (100 of 500) are per agent, so one agent
   cannot use them up for others, but several misbehaving agents together still can. The
-  replay-cache and approval-store limits can also return `429` or `503`, and the event log
-  keeps only the newest 1,000 events, so a busy agent can push older events (including
-  security events) out of it.
+  replay-cache and approval-store limits can also return `429` or `503`. Since M3-E E10
+  events are kept in a durable audit log that never drops old events; when it is full or
+  failing, evaluations and approvals are refused (`503`) until the operator acts.
 
 ## Agent vs operator permissions
 
@@ -223,12 +223,13 @@ hardened for remote access.
 
 **An API restart loses:**
 - every pending approval: an agent waiting on one then gets `404` (approval missing);
-- activity events;
 - the replay cache;
 - rate-limit counters;
 - dashboard sessions.
 
-**It keeps:** credentials and policies, which are files. Policy changes need a restart.
+**It keeps:** credentials and policies, which are files, and (since M3-E E10) every activity
+event written to the durable audit log. Policy changes need a restart. The audit log is not
+tamper-proof: a local user with write access can change it ([audit-log.md](audit-log.md)).
 
 **One process per credential store.** The design assumes one API process. Several
 processes would each have their own replay cache, approval store and events.

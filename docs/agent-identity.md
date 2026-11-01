@@ -427,7 +427,9 @@ If a credential may have leaked:
    replacement in the same step. It stops working within 2 seconds, and its pending
    approvals can no longer execute.
 2. Review the dashboard's events for that `credentialId` and for `IDENTITY_MISMATCH`
-   events, and check the API's standard error for `agent-auth status=failed` lines.
+   events, and check the API's standard error for `agent-auth status=failed` lines. Older
+   events, including those from before a restart, are in the durable audit log
+   ([audit-log.md](audit-log.md#operating-the-log)).
 3. If the store itself may have been changed, check it with `list`. An invalid store
    rejects every agent until it is fixed.
 4. If the operator token leaked, rotate it as well (delete the token file and restart

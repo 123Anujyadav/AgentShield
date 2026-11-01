@@ -43,7 +43,8 @@ single-process prototype with simulated execution.**
   - approval-id reuse after a restart;
   - one agent exhausting shared queues;
   - unbounded reads of special files.
-- One Medium is deferred: the in-memory audit log can be flushed.
+- One Medium was deferred: the in-memory audit log could be flushed. It was addressed in
+  M3-E E10 with a durable audit log ([audit-log.md](audit-log.md)).
 
 **What production would require.** These are architectural properties the prototype does not
 have:
@@ -66,7 +67,7 @@ None found.
 | M2 | **Approval ids are reused after an API restart.** Ids restart at `apr-1`. The reference agent followed a pending task by id only, so after a restart another task's new `apr-1`, once approved, completed the stale task and saved a summary nobody had approved. Shown end to end against the real server. | **Fixed.** The SDK returns `approvalCreatedAt` (additive) and refuses a `getApproval` answer about another id. The agent binds each wait to `createdAt` and reports a mismatch as `approval-missing`. Tests in `agent.test.ts`, `client.test.ts` and `reference-agent.integration.test.ts`. |
 | M3 | **One agent can exhaust shared resources.** Any agent could fill all 500 approval records with self-supplied suspicious content, giving every other agent and the operator `503`. The evaluate rate limit was per client address, so on one machine an agent used up everyone's allowance. | **Fixed.** At most 100 open approvals per agent (same `503 approval-queue-full`, agent-specific message), and the evaluate limit is counted per agent. Test: `agent-fairness.test.ts`. Several cooperating agents can still exhaust the store (deferred, see D1). |
 | M4 | **Special files are read without bound.** The SDK's `AgentCredential.fromFile` and the agent's `--document` checked `stat().size`, then called `readFileSync`. A FIFO or device (size 0) blocked or was read until memory ran out, and a file that grew after the check was read in full. | **Fixed.** Open, check `isFile()` on the descriptor, then a bounded read (non-blocking open where supported). Tests in `credential.test.ts` and `config-cli.test.ts`. |
-| M5 | **The audit log can be flushed.** Events are an in-memory list of the newest 1,000. An agent can push its own `IDENTITY_MISMATCH` or `BLOCKED_ON_RECHECK` events out with ordinary BLOCK evaluations: about 17 minutes at 60 a minute. | **Deferred (D2).** It needs a persistent or separate security-event store. |
+| M5 | **The audit log can be flushed.** Events are an in-memory list of the newest 1,000. An agent can push its own `IDENTITY_MISMATCH` or `BLOCKED_ON_RECHECK` events out with ordinary BLOCK evaluations: about 17 minutes at 60 a minute. | **Fixed in M3-E E10.** A durable append-only audit log that keeps every event until its size limit and never drops old ones. When full or failing, state changes are refused. The API view still shows the newest 1,000, but older events stay in the file. |
 
 ### Low
 
@@ -110,7 +111,7 @@ None found.
 | 4 | Unauthorized agent approval or operator actions | One route guard before all handlers (`403 operator-required`); no SDK method | A compromised operator token can approve anything | High impact, local access needed | Yes; single trusted operator | Operator accounts and roles; approvals by more than one person for risky actions |
 | 5 | Policy changes while an approval is pending | Policy hash checked on approve, giving `BLOCKED_ON_RECHECK` | None found | Low | Yes | Policy history and versioned audit |
 | 6 | Credential revoked during approval polling | Polling gets 401; the approve recheck blocks (`identity.credential-invalid`); the reload works under clock jumps (L2 fixed) | Revocation takes up to 2 s | Low | Yes | Push notification of revocation |
-| 7 | Server restart and state loss | Start-up fence; agents see 404 (`approval-missing`); ids bound to `createdAt` (M2 fixed) | Pending approvals, events and the audit trail are lost | Medium | Yes; documented | A persistent store for approvals and events |
+| 7 | Server restart and state loss | Start-up fence; agents see 404 (`approval-missing`); ids bound to `createdAt` (M2 fixed); durable audit events (E10) | Pending approvals are lost; audit events survive | Medium | Yes; documented | A persistent store for approvals |
 | 8 | Approval-queue exhaustion | 500-record cap; only finished records evicted; per-agent cap of 100 (M3 fixed); `503` fails safe | Five cooperating agents can still fill it; finished records may be evicted before their agent reads them | Low | Yes | Per-agent quotas with priority; durable final records |
 | 9 | Replay-cache exhaustion | 600 per key, 100,000 overall; live nonces never evicted; `429`/`503` fail safe | About 167 busy keys deny service to all (L11) | Low | Yes | A capacity tied to active keys; shorter skew |
 | 10 | Malformed or oversized requests | 32 KB body; fixed-text 400, 413 and 415 before authentication; strict schemas; 8,000-character content; local checks in the SDK and agent (M4 fixed) | None found | Low | Yes | Fuzz testing of parsers |
@@ -177,7 +178,7 @@ reference agent have no third-party runtime dependencies.
 | # | Risk | Recommendation |
 |---|---|---|
 | D1 | Shared limits can be exhausted by several agents, or by many keys (L11) | Quotas per agent and per key with fair sharing, when multi-agent use is real |
-| D2 | The audit log is in memory and can be flushed (M5) | A persistent, append-only security-event log, or a separate retention class for security events |
+| D2 | ~~The audit log is in memory and can be flushed (M5)~~ | Done in M3-E E10. Remaining: the log is not tamper-proof, and there is no paging API for history beyond the view ([audit-log.md](audit-log.md#security-review-and-residual-risks)). |
 | D3 | Future-dated replay across a restart (L5) | Persist the newest accepted timestamp per key, or cap future skew below past skew |
 | D4 | Windows ACL race on `--out` to shared directories (L6) | Refuse `--out` to directories other users can access, or write through a restricted subdirectory |
 | D5 | No idempotency; the approval view does not identify its request (threat 12) | Server-side idempotency keys and a request digest in the agent view |

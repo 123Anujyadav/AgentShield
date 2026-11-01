@@ -166,6 +166,18 @@ GETs are retried after a short `Retry-After`.
   blocked on recheck, or expired). Agents observe the result through the approval status
   instead.
 
+### Audit storage (M3-E E10)
+
+| Answer | Meaning | What to do |
+|---|---|---|
+| `503 {"reason":"audit-unavailable"}` on evaluate, approve or reject | An earlier audit write failed, so the API accepts no more state changes. Nothing was evaluated or executed. | Check the API's standard error for `audit-log status=write-failed code=...` (for example `ENOSPC`). Fix the cause and restart the API. |
+| `503 {"reason":"audit-storage-full"}` | The audit log reached `AUDIT_LOG_MAX_BYTES`. Nothing was evaluated or executed. | Archive the file (stop the API and move it), or raise the limit. See [audit-log.md](audit-log.md#operating-the-log). |
+| `500 {"reason":"audit-write-failed"}` | The request's audit event could not be stored durably. The action may already have taken effect. | Treat it as unconfirmed, like any 5xx. Do not retry automatically. |
+| Start-up fails with `audit-log status=invalid-config reason=...` | The audit log is a symlink or not a regular file, cannot be written, is locked by another running API, is over its limit, or `AUDIT_LOG_MAX_BYTES` is invalid | Fix the cause named in the reason |
+
+To an agent, the two 503s are a `ServiceUnavailableError`, and the reference agent reports
+`unconfirmed (unavailable)`. Neither is retried for `evaluate`.
+
 ## SDK-only errors
 
 | Error | When | Processed? |
@@ -249,7 +261,8 @@ repeat: call `getApproval` or `waitForApproval` again later.
 **What the restart loses:**
 - **Pending approvals.** An agent waiting on one gets `ApprovalNotFoundError`; the
   reference agent reports `approval-missing`.
-- **Events, the replay cache, rate-limit counters and dashboard sessions.**
+- **The replay cache, rate-limit counters and dashboard sessions.** Activity events are kept:
+  they are in the durable audit log, and the event view is restored at start-up (M3-E E10).
 
 **The start-up fence.** A request signed before the restart is refused (`before-startup`).
 The SDK re-signs a GET once automatically; an `evaluate` is not retried.

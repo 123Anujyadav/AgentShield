@@ -36,6 +36,7 @@ import { hostCheck, originCheck } from "./security/request-guards.js";
 import { loadScanConfig } from "./scans/config.js";
 import { registerScanRoutes } from "./scans/routes.js";
 import { ScanService } from "./scans/service.js";
+import { AuditWriteError, type AuditLog } from "./audit/file-audit-log.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -179,6 +180,12 @@ export interface AppDeps {
   /** Injectable so tests can fault-inject event writes. Defaults to a fresh in-memory list. */
   events?: ActivityEvent[];
   /**
+   * M3-E E10: durable audit storage (the server passes the file-backed log). Each event is
+   * written to it before it appears in `events`, and state-changing routes refuse while it is
+   * failed or full. Without one, events are kept in memory only (tests, demos).
+   */
+  auditLog?: AuditLog;
+  /**
    * The local API token (see security/token.ts). Without one, a random token
    * that nobody knows is used, so every protected route refuses access
    * (fail closed) instead of running unauthenticated.
@@ -194,7 +201,7 @@ export interface AppDeps {
 
 export function createApp(deps: AppDeps = {}) {
   const app = express();
-  const events: ActivityEvent[] = deps.events ?? [];
+  const audit = deps.auditLog;
   const simulator = deps.simulator ?? createSimulator();
   const approvalStore = deps.approvalStore ?? createApprovalStore();
   const policyStore = deps.policyStore ?? builtInPolicyStore();
@@ -202,6 +209,8 @@ export function createApp(deps: AppDeps = {}) {
   const modelService =
     deps.modelService ?? new ModelAnalysisService(selectModelProvider(modelConfig), modelConfig);
   const security: SecurityConfig = { ...loadSecurityConfig(), ...deps.security };
+  // The API's view: the newest maxEvents events, starting with those recovered from durable storage.
+  const events: ActivityEvent[] = deps.events ?? (audit ? audit.loaded.slice(-security.maxEvents) : []);
   if (deps.apiToken !== undefined && deps.apiToken.length < MIN_TOKEN_LENGTH) {
     throw new Error(`The API token must be at least ${MIN_TOKEN_LENGTH} characters.`);
   }
@@ -236,7 +245,8 @@ export function createApp(deps: AppDeps = {}) {
   });
   const limit = createRateLimiter({ windowMs: security.rateLimitWindowMs, now });
   const scanService = deps.scanService ?? new ScanService({ config: loadScanConfig() });
-  let nextId = 1;
+  // Event ids continue after the stored ones, so they never repeat across restarts (M3-E E10).
+  let nextId = audit ? audit.nextSequence : 1;
 
   function recordEvent(
     partial: Omit<ActivityEvent, "id" | "timestamp">,
@@ -258,6 +268,9 @@ export function createApp(deps: AppDeps = {}) {
       timestamp: new Date().toISOString(),
       ...safePartial,
     };
+    // M3-E E10: durable first. If the write fails, AuditWriteError propagates, the event never
+    // appears in the view, and the request answers 500 audit-write-failed (see the error handler).
+    audit?.append(event);
     events.push(event);
     // Bounded retention: keep only the newest events, so the log cannot grow without limit.
     if (events.length > security.maxEvents) events.splice(0, events.length - security.maxEvents);
@@ -355,6 +368,7 @@ export function createApp(deps: AppDeps = {}) {
       res.status(400).json({ error: "JSON object body required." });
       return;
     }
+    if (!auditReady(res)) return;
 
     const caller = res.locals.auth as Authentication;
     let scenarioId: string | null = null;
@@ -657,6 +671,24 @@ export function createApp(deps: AppDeps = {}) {
     res.json({ approvals, nextCursor: more ? approvals.at(-1)!.id : null });
   });
 
+  /**
+   * M3-E E10: fail closed before any state change. While durable audit storage is failed or
+   * full, evaluations, approvals and rejections are refused (503) and nothing is evaluated,
+   * executed or changed. Reads stay available.
+   */
+  function auditReady(res: express.Response): boolean {
+    const readiness = audit?.readiness() ?? { ok: true as const };
+    if (readiness.ok) return true;
+    res.status(503).json({
+      error:
+        readiness.reason === "audit-storage-full"
+          ? "The audit log is full, so nothing can be changed until the operator archives it. Nothing was evaluated or executed."
+          : "The audit log is unavailable, so nothing can be changed until the API is restarted with working audit storage. Nothing was evaluated or executed.",
+      reason: readiness.reason,
+    });
+    return false;
+  }
+
   function approvalIdParam(req: express.Request, res: express.Response): string | null {
     const id = req.params.id;
     if (typeof id !== "string" || !/^apr-\d+$/.test(id)) {
@@ -676,7 +708,7 @@ export function createApp(deps: AppDeps = {}) {
 
   app.post("/api/approvals/:id/approve", limit("approval-action", security.rateLimits.approvalAction), (req, res) => {
     const id = approvalIdParam(req, res);
-    if (!id || !hasValidBody(req, res)) return;
+    if (!id || !hasValidBody(req, res) || !auditReady(res)) return;
     // Any client-supplied action/findings/score in the body is ignored on purpose.
     const storedType = approvalStore.records.get(id)?.action.type ?? "";
     const outcome = processApproval(approvalStore, id, (record) => recheckApproval(policyStore, record, (keyId) => credentialStore.status(keyId)),
@@ -739,7 +771,7 @@ export function createApp(deps: AppDeps = {}) {
 
   app.post("/api/approvals/:id/reject", limit("approval-action", security.rateLimits.approvalAction), (req, res) => {
     const id = approvalIdParam(req, res);
-    if (!id || !hasValidBody(req, res)) return;
+    if (!id || !hasValidBody(req, res) || !auditReady(res)) return;
     const outcome = processRejection(approvalStore, id);
     if (outcome.kind === "not-found") {
       res.status(404).json({ error: `Unknown approval: ${id}`, executed: false });
@@ -778,6 +810,13 @@ export function createApp(deps: AppDeps = {}) {
   app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (res.headersSent) {
       next(error);
+      return;
+    }
+    if (error instanceof AuditWriteError) {
+      // M3-E E10: never reported as success. The operation may already have taken effect (for example a
+      // simulated handler ran), so the outcome is unconfirmed; the store refuses further changes.
+      console.error(`audit-log status=write-failed code=${error.code} effect=state-changes-refused`);
+      res.status(500).json({ error: "The audit event could not be stored durably. The outcome of this request is not confirmed.", reason: "audit-write-failed" });
       return;
     }
     const client = bodyParserClientError(error);
