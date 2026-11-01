@@ -38,7 +38,9 @@ export function createSimulator(): Simulator {
           reason: "Decision is CONFIRM. Approval and policy recheck are required before execution.",
         };
       }
-      const handler = HANDLERS[action.type];
+      // Own properties only: a plain-object lookup would resolve "toString", "constructor" and other
+      // Object.prototype members to functions and run them as if they were allowlisted (M3-E E9).
+      const handler = isRegisteredHandler(action.type) ? HANDLERS[action.type] : undefined;
       if (!handler) {
         return {
           executed: false,

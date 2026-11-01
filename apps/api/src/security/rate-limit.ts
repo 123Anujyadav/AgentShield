@@ -39,7 +39,8 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimitFactory
     const current = now();
     const key = `${bucket}|${clientKey ? clientKey(req, res) : (req.socket.remoteAddress ?? "unknown")}`;
     let window = windows.get(key);
-    if (!window || current - window.start >= windowMs) {
+    // A clock that moved backwards starts a new window rather than extending the old one (M3-E E9).
+    if (!window || current - window.start >= windowMs || current < window.start) {
       if (!window && windows.size >= maxKeys) prune(current);
       window = { start: current, count: 0 };
       windows.set(key, window);
@@ -74,7 +75,7 @@ export function createFailureLimiter(options: RateLimiterOptions & { limit: numb
   const windows = new Map<string, { start: number; count: number }>();
   const live = (key: string, current: number) => {
     const window = windows.get(key);
-    return window && current - window.start < windowMs ? window : null;
+    return window && current >= window.start && current - window.start < windowMs ? window : null;
   };
   return {
     blockedFor(key) {

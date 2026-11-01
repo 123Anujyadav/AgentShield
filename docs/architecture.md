@@ -246,6 +246,15 @@ actions are ignored.
 
 **Where approvals live.** Approvals are in memory, at most 500 records. When the store is
 full of pending approvals, a new `CONFIRM` gets `503 approval-queue-full`, and nothing runs.
+Since M3-E E9 one agent can hold at most 100 pending approvals; beyond that its own `CONFIRM`
+gets the same `503 approval-queue-full` (with an agent-specific message), while other agents
+and the operator's scenarios are unaffected.
+
+**Approval ids restart after a restart.** Ids are numbered `apr-1`, `apr-2`, ... per API
+process, so after a restart an id can name a different approval. The evaluate response carries
+the approval's `createdAt` (the SDK's `approvalCreatedAt`); compare it with the `createdAt` of
+the approval you later read. The reference agent does this and treats a mismatch as a missing
+approval.
 
 ## 7. Agent approval visibility (E4)
 
@@ -283,7 +292,7 @@ the same agent, so history survives key rotation.
 - **Signing.** Every attempt is signed afresh: new timestamp, new nonce, new signature.
   - `evaluate` is never retried.
   - GETs are retried a bounded number of times: network errors, timeouts, short
-    `Retry-After`, and once after a `401`.
+    `Retry-After`, and once after a `401` (when `getRetries` is at least 1).
 - **Typed errors** with fixed messages. See [troubleshooting.md](troubleshooting.md).
 
 ## 9. The reference agent workflow (E6)
@@ -300,7 +309,8 @@ reference: [`apps/reference-agent/README.md`](../apps/reference-agent/README.md)
 4. **Act on the decision:**
    - On `ALLOW` with `executed: true`, save locally.
    - On `CONFIRM`, follow the approval with `waitForApproval` and save only on `EXECUTED`
-     with `executed: true`.
+     with `executed: true`, and only if the approval's `createdAt` matches the one from the
+     evaluate response (M3-E E9: ids restart after an API restart).
    - Everything else saves nothing.
 5. **Report the outcome:** completed, blocked, not executed, rejected, expired, blocked on
    recheck, pending, wait interrupted, approval missing, unconfirmed or refused.

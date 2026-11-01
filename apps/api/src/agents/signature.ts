@@ -145,7 +145,9 @@ export function createSignatureVerifier(deps: SignatureVerifierDeps): (req: Requ
     if (!key.ok) return fail(key.reason, keyId);
     if (!valid) return fail("bad-signature", keyId);
 
-    const outcome = deps.nonces.checkAndInsert(keyId, nonce, ts + deps.skewMs);
+    // The same clock reading as the timestamp check: accepted above means now <= ts + skew = expiresAt,
+    // so an earlier copy of this request is still live here (M3-E E9).
+    const outcome = deps.nonces.checkAndInsert(keyId, nonce, ts + deps.skewMs, now);
     if (outcome === "replay") return fail("replay", keyId);
     if (outcome === "key-quota") return fail("nonce-key-quota", keyId, 429);
     if (outcome === "global-full") return fail("nonce-capacity", keyId, 503);

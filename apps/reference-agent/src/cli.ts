@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { basename, extname } from "node:path";
 import { parseArgs } from "node:util";
 import { AgentShieldClient, AgentShieldError, type AgentShieldClientOptions } from "@agentshield/agent-sdk";
@@ -26,6 +26,32 @@ export interface CliIo {
 }
 
 const USAGE = "Usage: --document <file> [--title <text>] [--wait-minutes <1-60>]";
+
+/**
+ * Reads at most `maxBytes` from a regular file (M3-E E9). The checks are made on the opened file
+ * itself, so a FIFO, device or directory is refused instead of blocking or being read without end,
+ * and a file that grows after the check is still read only up to the limit. Opened non-blocking where
+ * the platform supports it, so opening a FIFO cannot hang either.
+ */
+function readSmallRegularFile(path: string, maxBytes: number, notRegular: () => Error, tooLarge: () => Error): string {
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw notRegular();
+    if (stat.size > maxBytes) throw tooLarge();
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const read = readSync(fd, buffer, length, buffer.length - length, null);
+      if (read === 0) break;
+      length += read;
+    }
+    if (length > maxBytes) throw tooLarge();
+    return buffer.subarray(0, length).toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
 
 export function exitCode(outcome: TaskOutcome): number {
   switch (outcome.status) {
@@ -69,10 +95,9 @@ export async function runReferenceAgent(argv: string[], io: CliIo): Promise<numb
     const config = loadAgentConfig(io.env);
     let text: string;
     try {
-      if (statSync(values.document).size > MAX_DOCUMENT_BYTES) {
-        throw new TaskInputError(`The document file is larger than ${MAX_DOCUMENT_BYTES} bytes, so it is over AgentShield's ${MAX_DOCUMENT_CHARACTERS}-character limit. It was not sent.`);
-      }
-      text = readFileSync(values.document, "utf8");
+      const tooLarge = () =>
+        new TaskInputError(`The document file is larger than ${MAX_DOCUMENT_BYTES} bytes, so it is over AgentShield's ${MAX_DOCUMENT_CHARACTERS}-character limit. It was not sent.`);
+      text = readSmallRegularFile(values.document, MAX_DOCUMENT_BYTES, () => new TaskInputError("The document is not a regular file."), tooLarge);
     } catch (error) {
       if (error instanceof TaskInputError) throw error;
       throw new TaskInputError("The document cannot be read.");

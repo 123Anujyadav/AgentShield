@@ -132,7 +132,7 @@ it is gone; submit a new evaluation if the task still matters.
 
 | Message | Limit |
 |---|---|
-| `Too many requests. Try again later.` | The general `/api` limit (600 a minute per client address), evaluate (60 a minute), or the per-agent approval-read limit (120 a minute). Configurable; see `.env.example`. |
+| `Too many requests. Try again later.` | The general `/api` limit (600 a minute per client address), evaluate (60 a minute, counted per agent; the operator per client address), or the per-agent approval-read limit (120 a minute). Configurable; see `.env.example`. |
 | `Too many failed authentication attempts. Try again later.` | More than 20 failed authentications a minute from this client address. Valid credentials are still accepted; only failing attempts get this. |
 | `Too many signed requests for this credential. Try again later.` | This key has 600 live nonces in the replay cache: too many signed requests within the skew window |
 
@@ -150,6 +150,7 @@ local process can use up the shared limits.
 |---|---|
 | `Signed requests are temporarily unavailable. Try again later.` (with `Retry-After`) | No. The replay cache holds 100,000 live nonces. |
 | `The approval queue is full. ...` (`approval-queue-full`) | **Partly.** The evaluation ran and was recorded as `CONFIRM_NOT_QUEUED`, but no approval was created and nothing executed. The operator must approve, reject or let pending approvals expire. |
+| `This agent already has the maximum number of pending approvals. ...` (`approval-queue-full`, M3-E E9) | **Partly**, as above. This agent holds 100 pending approvals; other agents are unaffected. |
 
 **Why it counts as unconfirmed.** Both arrive as `ServiceUnavailableError`, and neither is
 retried for `evaluate`, even with a short `Retry-After`. `approval-queue-full` is in
@@ -261,6 +262,15 @@ only after a restart.
 - the reference agent reports `wait-interrupted`, and `resume(approvalId)` can try again
   once the API is back. The approval will then be missing.
 
+**Approval ids are reissued.** A restarted API numbers approvals from `apr-1` again, so an id
+from before the restart can name a new approval. Compare `createdAt` with the evaluate
+response's `approvalCreatedAt`. The reference agent reports a mismatch as `approval-missing`
+and saves nothing.
+
+**The first evaluation after a restart can fail with `NetworkError`.** It can be sent on a
+kept-alive connection to the old process. It is reported as unconfirmed and not retried,
+although it never reached the server; check, then run it again.
+
 ### The API does not start
 
 | Log line | Fix |
@@ -293,5 +303,11 @@ only after a restart.
   refused locally with exit code 1, before anything is sent, and is never truncated.
 - A full approval queue (`503 approval-queue-full`) is reported as `unconfirmed`
   (`approval-queue-full`) with exit code 3, and is not sent again.
+- A document with no readable text (only invisible or control characters) is refused
+  locally with exit code 1.
+- A request over 32 KB once encoded (many control characters) is reported as `refused`
+  (`request-too-large`): the SDK did not send it.
+- A `--document` that is not a regular file (a directory, device or pipe) is refused unread
+  with exit code 1.
 
 The full status list is in [`apps/reference-agent/README.md`](../apps/reference-agent/README.md#error-handling).

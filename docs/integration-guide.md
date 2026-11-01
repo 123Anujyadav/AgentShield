@@ -99,7 +99,7 @@ const request: EvaluateRequest = {
 };
 
 const result: EvaluateResult = await client.evaluate(request);
-// result: { decision, riskScore, explanation, findings, executed, approvalId }
+// result: { decision, riskScore, explanation, findings, executed, approvalId, approvalCreatedAt }
 ```
 
 **What is sent.** Only `intent`, `action` and `untrustedContent`.
@@ -150,7 +150,8 @@ function handle(result: EvaluateResult): "done" | "wait" | "refused" | "not-done
 ```ts
 import { ApprovalNotFoundError, WaitTimeoutError, type AgentApproval } from "@agentshield/agent-sdk";
 
-async function follow(approvalId: string, signal?: AbortSignal): Promise<"done" | "not-done" | "still-pending" | "lost"> {
+// `createdAt` is result.approvalCreatedAt from the evaluation that returned this approvalId.
+async function follow(approvalId: string, createdAt: string, signal?: AbortSignal): Promise<"done" | "not-done" | "still-pending" | "lost"> {
   let approval: AgentApproval;
   try {
     // Default timeout: 16 minutes, just past the server's 15-minute approval lifetime (maximum 24 hours).
@@ -160,10 +161,18 @@ async function follow(approvalId: string, signal?: AbortSignal): Promise<"done" 
     if (error instanceof ApprovalNotFoundError) return "lost"; // e.g. the API restarted; ask again with a new evaluation
     throw error; // see "Handle errors" below
   }
+  // Approval ids restart at apr-1 after an API restart: a different createdAt means a different approval.
+  if (approval.createdAt !== createdAt) return "lost";
   // Only an observed EXECUTED with executed: true means AgentShield ran the action.
   return approval.status === "EXECUTED" && approval.executed ? "done" : "not-done";
 }
 ```
+
+**Bind the approval to its evaluation.** Approval ids are numbered per API process and start
+at `apr-1` again after a restart. An id you kept from before a restart can later name someone
+else's approval, possibly one that an operator approves. `result.approvalCreatedAt` is the
+approval's creation time from the evaluate response. Treat an approval whose `createdAt`
+differs as lost, as above. `getApproval` already refuses an answer about a different id.
 
 **Final statuses.**
 - `EXECUTED` (with `executed: true`) is the only go-ahead.
@@ -258,7 +267,8 @@ apart. Treating them as unconfirmed is the safe choice.
 
 **What the SDK already retries.** For `getApproval`, `listApprovals` and therefore
 `waitForApproval`, it retries network errors, timeouts and short (5 seconds or less)
-`Retry-After` `429` and `503` answers. It retries once after a `401`, which covers a
+`Retry-After` `429` and `503` answers. It retries once after a `401` (if `getRetries` is at
+least 1), which covers a
 request signed just before the API restarted. An error that still reaches you has already
 been retried.
 

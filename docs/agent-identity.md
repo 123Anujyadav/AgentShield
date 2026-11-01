@@ -451,7 +451,9 @@ If a credential may have leaked:
   actions; there is a single operator with no roles.
 - **Approval ids are sequential** (`apr-N`). An agent cannot read or list other agents'
   approvals, but the gaps between its own ids show roughly how many approvals were
-  created in between.
+  created in between. They also start again at `apr-1` after a restart. Compare
+  `createdAt` before trusting an id kept across one (see
+  [integration-guide.md](integration-guide.md#4-follow-an-approval)).
 - **Legacy bearer credentials travel in plain text** on that loopback HTTP connection, so a
   local process able to capture loopback traffic could read them in transit. Signed
   requests never send the private key.

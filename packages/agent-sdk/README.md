@@ -109,7 +109,9 @@ sending.
 ```ts
 if (result.approvalId) {
   const final = await client.waitForApproval(result.approvalId, { timeoutMs: 16 * 60 * 1000 });
-  console.log(final.status, final.executed); // e.g. "EXECUTED", true
+  // Ids restart at apr-1 after an API restart: only the approval created at approvalCreatedAt is this one.
+  const same = final.createdAt === result.approvalCreatedAt;
+  console.log(same, final.status, final.executed); // e.g. true, "EXECUTED", true
 }
 
 const page = await client.listApprovals({ limit: 20, status: "PENDING" });
@@ -119,8 +121,12 @@ for await (const approval of client.iterateApprovals({ limit: 50 })) {
 ```
 
 **What an approval contains.** Exactly six fields: `id`, `status`, `createdAt`,
-`expiresAt`, `executed` and `pollAfterSeconds`. A response with any other shape is
-rejected with `ResponseFormatError`.
+`expiresAt`, `executed` and `pollAfterSeconds`. A response with any other shape, or about a
+different id than the one asked for, is rejected with `ResponseFormatError`.
+
+**Ids are not unique across API restarts.** The server numbers approvals per process, from
+`apr-1`. `evaluate` returns `approvalCreatedAt` with `approvalId`. Compare it with the
+`createdAt` you read before acting on an approval (M3-E E9).
 
 **Missing approvals.** `getApproval` returns `null` when the approval does not exist or
 belongs to another agent; the server does not say which. `waitForApproval` throws
@@ -182,7 +188,8 @@ times (default 2, at most 5):
 - after a network error or timeout;
 - after `429` or `503`, waiting for `Retry-After` if it is at most 5 seconds, otherwise
   reporting the error straight away;
-- **once** after a `401`. This covers a request signed just before the server restarted,
+- **once** after a `401` (only when `getRetries` is at least 1). This covers a request signed
+  just before the server restarted,
   which the server's start-up fence refuses. A second `401` is reported as
   `AuthenticationError`.
 

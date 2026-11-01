@@ -41,6 +41,12 @@ export interface EvaluateResult {
   executed: boolean;
   /** For CONFIRM: the approval to follow with getApproval / waitForApproval. Otherwise null. */
   approvalId: string | null;
+  /**
+   * For CONFIRM: when the server created that approval (its `createdAt`). Otherwise null.
+   * Approval ids are numbered from apr-1 again after an API restart, so an id alone can later name
+   * a different approval: compare this with the `createdAt` of the approval you read (M3-E E9).
+   */
+  approvalCreatedAt: string | null;
 }
 
 export type ApprovalStatus = "PENDING" | "EXECUTED" | "APPROVED_NOT_EXECUTED" | "REJECTED" | "EXPIRED" | "BLOCKED_ON_RECHECK";
@@ -111,9 +117,12 @@ export function parseEvaluateResult(value: unknown): EvaluateResult {
   if (typeof riskScore !== "number" || typeof explanation !== "string" || !Array.isArray(findings) || typeof value.executed !== "boolean") throw new ResponseFormatError();
   const pending = value.pendingApproval;
   let approvalId: string | null = null;
+  let approvalCreatedAt: string | null = null;
   if (pending !== null && pending !== undefined) {
     if (!isRecord(pending) || typeof pending.id !== "string" || !APPROVAL_ID.test(pending.id)) throw new ResponseFormatError();
+    if (typeof pending.createdAt !== "string" || pending.createdAt.length === 0 || pending.createdAt.length > 64) throw new ResponseFormatError();
     approvalId = pending.id;
+    approvalCreatedAt = pending.createdAt;
   }
-  return { decision, riskScore, explanation, findings: findings.map(parseFinding), executed: value.executed, approvalId };
+  return { decision, riskScore, explanation, findings: findings.map(parseFinding), executed: value.executed, approvalId, approvalCreatedAt };
 }

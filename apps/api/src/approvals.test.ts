@@ -418,3 +418,23 @@ describe("M3-B (G8): a passed recheck with no handler is not recorded as a block
     expect(simulator.invocationCount).toBe(1);
   });
 });
+
+describe("M3-E E9: the simulator runs allowlisted handlers only", () => {
+  it.each(["toString", "constructor", "valueOf", "hasOwnProperty", "__proto__", "isPrototypeOf"])(
+    "an action type named like an Object.prototype member (%s) is never executed, even on ALLOW",
+    (type) => {
+      const simulator = createSimulator();
+      const execution = simulator.execute({ type, tool: "simulated.tool", destination: "simulated-workspace", summary: "x" }, "ALLOW");
+      expect(execution).toEqual({ executed: false, handler: null, result: null, reason: `No registered simulated handler for action type "${type}".` });
+      expect([simulator.invocationCount, simulator.invocations]).toEqual([0, []]);
+    },
+  );
+
+  it("the three allowlisted handlers still run", () => {
+    const simulator = createSimulator();
+    for (const type of ["create_summary", "read_document", "create_report"]) {
+      expect(simulator.execute({ type, tool: "simulated.tool", destination: "simulated-workspace", summary: "x" }, "ALLOW").executed).toBe(true);
+    }
+    expect(simulator.invocationCount).toBe(3);
+  });
+});

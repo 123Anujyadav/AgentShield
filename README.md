@@ -146,9 +146,9 @@ node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-11-01, M3-E E8): `npm test` passes 2,061 tests in 60 files
-(agent-protocol 98 in 1 file, agent-sdk 48 in 3, reference-agent 84 in 4, engine 728 in 9, websec
-395 in 13, API 685 in 27, web 23 in 3), with none failed or skipped, and `npm run build` and
+Current verified state (2026-11-01, M3-E E9): `npm test` passes 2,088 tests in 61 files
+(agent-protocol 98 in 1 file, agent-sdk 51 in 3, reference-agent 90 in 4, engine 728 in 9, websec
+395 in 13, API 703 in 28, web 23 in 3), with none failed or skipped, and `npm run build` and
 `npm run typecheck` pass for all seven workspaces. `npm audit` needs
 network access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 
@@ -358,7 +358,9 @@ header is not `localhost`, `127.0.0.1` or `[::1]` are refused (DNS-rebinding def
 requests from any browser origin other than the web app; cookie-authenticated writes must carry
 the web app's `Origin`. Requests are rate limited per minute (all `/api` 600, sign-in 10,
 evaluate 60, approve/reject 60), and only the newest 1,000 events are kept in memory; each limit
-is configurable in `.env.example`. Limits: there is one shared credential, no user identity, and
+is configurable in `.env.example`. Since M3-E E9 the evaluate limit counts each agent separately
+(the operator per client address), and one agent can hold at most 100 of the 500 approval
+records as pending, so a single agent cannot exhaust either for everyone else. Limits: there is one shared credential, no user identity, and
 any process running as your Windows user can read the token file.
 
 Intent Firewall: action types must be explicitly allowed, destinations must match

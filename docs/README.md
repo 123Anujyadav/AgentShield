@@ -25,6 +25,9 @@ Read these in order:
   with diagrams.
 - [security-model.md](security-model.md). What is protected and what is not: the trust
   model, key handling, replay limits, approval versus execution, and restart limits.
+- [security-assessment.md](security-assessment.md). The M3-E E9 security and
+  production-readiness assessment: findings by severity, the threat model, the dependency
+  review, and the deferred risks.
 
 ## Reference
 

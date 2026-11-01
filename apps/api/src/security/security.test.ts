@@ -8,6 +8,7 @@ import { createApp, type AppDeps } from "../app.js";
 import { asAgent, createTestApp, request, TEST_AGENT_ID, TEST_API_TOKEN } from "../test-support.js";
 import { SESSION_COOKIE } from "./auth.js";
 import { loadSecurityConfig, WEB_ORIGINS } from "./config.js";
+import { createFailureLimiter, createRateLimiter } from "./rate-limit.js";
 import { hostnameOf } from "./request-guards.js";
 import { API_TOKEN_FILE_NAME, defaultTokenDirectory, loadOrCreateApiToken } from "./token.js";
 
@@ -365,5 +366,36 @@ describe("M0: API token file", () => {
       join("C:", "Users", "someone", "AppData", "Local", "AgentShield"),
     );
     expect(defaultTokenDirectory({})).toContain("AgentShield");
+  });
+});
+
+describe("M3-E E9: rate-limit windows when the clock moves backwards", () => {
+  function fakeExchange() {
+    const status: number[] = [];
+    const req = { socket: { remoteAddress: "127.0.0.1" } } as unknown as Parameters<ReturnType<ReturnType<typeof createRateLimiter>>>[0];
+    const res = { setHeader: () => undefined, status: (code: number) => (status.push(code), { json: () => undefined }) } as unknown as Parameters<ReturnType<ReturnType<typeof createRateLimiter>>>[1];
+    return { req, res, status };
+  }
+
+  it("a request limiter that is full starts a new window after the clock jumps back, instead of refusing until it catches up", () => {
+    let now = 10_000_000;
+    const limiter = createRateLimiter({ windowMs: 60_000, now: () => now })("test", 2);
+    const { req, res, status } = fakeExchange();
+    let passed = 0;
+    for (let i = 0; i < 3; i += 1) limiter(req, res, () => (passed += 1));
+    expect([passed, status]).toEqual([2, [429]]);
+    now -= 60 * 60 * 1000;
+    limiter(req, res, () => (passed += 1));
+    expect([passed, status]).toEqual([3, [429]]);
+  });
+
+  it("the failed-authentication limiter does not stay blocked after the clock jumps back", () => {
+    let now = 10_000_000;
+    const failures = createFailureLimiter({ windowMs: 60_000, now: () => now, limit: 2 });
+    failures.recordFailure("127.0.0.1");
+    failures.recordFailure("127.0.0.1");
+    expect(failures.blockedFor("127.0.0.1")).toBe(60);
+    now -= 60 * 60 * 1000;
+    expect(failures.blockedFor("127.0.0.1")).toBeNull();
   });
 });

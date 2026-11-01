@@ -370,6 +370,30 @@ describe("M3-E E6: failures", () => {
   });
 });
 
+describe("M3-E E9: approval ids reissued after a restart", () => {
+  it("a task pending before a restart is never completed by the new apr-1 that another task received after it", async () => {
+    const h = await harness();
+    const before = h.agentFor(h.keys.v1, { approvalWaitMs: 1_000 });
+    const first = await before.run({ title: "Before restart", text: SUSPICIOUS.text });
+    expect(first).toMatchObject({ status: "pending", approvalId: "apr-1" });
+    await h.stopServer();
+    await h.startServer();
+    // Let the old server's closed keep-alive sockets be noticed by the shared fetch pool, so the evaluate
+    // below is not sent on one (that would be a NetworkError, correctly reported as unconfirmed).
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Same agent, a different document: the restarted server numbers approvals from apr-1 again.
+    const after = h.agentFor(h.keys.v1, { approvalWaitMs: 1_000 });
+    expect(await after.run({ title: "After restart", text: `${SUSPICIOUS.text} Second document.` })).toMatchObject({ status: "pending", approvalId: "apr-1" });
+    expect((await h.operator.approve("apr-1")).status).toBe(200);
+    expect(h.running.simulator.invocationCount).toBe(1);
+    // The stale task sees an approval created at a different time: not its own, nothing saved.
+    expect(await before.resume("apr-1")).toMatchObject({ status: "approval-missing", approvalId: "apr-1" });
+    expect(before.workspace.list()).toEqual([]);
+    expect(await after.resume("apr-1")).toMatchObject({ status: "completed", approvalId: "apr-1" });
+    expect(after.workspace.list().map((s) => s.title)).toEqual(["After restart"]);
+  });
+});
+
 describe("M3-E E6: no leakage, no other authentication", () => {
   it("every request uses the SDK's signed scheme; the private key never leaves the agent or appears in output or server records", async () => {
     const h = await harness();

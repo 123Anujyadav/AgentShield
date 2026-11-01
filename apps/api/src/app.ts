@@ -341,7 +341,14 @@ export function createApp(deps: AppDeps = {}) {
     res.json({ events: [...events].reverse() });
   });
 
-  app.post("/api/evaluate", limit("evaluate", security.rateLimits.evaluate), async (req, res, next) => {
+  // M3-E E9: an agent's evaluations are counted per agent, so one agent cannot use up the evaluate
+  // allowance of other agents or of the operator (who stays counted per client address). The
+  // general per-address /api limit still caps the total.
+  const evaluateKey = (req: express.Request, res: express.Response) => {
+    const caller = res.locals.auth as Authentication | undefined;
+    return caller?.kind === "agent" ? `agent:${caller.agentId}` : (req.socket.remoteAddress ?? "unknown");
+  };
+  app.post("/api/evaluate", limit("evaluate", security.rateLimits.evaluate, evaluateKey), async (req, res, next) => {
     try {
     const body: unknown = req.body;
     if (!isRecord(body)) {
@@ -456,6 +463,8 @@ export function createApp(deps: AppDeps = {}) {
       } catch (error) {
         if (!(error instanceof ApprovalCapacityError)) throw error;
         // Nothing runs without an approval record. The decision stays CONFIRM and is recorded.
+        // M3-E E9: the same answer when this agent alone holds its maximum of open approvals.
+        const perAgent = error.scope === "agent";
         const event = recordEvent({
           scenarioId,
           intentTask: intent.task,
@@ -465,12 +474,16 @@ export function createApp(deps: AppDeps = {}) {
           decision: evaluation.decision,
           riskScore: evaluation.riskScore,
           findings: evaluation.findings,
-          explanation: "Confirmation required, but the approval queue is full. Nothing was executed and no approval was created.",
+          explanation: perAgent
+            ? "Confirmation required, but this agent already has the maximum number of pending approvals. Nothing was executed and no approval was created."
+            : "Confirmation required, but the approval queue is full. Nothing was executed and no approval was created.",
           lifecycle: "CONFIRM_NOT_QUEUED",
           ...agentFields,
         });
         res.status(503).json({
-          error: "The approval queue is full. Approve, reject or let pending approvals expire, then try again. Nothing was executed.",
+          error: perAgent
+            ? "This agent already has the maximum number of pending approvals. Approve, reject or let them expire, then try again. Nothing was executed."
+            : "The approval queue is full. Approve, reject or let pending approvals expire, then try again. Nothing was executed.",
           reason: "approval-queue-full",
           evaluation,
           event,

@@ -102,6 +102,11 @@ describe("M3-E E6: command line", () => {
     expect(big.err).toEqual(["The document file is larger than 24576 bytes, so it is over AgentShield's 8000-character limit. It was not sent."]);
   });
 
+  it("M3-E E9: a --document that is not a regular file (a directory) is refused unread: exit 1, no request", async () => {
+    const r = await cli(["--document", dir], { AGENTSHIELD_AGENT_CREDENTIAL: key.credential }, { evaluate: () => evaluation("ALLOW") });
+    expect([r.code, r.err, r.server.requests.length]).toEqual([1, ["The document is not a regular file."], 0]);
+  });
+
   it("usage, configuration and input errors: exit 1, nothing sent", async () => {
     const env = { AGENTSHIELD_AGENT_CREDENTIAL: key.credential };
     const doc = file("doc.txt", "Hello.");

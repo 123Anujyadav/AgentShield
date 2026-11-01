@@ -93,9 +93,13 @@ Each item names the mechanism and its limit.
   pattern-based, with documented gaps (see the main README).
 - **Real-world consequences.** Handlers are simulated. "Executed" means AgentShield's
   simulator ran. It does not mean an email was sent or a file was written.
-- **Availability.** The rate limits are per client address. On a single machine that
-  address is shared, so a local process can exhaust a shared limit. The replay-cache and
-  approval-store limits can also return `429` or `503`.
+- **Availability.** Most rate limits are per client address. On a single machine that
+  address is shared, so a local process can exhaust a shared limit. Since M3-E E9 the
+  evaluate limit and the pending-approval share (100 of 500) are per agent, so one agent
+  cannot use them up for others, but several misbehaving agents together still can. The
+  replay-cache and approval-store limits can also return `429` or `503`, and the event log
+  keeps only the newest 1,000 events, so a busy agent can push older events (including
+  security events) out of it.
 
 ## Agent vs operator permissions
 
@@ -166,6 +170,10 @@ An operator's **approval is a request to run**, not a guarantee that anything ra
    restart or have its credential revoked before it observes the final status. Final
    records can also be dropped from memory when the approval store is full, and every
    approval is lost on an API restart.
+5. **An approval id alone is not proof of identity across restarts.** Ids restart at
+   `apr-1` in a new API process, so a later approval can reuse an id. Compare the
+   approval's `createdAt` with the `approvalCreatedAt` from the evaluate response before
+   acting on it (the reference agent does).
 
 **What an agent should do.** Treat only an observed `EXECUTED` with `executed: true` as a
 go-ahead for any follow-up work. Treat every other status, and every failure to observe

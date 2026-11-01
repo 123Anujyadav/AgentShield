@@ -220,7 +220,10 @@ export class AgentShieldClient {
     const result = await this.#send("GET", `/api/agent/approvals/${id}`, undefined, { retry: true, notFoundIsNull: true });
     if (result === NOT_FOUND) return null;
     if (!isRecord(result) || Object.keys(result).join(",") !== "approval") throw new ResponseFormatError();
-    return parseApproval(result.approval);
+    const approval = parseApproval(result.approval);
+    // M3-E E9: an answer about a different approval is never accepted as this one.
+    if (approval.id !== id) throw new ResponseFormatError();
+    return approval;
   }
 
   /** One page of this agent's approvals, newest first. */

@@ -18,9 +18,18 @@ export const APPROVAL_TTL_MS = 15 * 60 * 1000;
 /** M3-B: most approval records kept in memory. Only finished records are ever evicted to stay under it. */
 export const MAX_APPROVAL_RECORDS = 500;
 
-/** Thrown when every stored approval is still open, so a new one cannot be stored without dropping one. */
+/**
+ * M3-E E9: most open (PENDING, unexpired) approvals one agent can hold, so a single agent cannot
+ * fill the whole store and starve every other agent and the operator's scenarios.
+ */
+export const MAX_PENDING_APPROVALS_PER_AGENT = 100;
+
+/**
+ * Thrown when a new approval cannot be stored: every stored approval is still open ("store"), or
+ * the requesting agent already holds its maximum of open approvals ("agent", M3-E E9).
+ */
 export class ApprovalCapacityError extends Error {
-  constructor() {
+  constructor(readonly scope: "store" | "agent" = "store") {
     super("approval-queue-full");
   }
 }
@@ -41,11 +50,23 @@ export interface ApprovalStore {
   nextId: number;
   /** Most records kept (M3-B). */
   limit: number;
+  /** Most open approvals per agent (M3-E E9). */
+  perAgentPendingLimit: number;
 }
 
-export function createApprovalStore(limit: number = MAX_APPROVAL_RECORDS): ApprovalStore {
+export function createApprovalStore(limit: number = MAX_APPROVAL_RECORDS, perAgentPendingLimit: number = MAX_PENDING_APPROVALS_PER_AGENT): ApprovalStore {
   if (!Number.isInteger(limit) || limit < 1) throw new RangeError("The approval store limit must be a positive integer.");
-  return { records: new Map(), nextId: 1, limit };
+  if (!Number.isInteger(perAgentPendingLimit) || perAgentPendingLimit < 1) throw new RangeError("The per-agent approval limit must be a positive integer.");
+  return { records: new Map(), nextId: 1, limit, perAgentPendingLimit };
+}
+
+/** Open approvals (PENDING and not yet past their expiry) that one agent's credentials requested. */
+export function openApprovalsFor(store: ApprovalStore, agentId: string, now: Date = new Date()): number {
+  let open = 0;
+  for (const record of store.records.values()) {
+    if (record.status === "PENDING" && !isExpired(record, now) && isOwnAgentApproval(record, agentId)) open += 1;
+  }
+  return open;
 }
 
 /**
@@ -106,6 +127,10 @@ export function createPendingApproval(
   },
   now = new Date(),
 ): PendingApproval {
+  // M3-E E9: one agent cannot hold more than its share of open approvals (operator scenarios are not counted).
+  if (input.requestedBy?.kind === "agent" && typeof input.agentId === "string" && openApprovalsFor(store, input.agentId, now) >= store.perAgentPendingLimit) {
+    throw new ApprovalCapacityError("agent");
+  }
   // Bounded (M3-B): drop the oldest finished records; never an open one.
   if (!makeRoom(store)) throw new ApprovalCapacityError();
   const record: ApprovalRecord = {

@@ -18,7 +18,7 @@ import {
   type EvaluateResult,
 } from "@agentshield/agent-sdk";
 import { summarize } from "./summarize.js";
-import { parseSummaryTask, type SummaryTask } from "./task.js";
+import { parseSummaryTask, TaskInputError, type SummaryTask } from "./task.js";
 import { SimulatedWorkspace, type SavedSummary } from "./workspace.js";
 
 /**
@@ -57,6 +57,8 @@ export type FailureReason =
   | "server-error"
   | "response-format"
   | "cancelled"
+  /** Refused by the SDK before sending: the encoded request is over AgentShield's 32 KB limit. */
+  | "request-too-large"
   /** 503 approval-queue-full: CONFIRM was needed, but no approval was created and nothing executed. */
   | "approval-queue-full";
 
@@ -107,6 +109,12 @@ interface PendingTask {
   title: string;
   summary: string;
   evaluation: EvaluationSummary;
+  /**
+   * When the server created this task's approval (from the evaluate response). Approval ids start
+   * again at apr-1 after an API restart, so the id alone can later name a different approval; an
+   * approval whose createdAt differs is not this task's (M3-E E9).
+   */
+  createdAt: string;
   waiting: boolean;
 }
 
@@ -139,6 +147,8 @@ export class ReferenceAgent {
   async run(input: unknown, options: { signal?: AbortSignal } = {}): Promise<TaskOutcome> {
     const task = parseSummaryTask(input);
     const summary = summarize(task.text);
+    // Only invisible or control characters: there is nothing to summarize, so nothing is asked or saved (M3-E E9).
+    if (summary.length === 0) throw new TaskInputError("The document has no readable text.");
 
     let result: EvaluateResult;
     try {
@@ -155,8 +165,10 @@ export class ReferenceAgent {
       return { status: "not-executed", evaluation, approvalId: null };
     }
     // CONFIRM: only an operator can let it go ahead.
-    if (result.approvalId === null || result.executed) return { status: "not-executed", evaluation, approvalId: result.approvalId };
-    this.#pending.set(result.approvalId, { title: task.title, summary, evaluation, waiting: false });
+    if (result.approvalId === null || result.approvalCreatedAt === null || result.executed) return { status: "not-executed", evaluation, approvalId: result.approvalId };
+    // If this id is already being followed, it belonged to an approval from before an API restart: that
+    // approval is gone, and its follower will find the entry replaced and report it missing (M3-E E9).
+    this.#pending.set(result.approvalId, { title: task.title, summary, evaluation, createdAt: result.approvalCreatedAt, waiting: false });
     return this.#follow(result.approvalId, options.signal);
   }
 
@@ -183,15 +195,21 @@ export class ReferenceAgent {
       const { evaluation } = task;
       if (error instanceof WaitTimeoutError) return { status: "pending", evaluation, approvalId };
       if (error instanceof ApprovalNotFoundError) {
-        this.#pending.delete(approvalId);
+        this.#forget(approvalId, task);
         return { status: "approval-missing", evaluation, approvalId };
       }
       if (signal?.aborted) return { status: "wait-interrupted", evaluation, approvalId, reason: "cancelled" };
       if (error instanceof AgentShieldError) return { status: "wait-interrupted", evaluation, approvalId, reason: failureReason(error) };
       throw error;
     }
-    this.#pending.delete(approvalId);
     const { evaluation } = task;
+    // Not this task's approval: replaced by a newer task with the same id, or the same id reissued after an
+    // API restart (a different createdAt). Its outcome says nothing about this task, so nothing is saved.
+    if (this.#pending.get(approvalId) !== task || approval.createdAt !== task.createdAt) {
+      this.#forget(approvalId, task);
+      return { status: "approval-missing", evaluation, approvalId };
+    }
+    this.#pending.delete(approvalId);
     switch (approval.status) {
       case "EXECUTED":
         // Saved only when the server says the approved action ran.
@@ -209,6 +227,11 @@ export class ReferenceAgent {
         // waitForApproval never returns PENDING; anything else is not a go-ahead.
         return { status: "not-executed", evaluation, approvalId };
     }
+  }
+
+  /** Stops following an approval, unless a newer task has taken over its id. */
+  #forget(approvalId: string, task: PendingTask): void {
+    if (this.#pending.get(approvalId) === task) this.#pending.delete(approvalId);
   }
 
   #complete(title: string, summary: string, evaluation: EvaluationSummary, approvalId: string | null): TaskOutcome {
@@ -244,7 +267,10 @@ function evaluateFailure(error: unknown): TaskOutcome {
 function failureReason(error: AgentShieldError): FailureReason {
   if (error instanceof AuthenticationError) return "authentication";
   if (error instanceof ForbiddenError) return "forbidden";
-  if (error instanceof BadRequestError || error instanceof InvalidArgumentError) return "bad-request";
+  // InvalidArgumentError is the SDK refusing locally; for this agent's fixed request that only happens when the
+  // encoded request is over 32 KB. Nothing was sent, so it is not reported as AgentShield's refusal (M3-E E9).
+  if (error instanceof InvalidArgumentError) return "request-too-large";
+  if (error instanceof BadRequestError) return "bad-request";
   if (error instanceof RateLimitedError) return "rate-limited";
   if (error instanceof ServiceUnavailableError) return error.details.reason === "approval-queue-full" ? "approval-queue-full" : "unavailable";
   if (error instanceof TimeoutError) return "timeout";

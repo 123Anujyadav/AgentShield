@@ -272,6 +272,15 @@ describe("M3-D: credential files (temporary directory)", () => {
       expect(t.events).toContainEqual({ kind: "reloaded", count: 1 });
     });
 
+    it("M3-E E9: a revocation is picked up even after the clock moved backwards (an NTP correction)", () => {
+      const a = issue("writer");
+      const t = setup([a.record]);
+      expect(t.store.verify(a.credential).ok).toBe(true);
+      t.advance(-60 * 60 * 1000); // the clock jumps back one hour
+      t.write([{ ...a.record, revokedAt: new Date(NOW).toISOString() }]);
+      expect(t.store.verify(a.credential)).toEqual({ ok: false, reason: "revoked" });
+    });
+
     it("an atomically replaced file (rename over the old one) is detected", () => {
       const a = issue("writer");
       const t = setup([a.record]);

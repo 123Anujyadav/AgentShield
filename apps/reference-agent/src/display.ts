@@ -28,6 +28,7 @@ const REASONS: Record<FailureReason, string> = {
   "server-error": "AgentShield reported an internal error.",
   "response-format": "AgentShield's answer was not in the expected format.",
   cancelled: "Waiting was cancelled.",
+  "request-too-large": "The request is larger than AgentShield's 32 KB limit once encoded (control characters take six bytes each), so the SDK did not send it.",
   "approval-queue-full": "AgentShield's approval queue is full: it reported that the action needs an operator's confirmation, but no approval was created and nothing was executed.",
 };
 

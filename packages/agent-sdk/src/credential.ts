@@ -1,5 +1,5 @@
 import { createPrivateKey, sign as ed25519Sign, type KeyObject } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { inspect } from "node:util";
 import { isKeyId } from "@agentshield/agent-protocol";
 import { CredentialError } from "./errors.js";
@@ -22,6 +22,32 @@ const ED25519_PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "he
 export const MAX_CREDENTIAL_FILE_BYTES = 1024;
 
 const INVALID = "The agent credential is not a valid AgentShield Ed25519 credential (expected asag2_<keyId>.<key>).";
+
+/**
+ * Reads at most `maxBytes` from a regular file (M3-E E9). The checks are made on the opened file
+ * itself, so a FIFO, device or directory is refused instead of blocking or being read without end,
+ * and a file that grows after the check is still read only up to the limit. Opened non-blocking where
+ * the platform supports it, so opening a FIFO cannot hang either.
+ */
+function readSmallRegularFile(path: string, maxBytes: number, notRegular: () => Error, tooLarge: () => Error): string {
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw notRegular();
+    if (stat.size > maxBytes) throw tooLarge();
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const read = readSync(fd, buffer, length, buffer.length - length, null);
+      if (read === 0) break;
+      length += read;
+    }
+    if (length > maxBytes) throw tooLarge();
+    return buffer.subarray(0, length).toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
 
 export class AgentCredential {
   /** The credential's public key id (safe to log). */
@@ -60,8 +86,12 @@ export class AgentCredential {
   static fromFile(path: string): AgentCredential {
     let text: string;
     try {
-      if (statSync(path).size > MAX_CREDENTIAL_FILE_BYTES) throw new CredentialError("The agent credential file is too large to be a credential.");
-      text = readFileSync(path, "utf8");
+      text = readSmallRegularFile(
+        path,
+        MAX_CREDENTIAL_FILE_BYTES,
+        () => new CredentialError("The agent credential path is not a regular file."),
+        () => new CredentialError("The agent credential file is too large to be a credential."),
+      );
     } catch (error) {
       if (error instanceof CredentialError) throw error;
       throw new CredentialError("The agent credential file cannot be read.");

@@ -27,8 +27,14 @@ export const DEFAULT_NONCE_GLOBAL_LIMIT = 100_000;
 export type NonceCheck = "accepted" | "replay" | "key-quota" | "global-full";
 
 export interface NonceCache {
-  /** Records keyId+nonce, live until (and including) `expiresAt` in ms, unless it is already live or a limit is reached. */
-  checkAndInsert(keyId: string, nonce: string, expiresAt: number): NonceCheck;
+  /**
+   * Records keyId+nonce, live until (and including) `expiresAt` in ms, unless it is already live or a limit is reached.
+   * `now` is the caller's clock reading for this request (default: options.now()). The verifier passes the same
+   * reading it used for the timestamp check (M3-E E9), so a request whose timestamp was still accepted always finds
+   * its earlier copy live: with two readings, a clock tick between them at the last millisecond of the window let a
+   * replay through.
+   */
+  checkAndInsert(keyId: string, nonce: string, expiresAt: number, now?: number): NonceCheck;
   /** Live and not-yet-pruned entries in total (for tests and diagnostics; never sent to clients). */
   readonly size: number;
   sizeFor(keyId: string): number;
@@ -84,8 +90,8 @@ export function createNonceCache(options: NonceCacheOptions): NonceCache {
   }
 
   return {
-    checkAndInsert(keyId, nonce, expiresAt) {
-      const now = options.now();
+    checkAndInsert(keyId, nonce, expiresAt, at) {
+      const now = at ?? options.now();
       let entries = byKey.get(keyId);
       const existing = entries?.get(nonce);
       if (existing !== undefined && existing >= now) return "replay";

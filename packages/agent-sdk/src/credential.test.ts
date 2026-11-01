@@ -79,6 +79,14 @@ describe("M3-E E5: credential sources", () => {
     expect(() => AgentCredential.fromFile(dir!)).toThrowError(CredentialError);
   });
 
+  it("M3-E E9: refuses anything that is not a regular file (directory, device) instead of reading it", () => {
+    tempFile("x");
+    expect(() => AgentCredential.fromFile(dir!)).toThrowError("The agent credential path is not a regular file.");
+    // A file of exactly the limit is read (and then judged as a credential); one byte more is refused unread.
+    expect(() => AgentCredential.fromFile(tempFile("a".repeat(MAX_CREDENTIAL_FILE_BYTES)))).toThrowError(INVALID);
+    expect(() => AgentCredential.fromFile(tempFile("a".repeat(MAX_CREDENTIAL_FILE_BYTES + 1)))).toThrowError("The agent credential file is too large to be a credential.");
+  });
+
   it("reads an explicitly named environment variable, and only that", () => {
     expect(AgentCredential.fromEnv("MY_AGENT_KEY", { MY_AGENT_KEY: key.credential }).keyId).toBe(key.keyId);
     expect(() => AgentCredential.fromEnv("MY_AGENT_KEY", {})).toThrowError("The agent credential environment variable is not set.");

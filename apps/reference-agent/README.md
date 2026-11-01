@@ -165,7 +165,8 @@ automatically, because a repeat could run the action twice.
 | Failure | Status | Meaning |
 |---|---|---|
 | 401 (unknown, expired or revoked credential) | `refused` (`authentication`) | Not processed. Ask the operator to check or rotate the credential. |
-| 400 / 403 / 413 / 415, or too large to send | `refused` | Not processed. |
+| 400 / 403 / 413 / 415 | `refused` | Not processed. |
+| Over 32 KB once encoded (many control characters) | `refused` (`request-too-large`) | The SDK did not send it. |
 | Document over 8,000 characters | `DocumentTooLongError` is thrown (exit code 1 on the command line) | Nothing was sent. |
 | 429 | `refused` (`rate-limited`, with `retryAfterSeconds`) | Not processed. Re-running is your decision. |
 | Timeout, network error, 5xx (including any 503), malformed answer | `unconfirmed` | **May or may not have been processed** (it may even have executed). It was not sent again and nothing was saved. Check the agent's approvals (`listApprovals`) before running the task again. |
@@ -175,7 +176,7 @@ automatically, because a repeat could run the action twice.
 
 | While waiting for an approval | Status | Meaning |
 |---|---|---|
-| The approval is not found (for example AgentShield restarted: pending approvals live in memory) | `approval-missing` | Nothing saved. Run the task again to ask again. |
+| The approval is not found (for example AgentShield restarted: pending approvals live in memory), or its id now names a different approval (a different `createdAt`: ids restart at `apr-1` after a restart) | `approval-missing` | Nothing saved. Run the task again to ask again. |
 | Credential revoked or expired, AgentShield unreachable, or another error | `wait-interrupted` (with a reason) | Nothing saved, and the approval itself is unchanged. `resume` can try again. If the credential was revoked, an operator's later approval is refused at recheck (`BLOCKED_ON_RECHECK`). |
 | Cancelled (an `AbortSignal` passed to `run` or `resume`) | `wait-interrupted` (`cancelled`) | Nothing saved. |
 

@@ -223,7 +223,7 @@ describe("M3-E E6: a failed evaluation is never sent twice", () => {
   it("an evaluation too large to send is refused locally, before any request", async () => {
     const t = setup({ evaluate: () => evaluation("ALLOW") });
     // Exactly at the 8,000-character limit, but JSON escapes each control character as six bytes: over 32 KB.
-    expect(await t.agent.run({ title: "Big", text: "\u0001".repeat(8000) })).toMatchObject({ status: "refused", reason: "bad-request" });
+    expect(await t.agent.run({ title: "Big", text: `Notes. ${"\u0001".repeat(7990)}` })).toMatchObject({ status: "refused", reason: "request-too-large" });
     expect(t.server.requests).toEqual([]);
   });
 });
@@ -314,5 +314,81 @@ describe("M3-E E8: 503 is never success, and an evaluation is never retried afte
     down = false;
     expect(await t.agent.resume("apr-12")).toMatchObject({ status: "rejected" });
     expectNothingSaved(t);
+  });
+});
+
+describe("M3-E E9: an approval id reissued after an API restart never authorises another task", () => {
+  const RESTARTED = "2026-10-31T13:00:00.000Z";
+
+  it("same id, different createdAt (a newer approval after a restart): approval-missing, nothing saved, not resumable", async () => {
+    const t = setup({ evaluate: () => evaluation("CONFIRM", { approvalId: "apr-1" }), approval: (id) => approval(id, "EXECUTED", true, RESTARTED) });
+    expect(await t.agent.run(INJECTED)).toMatchObject({ status: "approval-missing", approvalId: "apr-1" });
+    expectNothingSaved(t);
+    expect(t.agent.pendingApprovals()).toEqual([]);
+    await expect(t.agent.resume("apr-1")).rejects.toBeInstanceOf(UnknownApprovalError);
+  });
+
+  it("a stale pending task resumed after the id was reissued saves nothing; the new task's own approval still completes", async () => {
+    let createdAt = "2026-10-31T12:00:00.000Z";
+    let decided = false;
+    const t = setup({
+      evaluate: () => evaluation("CONFIRM", { approvalId: "apr-1", createdAt }),
+      approval: (id) => approval(id, decided ? "EXECUTED" : "PENDING", decided, createdAt),
+    });
+    const agent = new ReferenceAgent({ client: testClient(t.server.fetch), approvalWaitMs: 1_000 });
+    expect(await agent.run({ title: "Before restart", text: INJECTED.text })).toMatchObject({ status: "pending", approvalId: "apr-1" });
+    // The API restarts and numbers approvals from apr-1 again; the same agent evaluates another document.
+    createdAt = RESTARTED;
+    expect(await agent.run({ title: "After restart", text: INJECTED.text })).toMatchObject({ status: "pending", approvalId: "apr-1" });
+    decided = true;
+    // Only the newer task is followed under that id; it completes with its own summary.
+    expect(await agent.resume("apr-1")).toMatchObject({ status: "completed", approvalId: "apr-1" });
+    expect(agent.workspace.list().map((s) => s.title)).toEqual(["After restart"]);
+  });
+
+  it("a follower whose entry was replaced while it waited reports approval-missing and leaves the newer task alone", async () => {
+    let createdAt = "2026-10-31T12:00:00.000Z";
+    let agent!: ReferenceAgent;
+    let restarted = false;
+    const server = fakeAgentShield({
+      evaluate: () => evaluation("CONFIRM", { approvalId: "apr-1", createdAt }),
+      approval: (id) => approval(id, restarted ? "EXECUTED" : "PENDING", restarted, createdAt),
+    });
+    const client = testClient(server.fetch, {
+      sleep: async () => {
+        if (restarted) return;
+        restarted = true;
+        createdAt = RESTARTED;
+        // While the first task waits, the API restarts and a second task is given the same id.
+        newer = agent.run({ title: "Newer", text: INJECTED.text });
+      },
+    });
+    let newer: Promise<TaskOutcome> | undefined;
+    agent = new ReferenceAgent({ client, approvalWaitMs: 60_000 });
+    expect(await agent.run({ title: "Older", text: INJECTED.text })).toMatchObject({ status: "approval-missing", approvalId: "apr-1" });
+    expect(await newer).toMatchObject({ status: "completed", approvalId: "apr-1" });
+    expect(agent.workspace.list().map((s) => s.title)).toEqual(["Newer"]);
+  });
+});
+
+describe("M3-E E9: inputs with nothing to summarize, and requests too large to send", () => {
+  it("a document of only invisible or control characters is refused before any request", async () => {
+    const t = setup({ evaluate: () => evaluation("ALLOW") });
+    for (const text of ["\u200B\u200B\u200B", "\u0007\u0007", "\u202E\u2066"]) {
+      await expect(t.agent.run({ title: "Empty", text })).rejects.toThrow("The document has no readable text.");
+    }
+    expect(t.server.requests).toEqual([]);
+    expect(t.agent.workspace.list()).toEqual([]);
+  });
+
+  it("a request the SDK refuses locally is reported as not sent, not as AgentShield's refusal", async () => {
+    const t = setup({ evaluate: () => evaluation("ALLOW") });
+    const outcome = await t.agent.run({ title: "Big", text: `Notes. ${"\u0001".repeat(7990)}` });
+    expect(outcome).toEqual({ status: "refused", reason: "request-too-large", retryAfterSeconds: null });
+    expect(t.server.requests).toEqual([]);
+    expect(describeOutcome(outcome)).toEqual([
+      "The request is larger than AgentShield's 32 KB limit once encoded (control characters take six bytes each), so the SDK did not send it.",
+      "The request was not processed and nothing was saved.",
+    ]);
   });
 });

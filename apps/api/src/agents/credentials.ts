@@ -505,7 +505,8 @@ export function createReloadingCredentialStore(
 
   function refresh(): void {
     const at = now();
-    if (at - lastCheck < intervalMs) return;
+    // A clock that moved backwards (an NTP correction) counts as due, so a revocation is never held back by it (M3-E E9).
+    if (at >= lastCheck && at - lastCheck < intervalMs) return;
     lastCheck = at;
     const next = fileSignature(path);
     if (next === signature) return;

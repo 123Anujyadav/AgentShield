@@ -85,7 +85,7 @@ const request: EvaluateRequest = {
 const evaluateResponse = {
   evaluation: { decision: "CONFIRM", riskScore: 80, explanation: "Needs confirmation.", findings: [{ ruleId: "r", category: "injection", severity: "high", title: "t", explanation: "e", evidence: "x" }], scannerStatus: "suspicious" },
   executed: false,
-  pendingApproval: { id: "apr-7", status: "PENDING", intent: { task: "Summarize" } },
+  pendingApproval: { id: "apr-7", status: "PENDING", createdAt: "2026-11-01T09:00:00.000Z", intent: { task: "Summarize" } },
   event: { id: "evt-1" },
   modelAnalysis: { authority: "advisory-only" },
 };
@@ -103,7 +103,7 @@ describe("M3-E E5: evaluate", () => {
   it("sends exactly the documented fields, signed over the exact body bytes, and returns the decision", async () => {
     const h = harness(() => json(200, evaluateResponse));
     const result = await h.client.evaluate({ ...request, agentId: "someone-else" } as EvaluateRequest);
-    expect(result).toEqual({ decision: "CONFIRM", riskScore: 80, explanation: "Needs confirmation.", findings: evaluateResponse.evaluation.findings, executed: false, approvalId: "apr-7" });
+    expect(result).toEqual({ decision: "CONFIRM", riskScore: 80, explanation: "Needs confirmation.", findings: evaluateResponse.evaluation.findings, executed: false, approvalId: "apr-7", approvalCreatedAt: "2026-11-01T09:00:00.000Z" });
     const [call] = h.calls;
     expect([call!.method, call!.url, call!.headers["Content-Type"], call!.redirect]).toEqual(["POST", `${BASE}/api/evaluate`, "application/json", "error"]);
     expect(JSON.parse(call!.body!.toString())).toEqual({ intent: request.intent, action: request.action, untrustedContent: request.untrustedContent });
@@ -130,6 +130,15 @@ describe("M3-E E5: evaluate", () => {
     expect(error).toBeInstanceOf(ServiceUnavailableError);
     expect((error as ServiceUnavailableError).details).toEqual({ status: 503, reason: "approval-queue-full", retryAfterSeconds: 1 });
     expect([h.calls.length, h.sleeps]).toEqual([1, []]);
+  });
+
+  it("M3-E E9: a pending approval without its createdAt is a response-format error (the id alone cannot be trusted after a restart)", async () => {
+    for (const pendingApproval of [{ id: "apr-7" }, { id: "apr-7", createdAt: 5 }, { id: "apr-7", createdAt: "" }]) {
+      const h = harness(() => json(200, { ...evaluateResponse, pendingApproval }));
+      expect(await caught(h.client.evaluate(request))).toBeInstanceOf(ResponseFormatError);
+    }
+    const allow = harness(() => json(200, { ...evaluateResponse, evaluation: { ...evaluateResponse.evaluation, decision: "ALLOW" }, executed: true, pendingApproval: null }));
+    expect(await allow.client.evaluate(request)).toMatchObject({ approvalId: null, approvalCreatedAt: null });
   });
 
   it("is not retried after a timeout either (it may already have run)", async () => {
@@ -161,6 +170,12 @@ describe("M3-E E5: evaluate", () => {
 });
 
 describe("M3-E E5: approvals", () => {
+  it("M3-E E9: getApproval refuses an answer about a different approval", async () => {
+    const h = harness(() => json(200, { approval: approval("apr-4") }));
+    expect(await caught(h.client.getApproval("apr-3"))).toBeInstanceOf(ResponseFormatError);
+    expect(await caught(h.client.waitForApproval("apr-3"))).toBeInstanceOf(ResponseFormatError);
+  });
+
   it("reads one approval (exactly six fields) and returns null for the server's uniform 404", async () => {
     const h = harness((call) => (call.url.endsWith("apr-3") ? json(200, { approval: approval("apr-3") }) : json(404, { error: "Approval not found." })));
     expect(await h.client.getApproval("apr-3")).toEqual(approval("apr-3"));

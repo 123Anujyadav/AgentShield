@@ -57,6 +57,8 @@ interface Keys {
 function setup(options: SetupOptions = {}) {
   let clock = T;
   const now = () => clock;
+  // M3-E E9: how far ahead of the verifier's reading the replay cache's own clock reads (models time passing mid-request).
+  let nonceClockLead = 0;
   const keys: Keys = {
     writerKey: testSigningKey("writer", "e3-writer", { now: T }),
     readerKey: testSigningKey("reader", "e3-reader", { now: T }),
@@ -73,7 +75,7 @@ function setup(options: SetupOptions = {}) {
     apiToken: TEST_API_TOKEN,
     policyStore: createPolicyStore([DEMO_AGENT_POLICY, writer, reader], "file"),
     credentialStore,
-    nonceCache: createNonceCache({ now, perKeyLimit: options.perKeyLimit, globalLimit: options.globalLimit }),
+    nonceCache: createNonceCache({ now: () => clock + nonceClockLead, perKeyLimit: options.perKeyLimit, globalLimit: options.globalLimit }),
     simulator,
     approvalStore,
     security: options.security,
@@ -82,7 +84,7 @@ function setup(options: SetupOptions = {}) {
   const post = (key: TestSigningKey, extra: Partial<Parameters<typeof signedRequest>[4]> = {}, target = "/api/evaluate") =>
     signedRequest(app, key, "post", target, { ts: clock, body: BODY, ...extra });
   const events = async () => (await request(app).get("/api/events")).body.events as ActivityEvent[];
-  return { app, simulator, approvalStore, ...keys, post, events, advance: (ms: number) => (clock += ms), clock: () => clock };
+  return { app, simulator, approvalStore, ...keys, post, events, advance: (ms: number) => (clock += ms), clock: () => clock, setNonceClockLead: (ms: number) => (nonceClockLead = ms) };
 }
 
 const UNAUTHORIZED = [401, { error: "Authentication required." }];
@@ -285,6 +287,19 @@ describe("M3-E E3: replay protection", () => {
     const nonce = testNonce();
     expect((await t.post(t.writerKey, { nonce, signed: { body: "{}" } }).send()).status).toBe(401);
     expect((await t.post(t.writerKey, { nonce }).send()).status).toBe(200);
+  });
+
+  it("M3-E E9: a replay at the last millisecond of the window is refused even if the clock ticks during verification", async () => {
+    const t = setup();
+    const req = t.post(t.writerKey);
+    expect((await req.send()).status).toBe(200);
+    // The replay arrives when the verifier's clock reads exactly ts + skew (the timestamp is still acceptable),
+    // and the clock has moved on by 1 ms when the replay cache is consulted.
+    t.advance(SKEW);
+    t.setNonceClockLead(1);
+    expect(statusAndBody(await req.send())).toEqual(UNAUTHORIZED);
+    expect(warnings.at(-1)).toBe(`agent-auth status=failed scheme=signature reason=replay keyId=${t.writerKey.keyId}`);
+    expect(t.simulator.invocationCount).toBe(1);
   });
 
   it("a stale replay is refused as stale; the same nonce on another key is unrelated", async () => {
