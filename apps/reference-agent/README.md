@@ -176,8 +176,9 @@ automatically, because a repeat could run the action twice.
 
 | While waiting for an approval | Status | Meaning |
 |---|---|---|
-| The approval is not found (for example AgentShield restarted: pending approvals live in memory), or its id now names a different approval (a different `createdAt`: ids restart at `apr-1` after a restart) | `approval-missing` | Nothing saved. Run the task again to ask again. |
+| The approval is not found (for example its store was deleted; approvals survive restarts since M3-E E12), or its id now names a different approval (a different `createdAt`) | `approval-missing` | Nothing saved. Run the task again to ask again. |
 | Credential revoked or expired, AgentShield unreachable, or another error | `wait-interrupted` (with a reason) | Nothing saved, and the approval itself is unchanged. `resume` can try again. If the credential was revoked, an operator's later approval is refused at recheck (`BLOCKED_ON_RECHECK`). |
+| The approval ends `OUTCOME_UNKNOWN` (M3-E E12: interrupted while executing, or its record was damaged) | `unconfirmed` (`approval-outcome-unknown`) | Nothing saved; it will never run. Ask the operator to check. |
 | Cancelled (an `AbortSignal` passed to `run` or `resume`) | `wait-interrupted` (`cancelled`) | Nothing saved. |
 
 **Retries inside the SDK.** The SDK retries approval reads a few times on its own (each

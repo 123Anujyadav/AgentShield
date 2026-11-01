@@ -9,6 +9,7 @@ import { evaluateForAgent, IDENTITY_MISMATCH_RULE_ID, parseAgentId, recheckAppro
 import { builtInPolicyStore, type PolicyStore } from "./policies/store.js";
 import {
   ApprovalCapacityError,
+  ApprovalStoreError,
   createApprovalStore,
   AGENT_APPROVAL_PAGE_DEFAULT,
   AGENT_APPROVAL_PAGE_MAX,
@@ -140,7 +141,7 @@ function bodyParserClientError(error: unknown): { status: 400 | 413 | 415; categ
 
 /** An approval id as the store creates it (`apr-N`). */
 const APPROVAL_ID = /^apr-[1-9][0-9]{0,8}$/;
-const APPROVAL_STATUSES: ReadonlySet<string> = new Set<ApprovalStatus>(["PENDING", "EXECUTED", "REJECTED", "EXPIRED", "BLOCKED_ON_RECHECK", "APPROVED_NOT_EXECUTED"]);
+const APPROVAL_STATUSES: ReadonlySet<string> = new Set<ApprovalStatus>(["PENDING", "EXECUTED", "REJECTED", "EXPIRED", "BLOCKED_ON_RECHECK", "APPROVED_NOT_EXECUTED", "OUTCOME_UNKNOWN"]);
 
 /**
  * M3-E E4: the query of GET /api/agent/approvals. Only `limit` (1 to 50, default 20),
@@ -497,10 +498,12 @@ export function createApp(deps: AppDeps = {}) {
           ...(credentialKeyId !== undefined ? { credentialKeyId } : {}),
         });
       } catch (error) {
-        if (!(error instanceof ApprovalCapacityError)) throw error;
+        if (!(error instanceof ApprovalCapacityError) && !(error instanceof ApprovalStoreError)) throw error;
         // Nothing runs without an approval record. The decision stays CONFIRM and is recorded.
         // M3-E E9: the same answer when this agent alone holds its maximum of open approvals.
-        const perAgent = error.scope === "agent";
+        const perAgent = error instanceof ApprovalCapacityError && error.scope === "agent";
+        // M3-E E12: the approval could not be stored durably, so it was not created (no id was returned).
+        const storeFailure = error instanceof ApprovalStoreError ? error.reason : null;
         const event = recordEvent({
           scenarioId,
           intentTask: intent.task,
@@ -510,17 +513,22 @@ export function createApp(deps: AppDeps = {}) {
           decision: evaluation.decision,
           riskScore: evaluation.riskScore,
           findings: evaluation.findings,
-          explanation: perAgent
-            ? "Confirmation required, but this agent already has the maximum number of pending approvals. Nothing was executed and no approval was created."
-            : "Confirmation required, but the approval queue is full. Nothing was executed and no approval was created.",
+          explanation: storeFailure
+            ? "Confirmation required, but the approval could not be stored durably. Nothing was executed and no approval was created."
+            : perAgent
+              ? "Confirmation required, but this agent already has the maximum number of pending approvals. Nothing was executed and no approval was created."
+              : "Confirmation required, but the approval queue is full. Nothing was executed and no approval was created.",
           lifecycle: "CONFIRM_NOT_QUEUED",
           ...agentFields,
         });
-        const message = perAgent
+        const message = storeFailure
+          ? "The approval could not be stored, so it was not created. Nothing was executed; the operator must check the approval store."
+          : perAgent
           ? "This agent already has the maximum number of pending approvals. Approve, reject or let them expire, then try again. Nothing was executed."
           : "The approval queue is full. Approve, reject or let pending approvals expire, then try again. Nothing was executed.";
-        if (idem) idempotencyStore.complete(idem.agentId, idem.key, { status: 503, body: { error: message, reason: "approval-queue-full", evaluation, executed: false, pendingApproval: null } });
-        res.status(503).json({ error: message, reason: "approval-queue-full", evaluation, event, executed: false, pendingApproval: null, ...(idem ? { idempotentReplay: false } : {}) });
+        const reason = storeFailure ?? "approval-queue-full";
+        if (idem) idempotencyStore.complete(idem.agentId, idem.key, { status: 503, body: { error: message, reason, evaluation, executed: false, pendingApproval: null } });
+        res.status(503).json({ error: message, reason, evaluation, event, executed: false, pendingApproval: null, ...(idem ? { idempotentReplay: false } : {}) });
         return;
       }
     }
@@ -734,6 +742,26 @@ export function createApp(deps: AppDeps = {}) {
     return false;
   }
 
+  /** M3-E E12: while the approval store cannot record decisions, approvals and rejections are refused (nothing changes). */
+  function approvalsReady(res: express.Response): boolean {
+    const readiness = approvalStore.persistence?.readiness() ?? { ok: true as const };
+    if (readiness.ok) return true;
+    approvalStoreRefusal(res, new ApprovalStoreError(readiness.reason));
+    return false;
+  }
+
+  function approvalStoreRefusal(res: express.Response, error: ApprovalStoreError): void {
+    console.error(`approval-store status=refused reason=${error.reason}`);
+    res.status(503).json({
+      error:
+        error.reason === "approval-store-full"
+          ? "The approval store is full, so the decision could not be recorded. Nothing was changed or executed."
+          : "The approval store is unavailable, so the decision could not be recorded. Nothing was changed or executed.",
+      reason: error.reason,
+      executed: false,
+    });
+  }
+
   function approvalIdParam(req: express.Request, res: express.Response): string | null {
     const id = req.params.id;
     if (typeof id !== "string" || !/^apr-\d+$/.test(id)) {
@@ -753,12 +781,19 @@ export function createApp(deps: AppDeps = {}) {
 
   app.post("/api/approvals/:id/approve", limit("approval-action", security.rateLimits.approvalAction), (req, res) => {
     const id = approvalIdParam(req, res);
-    if (!id || !hasValidBody(req, res) || !auditReady(res)) return;
+    if (!id || !hasValidBody(req, res) || !auditReady(res) || !approvalsReady(res)) return;
     // Any client-supplied action/findings/score in the body is ignored on purpose.
     const storedType = approvalStore.records.get(id)?.action.type ?? "";
-    const outcome = processApproval(approvalStore, id, (record) => recheckApproval(policyStore, record, (keyId) => credentialStore.status(keyId)),
+    let outcome: ReturnType<typeof processApproval>;
+    try {
+      outcome = processApproval(approvalStore, id, (record) => recheckApproval(policyStore, record, (keyId) => credentialStore.status(keyId)),
       simulator,
     );
+    } catch (error) {
+      // M3-E E12: the decision (or the write-ahead record) could not be stored: nothing changed or ran.
+      if (error instanceof ApprovalStoreError) return approvalStoreRefusal(res, error);
+      throw error;
+    }
     if (outcome.kind === "not-found") {
       res.status(404).json({ error: `Unknown approval: ${id}`, executed: false });
       return;
@@ -811,13 +846,25 @@ export function createApp(deps: AppDeps = {}) {
       agentPolicy: outcome.recheck.agentPolicy ?? null,
       actor: operatorActor(res),
     });
+    if (!outcome.durable) {
+      // M3-E E12: it ran, but its outcome is not stored durably; never reported as a success.
+      console.error(`approval-store status=write-failed approvalId=${id} effect=outcome-unconfirmed`);
+      res.status(500).json({ error: "The approved action ran, but its outcome could not be stored durably. The outcome of this request is not confirmed.", reason: "approval-store-write-failed" });
+      return;
+    }
     res.json({ approval: outcome.approval, execution, executed: execution.executed });
   });
 
   app.post("/api/approvals/:id/reject", limit("approval-action", security.rateLimits.approvalAction), (req, res) => {
     const id = approvalIdParam(req, res);
-    if (!id || !hasValidBody(req, res) || !auditReady(res)) return;
-    const outcome = processRejection(approvalStore, id);
+    if (!id || !hasValidBody(req, res) || !auditReady(res) || !approvalsReady(res)) return;
+    let outcome: ReturnType<typeof processRejection>;
+    try {
+      outcome = processRejection(approvalStore, id);
+    } catch (error) {
+      if (error instanceof ApprovalStoreError) return approvalStoreRefusal(res, error);
+      throw error;
+    }
     if (outcome.kind === "not-found") {
       res.status(404).json({ error: `Unknown approval: ${id}`, executed: false });
       return;

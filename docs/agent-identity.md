@@ -346,7 +346,8 @@ GET /api/agent/approvals?limit=20&before=apr-12&status=PENDING
   operator's always gets the same `404 {"error":"Approval not found."}`, so ids of other
   approvals cannot be confirmed this way.
 - **The view** has exactly these fields: `id`, `status` (`PENDING`, `EXECUTED`,
-  `APPROVED_NOT_EXECUTED`, `REJECTED`, `EXPIRED`, `BLOCKED_ON_RECHECK`), `createdAt`,
+  `APPROVED_NOT_EXECUTED`, `REJECTED`, `EXPIRED`, `BLOCKED_ON_RECHECK`, and since M3-E E12
+  `OUTCOME_UNKNOWN`), `createdAt`,
   `expiresAt`, `executed`, and `pollAfterSeconds` (2 while pending, otherwise `null`).
   - Nothing else from the record is returned: not the intent, action, untrusted content,
     findings, risk, policy reference, actor or credential details.
@@ -457,9 +458,10 @@ If a credential may have leaked:
   actions; there is a single operator with no roles.
 - **Approval ids are sequential** (`apr-N`). An agent cannot read or list other agents'
   approvals, but the gaps between its own ids show roughly how many approvals were
-  created in between. They also start again at `apr-1` after a restart. Compare
-  `createdAt` before trusting an id kept across one (see
-  [integration-guide.md](integration-guide.md#4-follow-an-approval)).
+  created in between. Since M3-E E12 they are durable and never reused across restarts
+  ([approval-persistence.md](approval-persistence.md)); comparing `createdAt` (see
+  [integration-guide.md](integration-guide.md#4-follow-an-approval)) still detects a deleted
+  approval store.
 - **Legacy bearer credentials travel in plain text** on that loopback HTTP connection, so a
   local process able to capture loopback traffic could read them in transit. Signed
   requests never send the private key.

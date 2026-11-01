@@ -56,7 +56,8 @@ export interface EvaluateResult {
   idempotentReplay: boolean;
 }
 
-export type ApprovalStatus = "PENDING" | "EXECUTED" | "APPROVED_NOT_EXECUTED" | "REJECTED" | "EXPIRED" | "BLOCKED_ON_RECHECK";
+/** OUTCOME_UNKNOWN (M3-E E12): final; after a restart the outcome could not be established. Never treat it as executed. */
+export type ApprovalStatus = "PENDING" | "EXECUTED" | "APPROVED_NOT_EXECUTED" | "REJECTED" | "EXPIRED" | "BLOCKED_ON_RECHECK" | "OUTCOME_UNKNOWN";
 
 /** The server's six-field view of one of this agent's approvals (M3-E E4). */
 export interface AgentApproval {
@@ -83,7 +84,7 @@ export interface ListApprovalsOptions {
   status?: ApprovalStatus;
 }
 
-export const APPROVAL_STATUSES: readonly ApprovalStatus[] = ["PENDING", "EXECUTED", "APPROVED_NOT_EXECUTED", "REJECTED", "EXPIRED", "BLOCKED_ON_RECHECK"];
+export const APPROVAL_STATUSES: readonly ApprovalStatus[] = ["PENDING", "EXECUTED", "APPROVED_NOT_EXECUTED", "REJECTED", "EXPIRED", "BLOCKED_ON_RECHECK", "OUTCOME_UNKNOWN"];
 export const APPROVAL_ID = /^apr-[1-9][0-9]{0,8}$/;
 const APPROVAL_KEYS = ["createdAt", "executed", "expiresAt", "id", "pollAfterSeconds", "status"];
 

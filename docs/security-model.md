@@ -169,12 +169,12 @@ An operator's **approval is a request to run**, not a guarantee that anything ra
    Even then the effect is simulated.
 4. **The agent may never learn the result.** It can stop waiting, lose its connection,
    restart or have its credential revoked before it observes the final status. Final
-   records can also be dropped from memory when the approval store is full, and every
-   approval is lost on an API restart.
-5. **An approval id alone is not proof of identity across restarts.** Ids restart at
-   `apr-1` in a new API process, so a later approval can reuse an id. Compare the
-   approval's `createdAt` with the `approvalCreatedAt` from the evaluate response before
-   acting on it (the reference agent does).
+   records older than 15 minutes can also be dropped when the approval store is full.
+   Approvals survive restarts (M3-E E12), but an approval interrupted while executing becomes
+   `OUTCOME_UNKNOWN`: it never runs again, and whether it ran is unknown.
+5. **Bind an approval to its evaluation.** Ids are no longer reused, but comparing the
+   approval's `createdAt` with the `approvalCreatedAt` from the evaluate response still detects
+   a deleted or replaced store (the reference agent does).
 
 **What an agent should do.** Treat only an observed `EXECUTED` with `executed: true` as a
 go-ahead for any follow-up work. Treat every other status, and every failure to observe
@@ -232,13 +232,13 @@ hardened for remote access.
 ## Multi-process and restart limitations
 
 **An API restart loses:**
-- every pending approval: an agent waiting on one then gets `404` (approval missing);
 - the replay cache;
 - rate-limit counters;
 - dashboard sessions.
 
-**It keeps:** credentials and policies, which are files, and (since M3-E E10) every activity
-event written to the durable audit log. Policy changes need a restart. The audit log is not
+**It keeps:** credentials and policies, which are files; every activity event written to the
+durable audit log (M3-E E10); the replay journal and idempotency records (E11); and every
+approval with its state (E12, [approval-persistence.md](approval-persistence.md)). Policy changes need a restart. The audit log is not
 tamper-proof: a local user with write access can change it ([audit-log.md](audit-log.md)).
 
 **One process per credential store.** The design assumes one API process. Several

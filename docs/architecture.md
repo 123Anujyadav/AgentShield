@@ -238,11 +238,13 @@ stateDiagram-v2
   PENDING --> BLOCKED_ON_RECHECK: operator approves, recheck returns BLOCK
   PENDING --> EXECUTED: operator approves, recheck passes, handler ran
   PENDING --> APPROVED_NOT_EXECUTED: operator approves, recheck passes, no handler for this action type
+  PENDING --> OUTCOME_UNKNOWN: on recovery, interrupted while executing or record damaged (never runs)
   REJECTED --> [*]
   EXPIRED --> [*]
   BLOCKED_ON_RECHECK --> [*]
   EXECUTED --> [*]
   APPROVED_NOT_EXECUTED --> [*]
+  OUTCOME_UNKNOWN --> [*]
 ```
 
 **What happens on approve.** `POST /api/approvals/:id/approve` (operator only) rechecks
@@ -264,14 +266,16 @@ before anything runs:
 **What the operator cannot change.** Client-supplied decisions, findings or replacement
 actions are ignored.
 
-**Where approvals live.** Approvals are in memory, at most 500 records. When the store is
+**Where approvals live.** Since M3-E E12 approvals are kept in a durable journal ([approval-persistence.md](approval-persistence.md)):
+every creation and decision is recorded before it is reported, they survive restarts, and ids
+are never reused. At most 500 records are kept. When the store is
 full of pending approvals, a new `CONFIRM` gets `503 approval-queue-full`, and nothing runs.
 Since M3-E E9 one agent can hold at most 100 pending approvals; beyond that its own `CONFIRM`
 gets the same `503 approval-queue-full` (with an agent-specific message), while other agents
 and the operator's scenarios are unaffected.
 
-**Approval ids restart after a restart.** Ids are numbered `apr-1`, `apr-2`, ... per API
-process, so after a restart an id can name a different approval. The evaluate response carries
+**Approval identity.** Ids are numbered `apr-1`, `apr-2`, ... and, with the durable store, never
+reused (before E12 they restarted with each process). The evaluate response carries
 the approval's `createdAt` (the SDK's `approvalCreatedAt`); compare it with the `createdAt` of
 the approval you later read. The reference agent does this and treats a mismatch as a missing
 approval.
@@ -345,7 +349,7 @@ reference: [`apps/reference-agent/README.md`](../apps/reference-agent/README.md)
 | Credential store (public keys, metadata) | `%LOCALAPPDATA%\AgentShield\agent-credentials.json` or `AGENT_CREDENTIAL_FILE` | Yes; re-read on change |
 | Agent private key | The agent's own file or environment | Not held by the API at all |
 | Policies | Built in, or `AGENT_POLICY_FILE` | Yes; changes need a restart |
-| Pending and final approvals | API memory | **No** |
+| Pending and final approvals | Durable journal (`APPROVAL_STORE_FILE`, M3-E E12) and memory | Yes |
 | Activity events | Durable audit log (`AUDIT_LOG_FILE`, append-only, M3-E E10); the API view holds the newest 1,000 in memory | Yes; the view is restored at start-up ([audit-log.md](audit-log.md)) |
 | Replay (nonce) cache | Durable journal (`REPLAY_STORE_FILE`, M3-E E11) and memory | Yes; live nonces are reloaded |
 | Idempotency records | Durable journal (`IDEMPOTENCY_STORE_FILE`, M3-E E11) and memory | Yes, for 15 minutes |

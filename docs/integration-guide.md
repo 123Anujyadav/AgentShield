@@ -169,15 +169,18 @@ async function follow(approvalId: string, createdAt: string, signal?: AbortSigna
 }
 ```
 
-**Bind the approval to its evaluation.** Approval ids are numbered per API process and start
-at `apr-1` again after a restart. An id you kept from before a restart can later name someone
-else's approval, possibly one that an operator approves. `result.approvalCreatedAt` is the
+**Bind the approval to its evaluation.** Since M3-E E12 approvals survive restarts and ids are
+never reused, but an approval store that was deleted (or an API without the durable store)
+starts again at `apr-1`, and an id you kept could then name someone else's approval. `result.approvalCreatedAt` is the
 approval's creation time from the evaluate response. Treat an approval whose `createdAt`
 differs as lost, as above. `getApproval` already refuses an answer about a different id.
 
 **Final statuses.**
 - `EXECUTED` (with `executed: true`) is the only go-ahead.
 - `APPROVED_NOT_EXECUTED` means approved, but there is no handler for this action type.
+- `OUTCOME_UNKNOWN` (M3-E E12): after a restart, AgentShield could not establish whether it
+  ran (interrupted while executing, or its record was damaged). It never runs; treat it as
+  unconfirmed and tell a person.
 - `REJECTED`, `EXPIRED` and `BLOCKED_ON_RECHECK` end with nothing run. `BLOCKED_ON_RECHECK`
   means the credential was revoked, the policy changed, or the re-evaluation blocked.
 
@@ -196,7 +199,7 @@ approve or reject routes. Its credential would get `403 operator-required` anywa
 // One approval, or null if it does not exist or is not this agent's (the server does not say which).
 const one = await client.getApproval("apr-12");
 if (one === null) {
-  // unknown, another agent's, or lost in an API restart
+  // unknown, or another agent's (approvals survive restarts since M3-E E12)
 }
 
 // One page, newest first: limit 1 to 50 (server default 20), optional status filter.

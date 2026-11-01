@@ -205,7 +205,7 @@ describe("M3-E E10: the server opens the durable audit log at start-up", () => {
     const server = readFileSync(fileURLToPath(new URL("../server.ts", import.meta.url)), "utf8");
     expect(server).toContain("auditLog = openFileAuditLog(auditLogPathFromEnv(), { maxBytes: auditLogMaxBytesFromEnv() });");
     expect(server).toMatch(/catch \(error\) \{[\s\S]*?audit-log status=invalid-config[\s\S]*?process\.exit\(1\);/);
-    expect(server).toContain("createApp({ apiToken: tokenFile.token, policyStore, credentialStore, signatureSkewMs, auditLog, nonceCache, idempotencyStore })");
+    expect(server).toContain("createApp({ apiToken: tokenFile.token, policyStore, credentialStore, signatureSkewMs, auditLog, nonceCache, idempotencyStore, approvalStore })");
     expect(server.indexOf("openFileAuditLog(")).toBeLessThan(server.indexOf(".listen("));
     expect(server).toContain('process.on("exit", () => auditLog.close());');
   });
@@ -216,5 +216,12 @@ describe("M3-E E10: the server opens the durable audit log at start-up", () => {
     expect(server).toContain("idempotencyStore = createIdempotencyStore({ path: idempotencyStorePathFromEnv() });");
     expect(server).toMatch(/catch \(error\) \{[\s\S]*?agent-state status=invalid-config[\s\S]*?process\.exit\(1\);/);
     expect(server.indexOf("openDurableNonceCache(")).toBeLessThan(server.indexOf(".listen("));
+  });
+
+  it("M3-E E12: opens the durable approval store before listening, fails closed, and passes it to the app", () => {
+    const server = readFileSync(fileURLToPath(new URL("../server.ts", import.meta.url)), "utf8");
+    expect(server).toContain("approvalStore = openDurableApprovalStore({ path: approvalStorePathFromEnv() });");
+    expect(server.indexOf("openDurableApprovalStore(")).toBeLessThan(server.indexOf(".listen("));
+    expect(server.indexOf("openDurableApprovalStore(")).toBeLessThan(server.indexOf("agent-state status=invalid-config"));
   });
 });

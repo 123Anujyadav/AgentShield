@@ -128,7 +128,12 @@ export type ApprovalStatus =
   | "EXPIRED"
   | "BLOCKED_ON_RECHECK"
   /** M3-B: the recheck passed, but no simulated handler is registered for the action type. Nothing ran. */
-  | "APPROVED_NOT_EXECUTED";
+  | "APPROVED_NOT_EXECUTED"
+  /**
+   * M3-E E12: after a restart, the outcome could not be established (the API stopped while the approved
+   * action was running, or its record was damaged). Final: it never runs and is never reported as executed.
+   */
+  | "OUTCOME_UNKNOWN";
 
 export interface SimulatedExecution {
   executed: boolean;

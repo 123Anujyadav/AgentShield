@@ -17,8 +17,9 @@ protection or complete prompt-injection prevention.
   created with it), except the two agent routes, which require a signed agent credential.
   There are no user accounts or roles, and it is not hardened for exposure beyond this
   machine. See [`docs/security-model.md`](docs/security-model.md).
-- **Not persistent (approvals).** Pending approvals are in memory and reset when the API
-  restarts. Since M3-E E10, activity events are also written to a local append-only audit file
+- **Persistent state is local and single-process.** Since M3-E E12 approvals (pending, decided and
+  expired) survive API restarts in a local journal ([`docs/approval-persistence.md`](docs/approval-persistence.md)).
+  Since M3-E E10, activity events are also written to a local append-only audit file
   and survive restarts; see [`docs/audit-log.md`](docs/audit-log.md).
 - **Not a live model.** The advisory model is a mock by default. Two separately authorized,
   one-request live Muse Spark smoke tests were run on 2026-10-29: the first returned an unusable
@@ -147,9 +148,9 @@ node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-11-01, M3-E E11): `npm test` passes 2,157 tests in 67 files
-(agent-protocol 98 in 1 file, agent-sdk 56 in 3, reference-agent 90 in 4, engine 728 in 9, websec
-395 in 13, API 767 in 34, web 23 in 3), with none failed or skipped, and `npm run build` and
+Current verified state (2026-11-01, M3-E E12): `npm test` passes 2,186 tests in 69 files
+(agent-protocol 98 in 1 file, agent-sdk 56 in 3, reference-agent 91 in 4, engine 728 in 9, websec
+395 in 13, API 795 in 36, web 23 in 3), with none failed or skipped, and `npm run build` and
 `npm run typecheck` pass for all seven workspaces. `npm audit` needs
 network access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 
@@ -343,14 +344,14 @@ first transition to `EXPIRED` records an `EXPIRED` lifecycle event in the timeli
 Expiry is lazy: that event's timestamp is when expiry was detected (listing, approve, or
 reject), not the exact instant the TTL elapsed. Event delivery is retry-based: a failed write
 keeps a pending marker and is retried when a later listing, approve, or reject occurs. It is
-not guaranteed across API restarts (approvals and markers are in memory, although every
-event that was written is kept in the durable audit log since M3-E E10), and if a write
+retried after a restart too, since M3-E E12 keeps approvals and their pending markers in a durable
+journal (every event that was written is kept in the durable audit log since M3-E E10), and if a write
 succeeds in the event store but then reports an error, a retry may record a duplicate event,
 so strict exactly-once delivery is not promised.
 Client-supplied findings, scores, decisions, or replacement actions are ignored.
 
 Simulated handlers are an explicit allowlist (`create_summary`, `read_document`, `create_report`)
-with no real side effects. Pending approvals and events reset when the API restarts.
+with no real side effects. Approvals and events survive API restarts (M3-E E12 and E10).
 Production use would require authenticated, authorised user identity; this local demo has none.
 Since Phase J the API server listens on IPv4 loopback (`127.0.0.1`, set in
 `apps/api/src/host.ts`) instead of every network interface, so other machines cannot reach

@@ -10,7 +10,8 @@ It uses the official SDK (`@agentshield/agent-sdk`) and the reference agent buil
 > **Read this first.** AgentShield is a local-first prototype, not a production service.
 > - The API listens on `127.0.0.1` only.
 > - Every action handler is simulated: nothing is sent, paid or deleted.
-> - Pending approvals live in memory.
+> - Approvals, events and agent replay state are kept in local files under
+>   `%LOCALAPPDATA%\AgentShield` and survive restarts; they are not shared between machines.
 >
 > Use throwaway test credentials only, and revoke them when you finish. See
 > [security-model.md](security-model.md) for what is and is not protected.

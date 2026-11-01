@@ -59,6 +59,8 @@ export type FailureReason =
   | "cancelled"
   /** Refused by the SDK before sending: the encoded request is over AgentShield's 32 KB limit. */
   | "request-too-large"
+  /** M3-E E12: after a restart AgentShield could not establish whether the approved action ran (OUTCOME_UNKNOWN). */
+  | "approval-outcome-unknown"
   /** 503 approval-queue-full: CONFIRM was needed, but no approval was created and nothing executed. */
   | "approval-queue-full";
 
@@ -223,6 +225,9 @@ export class ReferenceAgent {
         return { status: "expired", evaluation, approvalId };
       case "BLOCKED_ON_RECHECK":
         return { status: "blocked-on-recheck", evaluation, approvalId };
+      case "OUTCOME_UNKNOWN":
+        // M3-E E12: it will never run, but whether it did is unknown: not a go-ahead, and not "not executed".
+        return { status: "unconfirmed", reason: "approval-outcome-unknown" };
       default:
         // waitForApproval never returns PENDING; anything else is not a go-ahead.
         return { status: "not-executed", evaluation, approvalId };

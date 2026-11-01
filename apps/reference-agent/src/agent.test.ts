@@ -394,3 +394,16 @@ describe("M3-E E9: inputs with nothing to summarize, and requests too large to s
     ]);
   });
 });
+
+describe("M3-E E12: an approval whose outcome is unknown after a restart", () => {
+  it("OUTCOME_UNKNOWN is unconfirmed, never saved, and explained as unknown rather than not executed", async () => {
+    const t = setup({ evaluate: () => evaluation("CONFIRM", { approvalId: "apr-21" }), approval: (id) => approval(id, "OUTCOME_UNKNOWN", false) });
+    const outcome = await t.agent.run(INJECTED);
+    expect(outcome).toEqual({ status: "unconfirmed", reason: "approval-outcome-unknown" });
+    expectNothingSaved(t);
+    expect(describeOutcome(outcome)).toEqual([
+      "AgentShield could not establish whether the approved action ran (the API stopped while carrying it out, or its record was damaged). It will not run.",
+      "Nothing was saved. Ask the operator to check the approval before running the task again.",
+    ]);
+  });
+});

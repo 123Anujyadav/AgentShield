@@ -110,9 +110,8 @@ agent's **current** policy:
 - Otherwise the stored request is narrowed against the current policy again and fully
   re-evaluated, as before M3-C.
 
-Policies only change on restart today, and pending approvals are in memory, so a restart
-already discards them. The hash check keeps this safe if policies or approvals ever
-outlive a restart.
+Policies only change on restart today, and since M3-E E12 pending approvals survive a restart
+([approval-persistence.md](approval-persistence.md)), so the hash check is what blocks an approval created under an earlier policy.
 
 ## Reading policies
 

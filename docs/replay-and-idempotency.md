@@ -130,8 +130,10 @@ check and rate limits all run first. A revoked credential gets 401 on a retry. A
 credential of the same agent gets the replay. An approval still rechecks the current
 credential and policy when it is approved.
 
-**A replay is a report.** It never executes anything. After a restart the referenced approval
-may no longer exist: agents then see `approval-missing`.
+**A replay is a report.** It never executes anything. Since M3-E E12 the referenced approval
+survives restarts and stays readable by its agent while the idempotency record lives
+(finished approvals younger than 15 minutes are not evicted). If it is missing or was
+quarantined, the agent sees `404` or `OUTCOME_UNKNOWN` ([approval-persistence.md](approval-persistence.md)).
 
 ### Storage
 

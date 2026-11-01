@@ -473,7 +473,7 @@ describe("M3-D: no credential or hash ever leaves the server", () => {
     const server = readFileSync(new URL("../server.ts", import.meta.url), "utf8");
     expect(server).toContain("credentialStore = createReloadingCredentialStore(credentialFilePath(), {");
     expect(server).toMatch(/catch \(error\) \{[\s\S]*?agent-credentials status=invalid-config[\s\S]*?process\.exit\(1\);/);
-    expect(server).toContain("createApp({ apiToken: tokenFile.token, policyStore, credentialStore, signatureSkewMs, auditLog, nonceCache, idempotencyStore })");
+    expect(server).toContain("createApp({ apiToken: tokenFile.token, policyStore, credentialStore, signatureSkewMs, auditLog, nonceCache, idempotencyStore, approvalStore })");
   });
 });
 

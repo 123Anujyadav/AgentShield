@@ -124,9 +124,13 @@ for await (const approval of client.iterateApprovals({ limit: 50 })) {
 `expiresAt`, `executed` and `pollAfterSeconds`. A response with any other shape, or about a
 different id than the one asked for, is rejected with `ResponseFormatError`.
 
-**Ids are not unique across API restarts.** The server numbers approvals per process, from
-`apr-1`. `evaluate` returns `approvalCreatedAt` with `approvalId`. Compare it with the
-`createdAt` you read before acting on an approval (M3-E E9).
+**Bind approvals to their evaluation.** Since M3-E E12 approvals survive restarts and ids are
+never reused, but a deleted approval store starts again at `apr-1`. `evaluate` returns
+`approvalCreatedAt` with `approvalId`; compare it with the `createdAt` you read before acting
+on an approval (M3-E E9).
+
+**`OUTCOME_UNKNOWN`** (M3-E E12) is a final status. After a restart, the server could not
+establish whether the approved action ran. It never runs; never treat it as executed.
 
 **Missing approvals.** `getApproval` returns `null` when the approval does not exist or
 belongs to another agent; the server does not say which. `waitForApproval` throws

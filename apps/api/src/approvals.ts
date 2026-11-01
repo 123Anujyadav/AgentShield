@@ -34,6 +34,30 @@ export class ApprovalCapacityError extends Error {
   }
 }
 
+/**
+ * M3-E E12: the approval store could not durably record a creation or a transition, so it did not
+ * happen (nothing changed, nothing ran).
+ */
+export class ApprovalStoreError extends Error {
+  constructor(readonly reason: "approval-store-full" | "approval-store-unavailable") {
+    super(reason);
+    this.name = "ApprovalStoreError";
+  }
+}
+
+/**
+ * M3-E E12: durable approval storage. Each method records one change durably BEFORE the in-memory record
+ * changes and throws ApprovalStoreError if it cannot. Without it (tests, demos) approvals live in memory.
+ */
+export interface ApprovalPersistence {
+  readiness(): { ok: true } | { ok: false; reason: "approval-store-full" | "approval-store-unavailable" };
+  created(record: ApprovalRecord, nextId: number): void;
+  /** Write-ahead: the recheck passed and the simulated action is about to run. */
+  approving(id: string): void;
+  transitioned(id: string, status: ApprovalStatus, execution: SimulatedExecution | null): void;
+  expiryRecorded(id: string): void;
+}
+
 /** Internal record: public approval fields plus server-only bookkeeping. */
 export interface ApprovalRecord extends PendingApproval {
   untrustedContent?: UntrustedContent;
@@ -52,12 +76,25 @@ export interface ApprovalStore {
   limit: number;
   /** Most open approvals per agent (M3-E E9). */
   perAgentPendingLimit: number;
+  /**
+   * M3-E E12: finished records younger than this are never evicted to make room, so an approval that a
+   * live idempotency record refers to stays readable. 0 (the in-memory default) keeps the M3-B behaviour.
+   */
+  finishedRetentionMs: number;
+  /** M3-E E12: durable storage; absent for in-memory stores. */
+  persistence?: ApprovalPersistence;
 }
 
-export function createApprovalStore(limit: number = MAX_APPROVAL_RECORDS, perAgentPendingLimit: number = MAX_PENDING_APPROVALS_PER_AGENT): ApprovalStore {
+export function createApprovalStore(
+  limit: number = MAX_APPROVAL_RECORDS,
+  perAgentPendingLimit: number = MAX_PENDING_APPROVALS_PER_AGENT,
+  options: { finishedRetentionMs?: number; persistence?: ApprovalPersistence } = {},
+): ApprovalStore {
   if (!Number.isInteger(limit) || limit < 1) throw new RangeError("The approval store limit must be a positive integer.");
   if (!Number.isInteger(perAgentPendingLimit) || perAgentPendingLimit < 1) throw new RangeError("The per-agent approval limit must be a positive integer.");
-  return { records: new Map(), nextId: 1, limit, perAgentPendingLimit };
+  const finishedRetentionMs = options.finishedRetentionMs ?? 0;
+  if (!Number.isSafeInteger(finishedRetentionMs) || finishedRetentionMs < 0) throw new RangeError("The finished-approval retention must be a non-negative integer.");
+  return { records: new Map(), nextId: 1, limit, perAgentPendingLimit, finishedRetentionMs, ...(options.persistence ? { persistence: options.persistence } : {}) };
 }
 
 /** Open approvals (PENDING and not yet past their expiry) that one agent's credentials requested. */
@@ -74,12 +111,15 @@ export function openApprovalsFor(store: ApprovalStore, agentId: string, now: Dat
  * event has already been written. PENDING records are never evicted, and an
  * EXPIRED record is kept until its expiry event has been recorded.
  */
-function isEvictable(record: ApprovalRecord): boolean {
+function isEvictable(record: ApprovalRecord, store?: ApprovalStore, now: Date = new Date()): boolean {
+  // M3-E E12: a recently created record may still be referenced by an idempotency record.
+  if (store && store.finishedRetentionMs > 0 && now.getTime() - new Date(record.createdAt).getTime() < store.finishedRetentionMs) return false;
   switch (record.status) {
     case "EXECUTED":
     case "REJECTED":
     case "BLOCKED_ON_RECHECK":
     case "APPROVED_NOT_EXECUTED":
+    case "OUTCOME_UNKNOWN":
       return true;
     case "EXPIRED":
       return record.expiryEventPending !== true;
@@ -89,10 +129,10 @@ function isEvictable(record: ApprovalRecord): boolean {
 }
 
 /** Evicts the oldest finished records until one more fits; false when only open records remain. */
-function makeRoom(store: ApprovalStore): boolean {
+export function makeRoom(store: ApprovalStore, now: Date = new Date()): boolean {
   for (const [id, record] of store.records) {
     if (store.records.size < store.limit) break;
-    if (isEvictable(record)) store.records.delete(id);
+    if (isEvictable(record, store, now)) store.records.delete(id);
   }
   return store.records.size < store.limit;
 }
@@ -101,7 +141,7 @@ function makeRoom(store: ApprovalStore): boolean {
 export function approvalStoreFull(store: ApprovalStore): boolean {
   if (store.records.size < store.limit) return false;
   let evictable = 0;
-  for (const record of store.records.values()) if (isEvictable(record)) evictable += 1;
+  for (const record of store.records.values()) if (isEvictable(record, store)) evictable += 1;
   return evictable === 0;
 }
 
@@ -132,9 +172,9 @@ export function createPendingApproval(
     throw new ApprovalCapacityError("agent");
   }
   // Bounded (M3-B): drop the oldest finished records; never an open one.
-  if (!makeRoom(store)) throw new ApprovalCapacityError();
+  if (!makeRoom(store, now)) throw new ApprovalCapacityError();
   const record: ApprovalRecord = {
-    id: `apr-${store.nextId++}`,
+    id: `apr-${store.nextId}`,
     status: "PENDING",
     expiryEventPending: false,
     createdAt: now.toISOString(),
@@ -155,6 +195,10 @@ export function createPendingApproval(
     ...(input.requestedBy !== undefined ? { requestedBy: { ...input.requestedBy } } : {}),
     ...(input.credentialKeyId !== undefined ? { credentialKeyId: input.credentialKeyId } : {}),
   };
+  // M3-E E12: durably recorded before the id is returned. On failure nothing is stored, and the id is
+  // still consumed (it may be in the journal), so it is never handed out twice.
+  store.nextId += 1;
+  store.persistence?.created(record, store.nextId);
   store.records.set(record.id, record);
   return toPublicApproval(record);
 }
@@ -183,8 +227,7 @@ export function expirePendingApprovals(
   let changed = 0;
   for (const record of store.records.values()) {
     if (record.status === "PENDING" && isExpired(record, now)) {
-      record.status = "EXPIRED";
-      record.expiryEventPending = true;
+      recordExpiry(store, record);
       changed += 1;
     }
     if (record.status === "EXPIRED" && record.expiryEventPending && onExpired) {
@@ -207,7 +250,28 @@ export function markExpiryEventRecorded(store: ApprovalStore, id: string): boole
   const record = store.records.get(id);
   if (!record || record.status !== "EXPIRED" || !record.expiryEventPending) return false;
   record.expiryEventPending = false;
+  try {
+    store.persistence?.expiryRecorded(id);
+  } catch {
+    // Not recorded durably: after a restart the EXPIRED event may be written once more (delivery is not
+    // exactly-once, as documented).
+  }
   return true;
+}
+
+/**
+ * M3-E E12: PENDING -> EXPIRED. Expiry follows from expiresAt, so even when the transition cannot be
+ * recorded durably the record is treated as expired (after a restart it is derived again) and can never be
+ * approved. The failure is logged; nothing is reported as a success.
+ */
+function recordExpiry(store: ApprovalStore, record: ApprovalRecord): void {
+  try {
+    store.persistence?.transitioned(record.id, "EXPIRED", null);
+  } catch {
+    console.warn(`approval-store status=write-failed transition=EXPIRED approvalId=${record.id} effect=derived-from-expiresAt`);
+  }
+  record.status = "EXPIRED";
+  record.expiryEventPending = true;
 }
 
 /**
@@ -311,7 +375,8 @@ export type ApproveOutcome =
   | { kind: "already-final"; status: number; approval: PendingApproval }
   | { kind: "expired"; approval: PendingApproval; expiryEventPending: boolean }
   | { kind: "blocked-on-recheck"; approval: PendingApproval; recheck: EvaluationResult }
-  | { kind: "executed"; approval: PendingApproval; execution: SimulatedExecution; recheck: EvaluationResult };
+  /** `durable: false` (M3-E E12): it ran, but the outcome could not be recorded durably (report as unconfirmed). */
+  | { kind: "executed"; approval: PendingApproval; execution: SimulatedExecution; recheck: EvaluationResult; durable: boolean };
 
 export function processApproval(
   store: ApprovalStore,
@@ -329,22 +394,35 @@ export function processApproval(
     return { kind: "already-final", status: 409, approval: toPublicApproval(record) };
   }
   if (isExpired(record, now)) {
-    record.status = "EXPIRED";
-    record.expiryEventPending = true;
+    recordExpiry(store, record);
     return { kind: "expired", approval: toPublicApproval(record), expiryEventPending: true };
   }
   // Policy recheck against the exact stored intent/action/content. Client input plays no part.
   const recheck = reevaluate(record);
   if (recheck.decision === "BLOCK") {
+    const blocked: SimulatedExecution = { executed: false, handler: null, result: null, reason: "Policy recheck returned BLOCK." };
+    store.persistence?.transitioned(id, "BLOCKED_ON_RECHECK", blocked); // throws: nothing changed
     record.status = "BLOCKED_ON_RECHECK";
-    record.execution = { executed: false, handler: null, result: null, reason: "Policy recheck returned BLOCK." };
+    record.execution = blocked;
     return { kind: "blocked-on-recheck", approval: toPublicApproval(record), recheck };
   }
+  // M3-E E12: write-ahead. If the API stops after this and before the outcome is recorded, recovery marks
+  // the approval OUTCOME_UNKNOWN: it is never run again and never reported as executed.
+  store.persistence?.approving(id); // throws: nothing changed, nothing ran
   const execution = simulator.execute(clone(record.action), "ALLOW");
-  record.execution = execution;
   // The recheck passed; if no handler ran, that is not a policy block (M3-B).
-  record.status = execution.executed ? "EXECUTED" : "APPROVED_NOT_EXECUTED";
-  return { kind: "executed", approval: toPublicApproval(record), execution, recheck };
+  const status: ApprovalStatus = execution.executed ? "EXECUTED" : "APPROVED_NOT_EXECUTED";
+  record.execution = execution;
+  record.status = status;
+  let durable = true;
+  try {
+    store.persistence?.transitioned(id, status, execution);
+  } catch {
+    // It ran, but the outcome is not durable: the store refuses further changes, and after a restart the
+    // write-ahead record makes this approval OUTCOME_UNKNOWN. The caller reports it as unconfirmed.
+    durable = false;
+  }
+  return { kind: "executed", approval: toPublicApproval(record), execution, recheck, durable };
 }
 
 export type RejectOutcome =
@@ -361,11 +439,12 @@ export function processRejection(store: ApprovalStore, id: string, now = new Dat
   }
   if (record.status !== "PENDING") return { kind: "already-final", approval: toPublicApproval(record) };
   if (isExpired(record, now)) {
-    record.status = "EXPIRED";
-    record.expiryEventPending = true;
+    recordExpiry(store, record);
     return { kind: "expired", approval: toPublicApproval(record), expiryEventPending: true };
   }
+  const rejected: SimulatedExecution = { executed: false, handler: null, result: null, reason: "Rejected by user. No handler invoked." };
+  store.persistence?.transitioned(id, "REJECTED", rejected); // M3-E E12: throws before anything changes
   record.status = "REJECTED";
-  record.execution = { executed: false, handler: null, result: null, reason: "Rejected by user. No handler invoked." };
+  record.execution = rejected;
   return { kind: "rejected", approval: toPublicApproval(record) };
 }

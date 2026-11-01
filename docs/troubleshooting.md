@@ -107,9 +107,10 @@ these cases, with no way to tell them apart:
 - the id is unknown or malformed;
 - it is another agent's approval;
 - it is an operator scenario's approval;
-- the approval was lost when the API restarted;
-- a final record was dropped from memory to make room (at most 500 records are kept;
-  pending ones are never dropped).
+- the approval store was deleted while the API was stopped (approvals survive restarts since
+  M3-E E12);
+- a final record older than 15 minutes was dropped to make room (at most 500 records are
+  kept; pending ones are never dropped).
 
 **In the SDK:**
 - `getApproval(id)` returns `null`.
@@ -166,6 +167,16 @@ GETs are retried after a short `Retry-After`.
   blocked on recheck, or expired). Agents observe the result through the approval status
   instead.
 
+### Approval storage (M3-E E12)
+
+| Answer | Meaning | What to do |
+|---|---|---|
+| `503 {"reason":"approval-store-full"}` on evaluate (CONFIRM), approve or reject | The approval journal is full, even after compaction. Nothing was created, changed or executed. | Let finished approvals age out, or archive the store while the API is stopped |
+| `503 {"reason":"approval-store-unavailable"}` | The approval journal could not be written (disk full, I/O error). Approvals cannot be created or decided until a restart. Nothing changed. | See `approval-store status=...` in the API log; fix and restart |
+| `500 {"reason":"approval-store-write-failed"}` on approve | The approved action ran, but its outcome could not be recorded. Never a success. After a restart the approval is `OUTCOME_UNKNOWN`. | Treat as unconfirmed; check the action's effect |
+| Approval status `OUTCOME_UNKNOWN` | Recovered after a restart: interrupted while executing, or its record was damaged. It never runs and cannot be decided (`409`). | An operator checks what happened; submit a new evaluation if needed |
+| Start-up log `approval-store status=recovered ...` | Interrupted or quarantined approvals were marked `OUTCOME_UNKNOWN` ([approval-persistence.md](approval-persistence.md)) | Review those approvals |
+
 ### Replay protection and idempotency (M3-E E11)
 
 | Answer | Meaning | What to do |
@@ -177,7 +188,7 @@ GETs are retried after a short `Retry-After`.
 | `409 {"reason":"idempotency-outcome-unknown"}` | An evaluation with this key started, but its result was not recorded (the API stopped, or the evaluation failed). It was not run again. | Unconfirmed: do not act on it; tell a person |
 | `503 {"reason":"idempotency-capacity"}` | Too many live keys for this agent (1,000) or the server (10,000). Not evaluated. | Wait for keys to expire (15 minutes), or slow down |
 | `503 {"reason":"idempotency-unavailable"}` | The idempotency journal could not be written, or it is recovering from a damaged record. Not evaluated. | See the API log (`idempotency-store status=...`); restart once fixed |
-| Start-up fails with `agent-state status=invalid-config reason=...` | A replay or idempotency journal is a symlink or not a regular file, cannot be written, is locked by another running API, or is too large | Fix the cause named in the reason |
+| Start-up fails with `agent-state status=invalid-config reason=...` | A replay, idempotency or approval journal is a symlink or not a regular file, cannot be written, is locked by another running API, or is too large | Fix the cause named in the reason |
 
 ### Audit storage (M3-E E10)
 
@@ -253,8 +264,9 @@ timestamp is when it was noticed.
 
 ### Missing approvals
 
-`getApproval` returning `null`, or `ApprovalNotFoundError`, is the uniform 404 above. For
-your own approval, the usual cause is an API restart.
+`getApproval` returning `null`, or `ApprovalNotFoundError`, is the uniform 404 above. Since
+M3-E E12 a restart does not cause it; for your own approval, look for a deleted approval
+store or an old finished approval dropped to make room.
 
 ### Network errors and evaluation timeouts
 
@@ -272,9 +284,8 @@ repeat: call `getApproval` or `waitForApproval` again later.
 ### Server restart behaviour
 
 **What the restart loses:**
-- **Pending approvals.** An agent waiting on one gets `ApprovalNotFoundError`; the
-  reference agent reports `approval-missing`.
-- **The replay cache, rate-limit counters and dashboard sessions.** Activity events are kept:
+- **Rate-limit counters and dashboard sessions.** Approvals survive (M3-E E12), and so do the
+  replay journal and idempotency records (E11). Activity events are kept:
   they are in the durable audit log, and the event view is restored at start-up (M3-E E10).
 
 **The start-up fence.** A request signed before the restart is refused (`before-startup`).
@@ -286,10 +297,11 @@ only after a restart.
 **While the API is down:**
 - polls fail with `NetworkError`, after the SDK's retries;
 - the reference agent reports `wait-interrupted`, and `resume(approvalId)` can try again
-  once the API is back. The approval will then be missing.
+  once the API is back. The approval is still there, with its state.
 
-**Approval ids are reissued.** A restarted API numbers approvals from `apr-1` again, so an id
-from before the restart can name a new approval. Compare `createdAt` with the evaluate
+**Approval ids.** With the durable store (M3-E E12) ids are never reused. If the store was
+deleted, a restarted API numbers approvals from `apr-1` again, so an id from before can name a
+new approval. Compare `createdAt` with the evaluate
 response's `approvalCreatedAt`. The reference agent reports a mismatch as `approval-missing`
 and saves nothing.
 

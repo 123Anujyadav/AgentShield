@@ -3,6 +3,7 @@ import { redactSecretValue } from "@agentshield/engine";
 import { bearerAllowedFromEnv, createReloadingCredentialStore, credentialFilePath, CredentialConfigError, type CredentialStore } from "./agents/credentials.js";
 import { signatureSkewMsFromEnv, SignatureConfigError } from "./agents/signature.js";
 import { createApp } from "./app.js";
+import { approvalStorePathFromEnv, openDurableApprovalStore, type DurableApprovalStore } from "./approval-journal.js";
 import { openDurableNonceCache, replayStorePathFromEnv, type DurableNonceCache } from "./agents/durable-nonce-cache.js";
 import { createIdempotencyStore, idempotencyStorePathFromEnv, type IdempotencyStore } from "./idempotency.js";
 import { JournalConfigError } from "./storage/journal.js";
@@ -86,9 +87,12 @@ process.on("exit", () => auditLog.close());
 // Either store failing to open safely stops start-up.
 let nonceCache: DurableNonceCache;
 let idempotencyStore: IdempotencyStore;
+// M3-E E12: durable approvals (pending, decided and expired approvals survive a restart; ids are never reused).
+let approvalStore: DurableApprovalStore;
 try {
   nonceCache = openDurableNonceCache({ path: replayStorePathFromEnv(), now: Date.now, skewMs: signatureSkewMs });
   idempotencyStore = createIdempotencyStore({ path: idempotencyStorePathFromEnv() });
+  approvalStore = openDurableApprovalStore({ path: approvalStorePathFromEnv() });
 } catch (error) {
   const reason = error instanceof JournalConfigError ? error.message : "unexpected error";
   console.error(`agent-state status=invalid-config reason=${reason}`);
@@ -104,15 +108,20 @@ if (idem) {
   console.warn(`idempotency-store status=ready records=${idem.records} corrupt=${idem.corrupt}${idem.truncatedTail ? " truncatedTail=recovered" : ""}`);
   if (idem.recoveringUntil > 0) console.warn(`idempotency-store status=recovering until=${new Date(idem.recoveringUntil).toISOString()} effect=new-idempotency-keys-refused`);
 }
+const approvals = approvalStore.recovery;
+console.warn(`approval-store status=ready approvals=${approvals.records} pending=${approvals.pending} corrupt=${approvals.corrupt}${approvals.truncatedTail ? " truncatedTail=recovered" : ""}`);
+if (approvals.interrupted > 0) console.warn(`approval-store status=recovered interrupted=${approvals.interrupted} effect=marked-OUTCOME_UNKNOWN-never-run`);
+if (approvals.quarantined > 0) console.warn(`approval-store status=recovered quarantined=${approvals.quarantined} effect=damaged-records-marked-OUTCOME_UNKNOWN`);
 process.on("exit", () => {
   nonceCache.close();
   idempotencyStore.close();
+  approvalStore.close();
 });
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => process.exit(0));
 
 const port = Number(process.env.PORT ?? 4000);
 // Loopback only (API_HOST), and every /api route requires the API token or a session.
-const server = createApp({ apiToken: tokenFile.token, policyStore, credentialStore, signatureSkewMs, auditLog, nonceCache, idempotencyStore }).listen(port, API_HOST, () => {
+const server = createApp({ apiToken: tokenFile.token, policyStore, credentialStore, signatureSkewMs, auditLog, nonceCache, idempotencyStore, approvalStore }).listen(port, API_HOST, () => {
   const { address, port: boundPort } = server.address() as AddressInfo;
   console.log(`AgentShield API listening on http://${address}:${boundPort} (loopback only, API token required)`);
   console.log(`API token file${tokenFile.created ? " (created)" : ""}: ${tokenFile.path}`);
