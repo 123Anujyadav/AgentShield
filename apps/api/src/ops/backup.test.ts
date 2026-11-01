@@ -472,6 +472,15 @@ describe("M3-E E14: an interrupted restore", () => {
 });
 
 describe("M3-E E14: the ops CLI", () => {
+  it("M3-E E15: status on a fresh installation (no store yet) is ok; a store lost while others hold records needs attention", () => {
+    expect(cli(["status"]).code).toBe(0);
+    populate();
+    rmSync(paths.idempotency);
+    const lost = cli(["status"]);
+    expect(lost.code).toBe(1);
+    expect(lost.out).toMatch(/idempotency-store status=missing[\s\S]*missing while other stores hold records/);
+  });
+
   it("status is read-only, shows sizes, locks and integrity, and never a record", () => {
     populate();
     const before = readFileSync(paths.approvals);

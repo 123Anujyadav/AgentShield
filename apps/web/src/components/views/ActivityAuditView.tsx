@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { ActivityEvent, View } from "../../types.js";
 import { DecisionBadge, decisionColor } from "../common.js";
+import { requesterLabel } from "../../approval-display.js";
 import {
   ActivityIcon,
   ChevronIcon,
@@ -271,6 +272,10 @@ export default function ActivityAuditView({
                         </div>
                         <div>
                           Execution: <span className="text-slate-200 font-bold">SIMULATED</span>
+                        </div>
+                        {/* M3-E E15: which agent (and key) or operator made the request. */}
+                        <div className="sm:col-span-3">
+                          Requested by: <span className="text-slate-200">{requesterLabel(evt)}</span>
                         </div>
                       </div>
 

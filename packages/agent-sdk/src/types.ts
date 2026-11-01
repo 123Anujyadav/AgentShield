@@ -43,7 +43,8 @@ export interface EvaluateResult {
   approvalId: string | null;
   /**
    * For CONFIRM: when the server created that approval (its `createdAt`). Otherwise null.
-   * Approval ids are numbered from apr-1 again after an API restart, so an id alone can later name
+   * Approval ids survive an API restart (M3-E E12) but can repeat if the server's approval journal is lost
+   * (or the server keeps approvals in memory only), so an id alone can later name
    * a different approval: compare this with the `createdAt` of the approval you read (M3-E E9).
    */
   approvalCreatedAt: string | null;

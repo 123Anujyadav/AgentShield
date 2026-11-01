@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, writeSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import type { ActivityEvent } from "@agentshield/engine";
-import { assertNoLinkedAncestors, FileSecurityError, isRestrictedToCurrentUser, writeRestrictedFileAtomically } from "../agents/file-security.js";
+import { assertNoLinkedAncestors, FileSecurityError, isRestrictedToCurrentUser, namesAlternateDataStream, writeRestrictedFileAtomically } from "../agents/file-security.js";
 import { acquireStoreLock, JournalConfigError, lockStillHeld, releaseStoreLock, restoreMarkerPresent, RESTORE_MARKER_SUFFIX } from "../storage/journal.js";
 import type { StoreHealth } from "../storage/health.js";
 import { defaultTokenDirectory } from "../security/token.js";
@@ -348,6 +348,7 @@ export function openFileAuditLog(path: string, options: AuditLogOptions = {}): A
   const maxRecordBytes = options.maxRecordBytes ?? MAX_AUDIT_RECORD_BYTES;
   const io = options.io ?? DEFAULT_IO;
   if (typeof path !== "string" || !isAbsolute(path)) throw new AuditConfigError("AUDIT_LOG_FILE must be an absolute path.");
+  if (namesAlternateDataStream(path)) throw new AuditConfigError("The audit log path names an alternate data stream (a \":\" after the drive); use a plain file path.");
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || !Number.isSafeInteger(maxRecordBytes) || maxRecordBytes < 1 || maxRecordBytes > maxBytes) {
     throw new AuditConfigError("The audit log limits are invalid.");
   }

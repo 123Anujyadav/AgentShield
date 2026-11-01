@@ -109,7 +109,7 @@ sending.
 ```ts
 if (result.approvalId) {
   const final = await client.waitForApproval(result.approvalId, { timeoutMs: 16 * 60 * 1000 });
-  // Ids restart at apr-1 after an API restart: only the approval created at approvalCreatedAt is this one.
+  // Ids survive an API restart, but can repeat if its approval journal is lost: only the approval created at approvalCreatedAt is this one.
   const same = final.createdAt === result.approvalCreatedAt;
   console.log(same, final.status, final.executed); // e.g. true, "EXECUTED", true
 }

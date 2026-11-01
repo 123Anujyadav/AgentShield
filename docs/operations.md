@@ -75,8 +75,13 @@ For each store it prints:
 - integrity status, with counts only;
 - an interrupted-restore marker, and permissions.
 
-It exits with 1 when something needs attention: damage, an unsupported version, an interrupted
-restore, loose permissions, or a store at 80% or more of its limit. A record being appended at that
+It exits with 1 when something needs attention:
+- damage, or an unsupported version;
+- an interrupted restore;
+- loose permissions;
+- a store at 80% or more of its limit;
+- (M3-E E15) a store missing while another store holds records, which means it was lost or deleted.
+  A fresh installation, with no stores yet, is ok. A record being appended at that
 moment may show as `truncated-final-record`; that is normal.
 
 **From the API (operator only).** `GET /api/storage/health` returns:

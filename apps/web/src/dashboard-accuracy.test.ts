@@ -36,6 +36,8 @@ describe("M3-B (G10): dashboard text matches the engine", () => {
   });
 
   it("Approval queue: an approved action with no handler is shown amber, not as a block", () => {
-    expect(approvalQueue).toContain('item.status === "APPROVED_NOT_EXECUTED" ? "var(--confirm)"');
+    // M3-E E15: the colour comes from statusTone (approval-display.ts), which maps APPROVED_NOT_EXECUTED (and
+    // OUTCOME_UNKNOWN) to amber; approval-display.test.tsx checks the mapping and the rendered markup.
+    expect(approvalQueue).toContain("TONE_COLOR[statusTone(item.status)]");
   });
 });

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, rmSync, writeSync, type Stats } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
-import { assertNoLinkedAncestors, FileSecurityError, isRestrictedToCurrentUser, writeRestrictedFileAtomically } from "../agents/file-security.js";
+import { assertNoLinkedAncestors, FileSecurityError, isRestrictedToCurrentUser, namesAlternateDataStream, writeRestrictedFileAtomically } from "../agents/file-security.js";
 
 /**
  * A small durable journal (M3-E E11, integrity chain M3-E E13): a local, append-only file of
@@ -283,6 +283,7 @@ export function lockStillHeld(lockPath: string): boolean {
 /** Inspects (creating if needed) a regular, non-link file at an absolute path with no linked ancestor. */
 function prepareFile(path: string, label: string): { stat: Stats; created: boolean } {
   if (typeof path !== "string" || !isAbsolute(path)) throw new JournalConfigError(`The ${label} path must be absolute.`);
+  if (namesAlternateDataStream(path)) throw new JournalConfigError(`The ${label} path names an alternate data stream (a ":" after the drive); use a plain file path.`);
   // M3-E E14: checked before anything is created, so an interrupted restore never leaves an empty store in its place.
   if (restoreMarkerPresent(path)) {
     throw new JournalConfigError(`A restore of the ${label} was interrupted (a ${RESTORE_MARKER_SUFFIX} marker is next to it). Run the same restore again; the API does not start until it completes.`);

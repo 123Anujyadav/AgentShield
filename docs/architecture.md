@@ -335,7 +335,7 @@ reference: [`apps/reference-agent/README.md`](../apps/reference-agent/README.md)
    - On `ALLOW` with `executed: true`, save locally.
    - On `CONFIRM`, follow the approval with `waitForApproval` and save only on `EXECUTED`
      with `executed: true`, and only if the approval's `createdAt` matches the one from the
-     evaluate response (M3-E E9: ids restart after an API restart).
+     evaluate response (M3-E E9; since M3-E E12 ids survive a restart, but they can still repeat if the approval journal is lost without the audit log).
    - Everything else saves nothing.
 5. **Report the outcome:** completed, blocked, not executed, rejected, expired, blocked on
    recheck, pending, wait interrupted, approval missing, unconfirmed or refused.

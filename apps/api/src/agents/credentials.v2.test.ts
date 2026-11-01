@@ -218,13 +218,15 @@ describe("M3-E E2: the bearer switch and scheme separation", () => {
 
 describe("M3-E E2: hot reload with Ed25519 keys (temporary file)", () => {
   let dir: string | null = null;
+  // M3-E E15: every directory a test creates is removed (a test may create more than one).
+  const created: string[] = [];
   afterEach(() => {
-    if (dir) rmSync(dir, { recursive: true, force: true });
+    for (const d of created.splice(0)) rmSync(d, { recursive: true, force: true });
     dir = null;
   });
 
   function setup(initial: CredentialRecord[], bearerAllowed?: boolean) {
-    dir = mkdtempSync(join(tmpdir(), "agentshield-credential-v2-test-"));
+    created.push((dir = mkdtempSync(join(tmpdir(), "agentshield-credential-v2-test-"))));
     const path = join(dir, "agent-credentials.json");
     writeRestrictedFileAtomically(path, serializeCredentialDocument(initial), { overwrite: true });
     let now = NOW;
@@ -260,7 +262,7 @@ describe("M3-E E2: hot reload with Ed25519 keys (temporary file)", () => {
   it("a v1 store file loads as bearer and is refused for authentication by default", () => {
     const b = bearer();
     const { scheme: _scheme, ...v1 } = b.record;
-    dir = mkdtempSync(join(tmpdir(), "agentshield-credential-v2-test-"));
+    created.push((dir = mkdtempSync(join(tmpdir(), "agentshield-credential-v2-test-"))));
     const path = join(dir, "agent-credentials.json");
     writeFileSync(path, doc(1, [v1]));
     const store = createReloadingCredentialStore(path, { now: () => NOW });

@@ -58,13 +58,18 @@ export function runOpsCli(argv: readonly string[], deps: OpsCliDeps): number {
     if (command === "status") {
       if (rest.length > 0) return usage();
       let attention = false;
-      for (const s of storageStatus(paths, { env: deps.env, now: deps.now, checkPermissions: deps.checkPermissions === true })) {
+      const statuses = storageStatus(paths, { env: deps.env, now: deps.now, checkPermissions: deps.checkPermissions === true });
+      // M3-E E15: a store missing while another holds records was lost (a fresh installation has none at all).
+      const history = statuses.some((s) => s.present && s.records > 0);
+      for (const s of statuses) {
         const size = s.present ? ` bytes=${s.bytes}${s.maxBytes ? ` maxBytes=${s.maxBytes} usedPercent=${s.usedPercent}` : ""} records=${s.records}` : "";
         const lock = s.lock.state === "free" ? "free" : s.lock.state === "held" ? `held-by-pid-${s.lock.pid}` : `stale${s.lock.pid ? `-pid-${s.lock.pid}` : ""}`;
         const perms = s.permissionsRestricted === false ? " permissions=not-restricted" : "";
         deps.out(`${s.kind} status=${s.status}${size} lock=${lock}${s.restoreMarker ? " restore=interrupted" : ""}${perms}${s.details.length ? ` details=${s.details.join(",")}` : ""}`);
         deps.out(`  path=${s.path}`);
+        if (!s.present && history) deps.out("  note: missing while other stores hold records: it was lost or deleted (see docs/operations.md, Restore)");
         if (s.status === "damaged" || s.status === "unsupported-version" || s.status === "unreadable" || s.restoreMarker || s.permissionsRestricted === false || (s.usedPercent ?? 0) >= 80) attention = true;
+        if (!s.present && history) attention = true;
       }
       deps.out(attention ? "storage status: ATTENTION (see docs/operations.md)" : "storage status: ok");
       return attention ? 1 : 0;

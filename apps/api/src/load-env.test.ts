@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -21,11 +21,13 @@ describe("loadLocalEnv", () => {
     const loaded = loadLocalEnv(new URL(`file:///${codeDir.replaceAll("\\", "/")}/server.ts`).href);
     expect(loaded).toBe(true);
     expect(process.env.AGENTSHIELD_LOAD_ENV_TEST).toBe("fake-test-value");
+    rmSync(dir, { recursive: true, force: true }); // M3-E E15: no temporary directory is left behind
   });
 
   it("returns false when no .env exists", () => {
     const dir = mkdtempSync(join(tmpdir(), "agentshield-noenv-"));
     const loaded = loadLocalEnv(new URL(`file:///${dir.replaceAll("\\", "/")}/a/b/server.ts`).href);
     expect(loaded).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

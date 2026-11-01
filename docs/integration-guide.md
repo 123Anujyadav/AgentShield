@@ -162,7 +162,7 @@ async function follow(approvalId: string, createdAt: string, signal?: AbortSigna
     if (error instanceof ApprovalNotFoundError) return "lost"; // e.g. the API restarted; ask again with a new evaluation
     throw error; // see "Handle errors" below
   }
-  // Approval ids restart at apr-1 after an API restart: a different createdAt means a different approval.
+  // Ids survive a restart (M3-E E12) but can repeat if the approval journal is lost: a different createdAt means a different approval.
   if (approval.createdAt !== createdAt) return "lost";
   // Only an observed EXECUTED with executed: true means AgentShield ran the action.
   return approval.status === "EXECUTED" && approval.executed ? "done" : "not-done";

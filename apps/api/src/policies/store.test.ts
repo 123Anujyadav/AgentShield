@@ -137,12 +137,14 @@ describe("M3-C: policy versioning", () => {
 
 describe("M3-C: loading at start-up", () => {
   let dir: string | null = null;
+  // M3-E E15: every directory a test creates is removed (a test may create more than one).
+  const created: string[] = [];
   afterEach(() => {
-    if (dir) rmSync(dir, { recursive: true, force: true });
+    for (const d of created.splice(0)) rmSync(d, { recursive: true, force: true });
     dir = null;
   });
   const file = (text: string) => {
-    dir = mkdtempSync(join(tmpdir(), "agentshield-policy-test-"));
+    created.push((dir = mkdtempSync(join(tmpdir(), "agentshield-policy-test-"))));
     const path = join(dir, "policies.json");
     writeFileSync(path, text);
     return path;

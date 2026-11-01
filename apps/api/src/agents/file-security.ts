@@ -94,6 +94,17 @@ export function isRestrictedToCurrentUser(path: string): boolean {
 }
 
 /**
+ * M3-E E15: true when a Windows path names an NTFS alternate data stream (`file.journal:stream`): a ":"
+ * anywhere after the drive letter. Such a store would live hidden inside another file; it is refused.
+ */
+export function namesAlternateDataStream(path: string, platform: NodeJS.Platform = process.platform): boolean {
+  if (platform !== "win32") return false;
+  // Skip a `\\?\` or `\\.\` prefix and the drive letter: any ":" left names a stream.
+  const rest = path.replace(/^\\\\[?.]\\/, "").replace(/^[A-Za-z]:/, "");
+  return rest.includes(":");
+}
+
+/**
  * M3-E E13: refuses a path when any existing ancestor directory is a symbolic link or junction. A link
  * anywhere above a state file would let whoever controls it redirect where the file is created, read
  * and replaced. Directories that do not exist yet are skipped (they are created as real directories);

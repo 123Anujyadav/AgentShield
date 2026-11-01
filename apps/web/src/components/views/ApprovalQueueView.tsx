@@ -1,4 +1,5 @@
 import type { PendingApproval, View } from "../../types.js";
+import { requesterLabel, statusTone, TONE_COLOR } from "../../approval-display.js";
 import {
   AlertOctagonIcon,
   AlertTriangleIcon,
@@ -130,6 +131,11 @@ export default function ApprovalQueueView({
                     </span>
                   </div>
 
+                  {/* M3-E E15: who asked for this action, before the operator decides. */}
+                  <div className="mb-3 text-[11px] text-muted">
+                    Requested by: <span className="font-mono text-slate-200">{requesterLabel(approval)}</span>
+                  </div>
+
                   <div className="grid gap-3 md:grid-cols-2 mb-3 text-xs">
                     <div>
                       <span className="text-[10px] font-mono uppercase text-muted block mb-1">Proposed Action:</span>
@@ -196,15 +202,20 @@ export default function ApprovalQueueView({
                   <span
                     className="badge text-[9px] font-bold"
                     style={{
-                      // M3-B: approved but with no registered handler is not a block; shown amber.
-                      borderColor: item.status === "EXECUTED" ? "var(--allow)" : item.status === "APPROVED_NOT_EXECUTED" ? "var(--confirm)" : "var(--block)",
-                      color: item.status === "EXECUTED" ? "var(--allow)" : item.status === "APPROVED_NOT_EXECUTED" ? "var(--confirm)" : "var(--block)",
+                      // M3-B: approved but with no registered handler is not a block; shown amber. M3-E E15: so is
+                      // OUTCOME_UNKNOWN (it will never run; whether it ran before is unknown).
+                      borderColor: TONE_COLOR[statusTone(item.status)],
+                      color: TONE_COLOR[statusTone(item.status)],
                     }}
                   >
                     {item.status}
                   </span>
                   <span className="font-mono text-muted">{item.action.type} → {item.action.destination}</span>
+                  <span className="font-mono text-muted">· {requesterLabel(item)}</span>
                 </div>
+                {item.status === "OUTCOME_UNKNOWN" && item.execution?.reason && (
+                  <span className="w-full text-[11px] text-amber-300">{item.execution.reason}</span>
+                )}
                 {item.execution?.result && (
                   <span className="text-[11px] text-emerald-400 font-mono">
                     Result: {item.execution.result}

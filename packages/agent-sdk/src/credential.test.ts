@@ -14,12 +14,14 @@ const key = testKey("credential-tests");
 const INVALID = "The agent credential is not a valid AgentShield Ed25519 credential (expected asag2_<keyId>.<key>).";
 
 let dir: string | null = null;
+// M3-E E15: every directory a test creates is removed (a test may create more than one).
+const created: string[] = [];
 afterEach(() => {
-  if (dir) rmSync(dir, { recursive: true, force: true });
+  for (const d of created.splice(0)) rmSync(d, { recursive: true, force: true });
   dir = null;
 });
 const tempFile = (content: string | Buffer) => {
-  dir = mkdtempSync(join(tmpdir(), "agentshield-sdk-test-"));
+  created.push((dir = mkdtempSync(join(tmpdir(), "agentshield-sdk-test-"))));
   const path = join(dir, "agent.key");
   writeFileSync(path, content);
   return path;
