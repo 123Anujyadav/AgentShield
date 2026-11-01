@@ -13,6 +13,7 @@ import {
 import { IDEMPOTENCY_TTL_MS } from "./idempotency.js";
 import { defaultTokenDirectory } from "./security/token.js";
 import { JournalWriteError, openJournal, type Journal, type JournalIo } from "./storage/journal.js";
+import { newerJsonVersion, type StoreHealth } from "./storage/health.js";
 
 /**
  * Durable approvals (M3-E E12): the approval lifecycle survives a restart.
@@ -25,6 +26,7 @@ import { JournalWriteError, openJournal, type Journal, type JournalIo } from "./
  *   {"v":1,"t":"to","id":"apr-N","s":"<final status>","e":{...execution or null}}
  *   {"v":1,"t":"expiry-recorded","id":"apr-N"}    the EXPIRED audit event was written
  *   {"v":1,"t":"seq","next":N}                    the next approval number (ids are never reused)
+ *   {"v":1,"t":"restored","next":N,"at":"<iso>"}  M3-E E14: written by a restore from a backup
  *
  * Every change is recorded before memory changes and before a response is sent, so an id is never
  * returned for an approval that was not stored, and a decision is never reported before it is stored.
@@ -40,6 +42,10 @@ import { JournalWriteError, openJournal, type Journal, type JournalIo } from "./
  * - A final record cut short by a crash was never acted on (the write completes first), so it is ignored.
  * - After any such recovery the journal is rewritten (atomically) to the recovered state.
  * - A PENDING approval past its expiry is expired as usual on the next access.
+ * - M3-E E14: a `restored` record (a restore from a backup) makes every approval still PENDING at that
+ *   point OUTCOME_UNKNOWN (it may have been decided, or even executed, after the backup was taken) and
+ *   moves the next id past every id that may have been issued since. An older AgentShield reads the
+ *   unknown record as damage naming no approval, which quarantines every pending approval as well.
  */
 
 export const APPROVAL_STORE_FILE_NAME = "approvals.journal";
@@ -53,6 +59,7 @@ const ALL: ReadonlySet<string> = new Set(["PENDING", ...FINAL]);
 const UNKNOWN_EXECUTION = (reason: string): SimulatedExecution => ({ executed: false, handler: null, result: null, reason });
 const INTERRUPTED = "The API stopped while this approval was being carried out, so whether the simulated action ran is unknown. It will not run.";
 const DAMAGED = "This approval's stored record was damaged, so its outcome is unknown. It will not run.";
+const RESTORED = "This approval was restored from a backup; whether it was decided after the backup was taken is unknown. It will not run.";
 
 /** APPROVAL_STORE_FILE (an absolute path), else %LOCALAPPDATA%\AgentShield\approvals.journal. */
 export function approvalStorePathFromEnv(env: NodeJS.ProcessEnv = process.env): string {
@@ -75,10 +82,23 @@ export interface ApprovalRecovery {
   /** PENDING approvals made OUTCOME_UNKNOWN because a damaged record may have held their decision. */
   quarantined: number;
   truncatedTail: boolean;
+  /** M3-E E14: PENDING approvals made OUTCOME_UNKNOWN because they came from a restored backup. */
+  restored: number;
+  /** M3-E E14: a lock left by a process that no longer runs was replaced. */
+  staleLockReplaced: boolean;
+  /** M3-E E14: the journal did not exist and was created by this start. */
+  created: boolean;
 }
 
 export interface DurableApprovalStore extends ApprovalStore {
   readonly recovery: ApprovalRecovery;
+  /**
+   * M3-E E14: makes sure the next id is above `highest` (an id another store, the audit log, shows was
+   * issued), recording it durably. Returns true when the next id moved. Ids are never reused.
+   */
+  reserveIdsThrough(highest: number): boolean;
+  /** M3-E E14: capacity and health (numbers only). */
+  health(): StoreHealth;
   close(): void;
 }
 
@@ -127,9 +147,13 @@ export function openDurableApprovalStore(options: DurableApprovalStoreOptions): 
     maxBytes,
     maxRecordBytes: Math.min(MAX_APPROVAL_RECORD_BYTES, maxBytes),
     checkPermissions: options.checkPermissions === true,
+    unsupportedVersion: newerJsonVersion(1),
     ...(options.io ? { io: options.io } : {}),
   });
   const records = new Map<string, ApprovalRecord>();
+  /** M3-E E14: approvals PENDING when a `restored` record was written. */
+  const restoredPending = new Set<string>();
+  let restoredMarker = false;
   const approving = new Set<string>();
   const damagedIds = new Set<string>();
   let damagedUnknown = false;
@@ -174,6 +198,11 @@ export function openDurableApprovalStore(options: DurableApprovalStoreOptions): 
       } else if (entry.t === "seq" && Number.isSafeInteger(entry.next) && (entry.next as number) > 0) {
         highest = Math.max(highest, (entry.next as number) - 1);
         ok = true;
+      } else if (entry.t === "restored" && Number.isSafeInteger(entry.next) && (entry.next as number) > 0) {
+        for (const r of records.values()) if (r.status === "PENDING") restoredPending.add(r.id);
+        highest = Math.max(highest, (entry.next as number) - 1);
+        restoredMarker = true;
+        ok = true;
       }
     }
     if (!ok || !trusted) {
@@ -198,8 +227,13 @@ export function openDurableApprovalStore(options: DurableApprovalStoreOptions): 
       interrupted += 1;
     }
   }
+  let restored = 0;
   for (const record of records.values()) {
-    if (record.status === "PENDING" && (damagedUnknown || damagedIds.has(record.id))) {
+    if (record.status === "PENDING" && restoredPending.has(record.id)) {
+      record.status = "OUTCOME_UNKNOWN";
+      record.execution = UNKNOWN_EXECUTION(RESTORED);
+      restored += 1;
+    } else if (record.status === "PENDING" && (damagedUnknown || damagedIds.has(record.id))) {
       record.status = "OUTCOME_UNKNOWN";
       record.execution = UNKNOWN_EXECUTION(DAMAGED);
       quarantined += 1;
@@ -223,7 +257,7 @@ export function openDurableApprovalStore(options: DurableApprovalStoreOptions): 
   // Record the recovered state, and drop unreadable lines so they are not re-read at every start. A damaged
   // journal is preserved first; a cut-short final record or a pre-E13 journal is rewritten too (M3-E E13).
   const damagedCopy = corrupt > 0 ? journal.preserveCopy() : null;
-  if (interrupted > 0 || quarantined > 0 || corrupt > 0 || journal.truncatedTail || journal.integrity.legacy) journal.rewrite(snapshot());
+  if (interrupted > 0 || quarantined > 0 || restoredMarker || corrupt > 0 || journal.truncatedTail || journal.integrity.legacy) journal.rewrite(snapshot());
   let nextCompactAt = Math.max(compactAt, journal.bytes * 2);
 
   const append = (entry: object) => {
@@ -274,7 +308,25 @@ export function openDurableApprovalStore(options: DurableApprovalStoreOptions): 
       damagedCopy,
       permissionsRestricted: journal.permissionsRestricted,
       truncatedTail: journal.truncatedTail,
+      restored,
+      staleLockReplaced: journal.staleLockReplaced,
+      created: journal.created,
     },
+    reserveIdsThrough(highestIssued: number): boolean {
+      if (!Number.isSafeInteger(highestIssued) || highestIssued < store.nextId) return false;
+      append({ v: 1, t: "seq", next: highestIssued + 1 });
+      store.nextId = highestIssued + 1;
+      return true;
+    },
+    health: (): StoreHealth => ({
+      bytes: journal.bytes,
+      maxBytes: journal.maxBytes,
+      entries: store.records.size,
+      entryLimit: store.limit,
+      writable: !journal.failed,
+      lockHeld: journal.lockHeld(),
+      full: false,
+    }),
     close: () => journal.close(),
   });
 }

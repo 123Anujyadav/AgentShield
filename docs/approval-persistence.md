@@ -164,7 +164,15 @@ answer is `503 approval-store-full`.
 - **A failed or full store:** fix the cause and restart. While it is failed, approvals cannot be
   created or decided.
 - **Deleting or editing the journal while the API runs:** never do either. Deleting it while the
-  API is stopped loses every approval, and ids restart; agents bound to `createdAt` detect this.
+  API is stopped loses every approval. Since M3-E E14, ids continue after every id the audit log
+  names (`approval-store status=recovered reason=ids-continue-after-audit-log`). Without the audit
+  log, ids restart; agents bound to `createdAt` detect this.
+- **Restoring from a backup** (M3-E E14, [operations.md](operations.md)): the restore appends a
+  `{"v":1,"t":"restored","next":N}` record. At the next start, every approval that was pending in the
+  backup becomes `OUTCOME_UNKNOWN` (it may have been decided after the backup), and ids continue at
+  `apr-N`. An older AgentShield reads the record as damage naming no approval, which quarantines
+  every pending approval as well.
+- **A journal of a newer format** (a record with `"v"` above 1) stops start-up and is left untouched.
 
 ## Residual risks
 

@@ -202,8 +202,13 @@ The outcome is then exactly one of:
   different store paths would each have their own replay and idempotency state.
 - **Deleting a store while the API is stopped.**
   - For the replay journal, the recovery fence covers it.
-  - For the idempotency journal, retries within 15 minutes of the deletion may run again.
-    Do not delete it.
+  - For the idempotency journal: since M3-E E14, when the audit log has history, the new journal
+    applies the 15-minute recovery window, so no key is evaluated as new
+    (`idempotency-store status=warning reason=journal-missing-but-audit-log-has-history`). Without
+    the audit log, retries within 15 minutes of the deletion may run again. Do not delete it.
+- **Backups never restore replay or idempotency state** (M3-E E14): an old copy would forget requests
+  accepted since, and could let them run again. See [operations.md](operations.md).
+- **A journal of a newer format** stops start-up and is left untouched (M3-E E14).
 - **Storage that ignores fsync** can lose the latest records after a power failure. For replay
   protection, the start-up fence still refuses anything signed before the restart; the
   future-dated window is open only for records actually lost.

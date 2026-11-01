@@ -183,6 +183,16 @@ Ids then start again at `evt-1` in the new file. Alternatively, raise `AUDIT_LOG
 **Never edit the file while the API runs.** Edited lines fail their checksum and are skipped
 at the next start.
 
+**Backup, archival and capacity** (M3-E E14):
+- **Backup and archival:** `npm run ops -- backup` takes an offline, verified backup that includes
+  the audit log.
+- **Capacity:** `npm run ops -- status` and the operator route `GET /api/storage/health` show how full
+  the log is. A warning is logged from 80%, and the level is critical from 95% or when full.
+- **Newer formats:** a log holding records of a newer format (`"v"` above 2) stops start-up instead of
+  being appended to.
+
+See [operations.md](operations.md).
+
 ## Security review and residual risks
 
 | Concern | Handling | Residual risk |

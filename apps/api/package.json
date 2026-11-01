@@ -9,7 +9,8 @@
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "agent-credential": "tsx src/agents/cli-main.ts"
+    "agent-credential": "tsx src/agents/cli-main.ts",
+    "ops": "tsx src/ops/cli-main.ts"
   },
   "dependencies": {
     "@agentshield/agent-protocol": "*",

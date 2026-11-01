@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { openJournal, type Journal, type JournalIo } from "./storage/journal.js";
+import { newerJsonVersion, type StoreHealth } from "./storage/health.js";
 import { defaultTokenDirectory } from "./security/token.js";
 
 /**
@@ -64,6 +65,8 @@ export interface IdempotencyStore {
   /** Live records (for tests and diagnostics). */
   readonly size: number;
   readonly recovery?: IdempotencyRecovery;
+  /** M3-E E14: capacity and health of the durable journal (absent in memory-only mode). */
+  health?: () => StoreHealth;
   close(): void;
 }
 
@@ -76,7 +79,14 @@ export interface IdempotencyRecovery {
   damagedCopy: string | null;
   permissionsRestricted: boolean;
   truncatedTail: boolean;
-  /** While recovering (a corrupted record was found), keys without a record are refused until then. */
+  /** M3-E E14: a lock left by a process that no longer runs was replaced. */
+  staleLockReplaced: boolean;
+  /**
+   * M3-E E14: the journal was missing although other stores hold history (it was deleted or lost), so
+   * the records it held are unknown: the recovery window below applies.
+   */
+  missingWithHistory: boolean;
+  /** While recovering (a corrupted record was found, or the journal was lost), keys without a record are refused until then. */
   recoveringUntil: number;
 }
 
@@ -118,6 +128,12 @@ export interface IdempotencyStoreOptions {
   now?: () => number;
   io?: JournalIo;
   checkPermissions?: boolean;
+  /**
+   * M3-E E14: other stores already hold history (the server passes "the audit log has records"). A journal
+   * that has to be created then was lost, not new: keys it may have held are refused for one retention
+   * period instead of being evaluated a second time.
+   */
+  historyExpected?: boolean;
 }
 
 // A space never occurs in an agent id or a key, so this cannot collide.
@@ -169,6 +185,7 @@ export function createIdempotencyStore(options: IdempotencyStoreOptions = {}): I
       maxBytes: options.maxBytes ?? IDEMPOTENCY_STORE_MAX_BYTES,
       maxRecordBytes: Math.max(maxRecordBytes, 512),
       checkPermissions: options.checkPermissions === true,
+      unsupportedVersion: newerJsonVersion(1),
       ...(options.io ? { io: options.io } : {}),
     });
     const startedAt = now();
@@ -224,7 +241,8 @@ export function createIdempotencyStore(options: IdempotencyStoreOptions = {}): I
     }
     // A corrupted record may have been a key's "started" record: until such records could have expired,
     // keys without a record are refused rather than evaluated a second time.
-    const recoveringUntil = Math.max(markedUntil >= startedAt ? markedUntil : 0, corrupt > 0 ? startedAt + ttlMs : 0);
+    const missingWithHistory = journal.created && options.historyExpected === true;
+    const recoveringUntil = Math.max(markedUntil >= startedAt ? markedUntil : 0, corrupt > 0 || missingWithHistory ? startedAt + ttlMs : 0);
     const damagedCopy = corrupt > 0 ? journal.preserveCopy() : null;
     recovery = {
       records: entries.size,
@@ -234,11 +252,13 @@ export function createIdempotencyStore(options: IdempotencyStoreOptions = {}): I
       damagedCopy,
       permissionsRestricted: journal.permissionsRestricted,
       truncatedTail: journal.truncatedTail,
+      staleLockReplaced: journal.staleLockReplaced,
+      missingWithHistory,
       recoveringUntil,
     };
     // Record the window durably and drop unreadable lines, so a restart neither forgets nor restarts the
     // window; a cut-short final record or a pre-E13 journal is rewritten too (M3-E E13).
-    if (corrupt > 0 || journal.truncatedTail || journal.integrity.legacy) journal.rewrite(liveRecords(startedAt));
+    if (corrupt > 0 || missingWithHistory || journal.truncatedTail || journal.integrity.legacy) journal.rewrite(liveRecords(startedAt));
     nextCompactAt = Math.max(compactAt, journal.bytes * 2);
   }
 
@@ -269,6 +289,19 @@ export function createIdempotencyStore(options: IdempotencyStoreOptions = {}): I
       return entries.size;
     },
     recovery,
+    ...(journal
+      ? {
+          health: (): StoreHealth => ({
+            bytes: journal!.bytes,
+            maxBytes: journal!.maxBytes,
+            entries: entries.size,
+            entryLimit: globalLimit,
+            writable: !journal!.failed,
+            lockHeld: journal!.lockHeld(),
+            full: false,
+          }),
+        }
+      : {}),
     begin(agentId, key, digest, at) {
       const k = id(agentId, key);
       let entry = entries.get(k);

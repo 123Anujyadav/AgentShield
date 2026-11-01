@@ -39,6 +39,8 @@ import { registerScanRoutes } from "./scans/routes.js";
 import { ScanService } from "./scans/service.js";
 import { AuditWriteError, type AuditLog } from "./audit/file-audit-log.js";
 import { createIdempotencyStore, evaluationDigest, IDEMPOTENCY_KEY, type IdempotencyBegin, type IdempotencyStore } from "./idempotency.js";
+import { storageHealthReport } from "./ops/storage-health.js";
+import { storeSources } from "./ops/store-sources.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -357,6 +359,15 @@ export function createApp(deps: AppDeps = {}) {
 
   app.get("/api/events", (_req, res) => {
     res.json({ events: [...events].reverse() });
+  });
+
+  // M3-E E14: storage capacity and health, operator-only like every non-agent route (agents get 403).
+  // Numbers, flags and fixed warning codes only: no path, file name or record. Read only: it never
+  // deletes, compacts or rotates anything.
+  const storage = storeSources({ auditLog: audit, nonceCache: deps.nonceCache, idempotencyStore, approvalStore });
+  app.get("/api/storage/health", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(storageHealthReport(storage, Date.now()));
   });
 
   // M3-E E9: an agent's evaluations are counted per agent, so one agent cannot use up the evaluate

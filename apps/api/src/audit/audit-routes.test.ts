@@ -213,7 +213,7 @@ describe("M3-E E10: the server opens the durable audit log at start-up", () => {
   it("M3-E E11: opens the durable replay and idempotency stores before listening, fails closed, and passes them to the app", () => {
     const server = readFileSync(fileURLToPath(new URL("../server.ts", import.meta.url)), "utf8");
     expect(server).toContain("nonceCache = openDurableNonceCache({ path: replayStorePathFromEnv(), now: Date.now, skewMs: signatureSkewMs, checkPermissions: true });");
-    expect(server).toContain("idempotencyStore = createIdempotencyStore({ path: idempotencyStorePathFromEnv(), checkPermissions: true });");
+    expect(server).toContain("idempotencyStore = createIdempotencyStore({ path: idempotencyStorePathFromEnv(), checkPermissions: true, historyExpected: auditHistory });");
     expect(server).toMatch(/catch \(error\) \{[\s\S]*?agent-state status=invalid-config[\s\S]*?process\.exit\(1\);/);
     expect(server.indexOf("openDurableNonceCache(")).toBeLessThan(server.indexOf(".listen("));
   });
@@ -223,5 +223,15 @@ describe("M3-E E10: the server opens the durable audit log at start-up", () => {
     expect(server).toContain("approvalStore = openDurableApprovalStore({ path: approvalStorePathFromEnv(), checkPermissions: true });");
     expect(server.indexOf("openDurableApprovalStore(")).toBeLessThan(server.indexOf(".listen("));
     expect(server.indexOf("openDurableApprovalStore(")).toBeLessThan(server.indexOf("agent-state status=invalid-config"));
+  });
+
+  it("M3-E E14: continues approval ids after the audit log, treats a lost idempotency journal as lost, and checks storage before listening", () => {
+    const server = readFileSync(fileURLToPath(new URL("../server.ts", import.meta.url)), "utf8");
+    expect(server).toContain("const auditHistory = auditLog.nextSequence > 1;");
+    expect(server).toContain("reservedApprovalIds = approvalStore.reserveIdsThrough(recovery.highestApprovalId);");
+    // Inside the fail-closed block: a failure to reserve stops start-up.
+    expect(server.indexOf("reserveIdsThrough(")).toBeLessThan(server.indexOf("agent-state status=invalid-config"));
+    expect(server.indexOf("storageMonitor.check();")).toBeLessThan(server.indexOf(".listen("));
+    expect(server).toContain("setInterval(() => storageMonitor.check(), 60_000).unref();");
   });
 });

@@ -54,6 +54,22 @@ export function restrictToCurrentUser(path: string): void {
 }
 
 /**
+ * M3-E E14: restricts a directory to the current user with an inheritable entry, so files created in it
+ * inherit only that entry (and writeRestrictedFileAtomically then leaves exactly one). A directory restricted
+ * with restrictToCurrentUser instead has no inheritable entry, and Windows gives new files its default ACL
+ * (Administrators and SYSTEM as explicit entries, which /inheritance:r does not remove).
+ */
+export function restrictDirectoryToCurrentUser(path: string): void {
+  if (process.platform !== "win32") {
+    chmodSync(path, 0o700);
+    return;
+  }
+  const { sid } = currentWindowsUser();
+  const result = spawnSync(systemTool("icacls"), [path, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)(F)`], { encoding: "utf8", windowsHide: true, timeout: ICACLS_TIMEOUT_MS });
+  if (result.error || result.status !== 0) throw new FileSecurityError("Could not restrict the directory to the current Windows user.");
+}
+
+/**
  * The access entries on a file, as icacls lists them ("DOMAIN\user:(F)"), for
  * verification. Windows only.
  */
@@ -114,8 +130,9 @@ function pause(ms: number): void {
  * next to the target, restricted to the current user, then written and flushed,
  * and only then moved into place, so the content never exists in a file other
  * users could read. With `overwrite: false` an existing file is never replaced.
+ * Bytes (M3-E E14: backups and restores copy files exactly) are written unchanged.
  */
-export function writeRestrictedFileAtomically(path: string, content: string, options: { overwrite: boolean }): void {
+export function writeRestrictedFileAtomically(path: string, content: string | Uint8Array, options: { overwrite: boolean }): void {
   const directory = dirname(path);
   assertNoLinkedAncestors(path);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -127,7 +144,8 @@ export function writeRestrictedFileAtomically(path: string, content: string, opt
     restrictToCurrentUser(temporary);
     const fd = openSync(temporary, "r+");
     try {
-      writeSync(fd, content);
+      if (typeof content === "string") writeSync(fd, content);
+      else for (let written = 0; written < content.length; ) written += writeSync(fd, content, written, content.length - written);
       fsyncSync(fd);
     } finally {
       closeSync(fd);

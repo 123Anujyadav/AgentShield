@@ -120,7 +120,13 @@ record after a chained one is an integrity failure.
   credential store.
 - **Deleting a journal while the API is stopped:**
   - the replay journal: covered by the recovery fence;
-  - the approval journal: approvals are lost and ids restart (agents bound to `createdAt` notice);
-  - the idempotency journal: retries within 15 minutes may run again.
+  - the approval journal: approvals are lost. Since M3-E E14, ids continue after every id the audit
+    log names. Without the audit log, ids restart, and agents bound to `createdAt` notice;
+  - the idempotency journal: since M3-E E14, new keys are refused for 15 minutes when the audit log
+    has history. Without the audit log, retries within 15 minutes may run again.
+- **Backup and restore** (M3-E E14) are offline. A restore never replaces a healthy store and never
+  restores replay or idempotency records; see [operations.md](operations.md).
+- **Versions** (M3-E E14): a record of a newer format stops start-up instead of being treated as
+  damage and rewritten away. An interrupted restore's `.restoring` marker also stops start-up.
 - **Bypassing the pre-commit hook** (`git commit --no-verify`) is possible. `npm run
   security:verify` before pushing remains the gate (see `security-baseline.md`).

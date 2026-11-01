@@ -185,6 +185,35 @@ reference agent have no third-party runtime dependencies.
 | D6 | ~~The secret scan is not enforced (L10)~~ | Local pre-commit hook done in M3-E E13; CI remains a recommendation |
 | D7 | Shared (multi-process) state; TLS; operator roles (threats 4, 13, 14). Persistent local state is done (E10–E12). | Required before any deployment beyond a single local machine |
 
+## M3-E E14: operational readiness and recovery
+
+**Findings before implementation** (each reproduced in a test that fails without the fix):
+
+| # | Finding | Status |
+|---|---|---|
+| E14-1 | A store written by a newer AgentShield was read as damage: start-up quarantined its approvals and **rewrote the journal, discarding the newer records** | **Fixed:** a record of a newer format version stops start-up; the file is left untouched |
+| E14-2 | A lost approval journal restarted ids at `apr-1` although the audit log showed they had been issued | **Fixed:** ids continue after the highest id the audit log names |
+| E14-3 | A lost idempotency journal let retries within 15 minutes be evaluated, and executed, again | **Fixed** when the audit log has history: the 15-minute recovery window applies |
+| E14-4 | A stale journal lock (a crashed process) was replaced silently; the audit log's lock still followed a link when reading its process id | **Fixed:** one shared lock implementation, reported at start-up |
+| E14-5 | No backup, restore, capacity or health tooling: operators could only copy live files, which mixes moments and can restore stale replay or idempotency state | **Added:** offline backup (all locks held), verification, a restore that only fills in missing or damaged stores, status, an operator storage-health route, start-up and change logging |
+| E14-6 | A file restricted inside a directory restricted with `restrictToCurrentUser` keeps Windows' default Administrators and SYSTEM entries (they are explicit, so `/inheritance:r` does not remove them) | **Handled** for backups: their directory gets an inheritable entry, so files keep exactly one. The helper itself is unchanged; no other code restricts a directory. |
+
+**Design: what a restore never does.**
+- It never replaces a present, healthy store.
+- It never restores replay or idempotency records.
+- It never makes a restored pending approval executable: those become `OUTCOME_UNKNOWN`.
+- It restores the credential store only when it is missing and the operator asks, since an old copy
+  undoes later revocations.
+
+See [operations.md](operations.md).
+
+**Residual:**
+- Backups are offline and manual.
+- Everything after the last backup is lost with the disk.
+- Backups have the same same-account trust as the stores.
+- No recovery drill has been run on a real installation; only automated tests on temporary
+  directories.
+
 ## M3-E E13: storage integrity and repository hardening
 
 **Findings before implementation** (all reproduced in code and covered by tests):

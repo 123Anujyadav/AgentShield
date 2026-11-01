@@ -16,6 +16,7 @@
     "security:self-test": "node scripts/secret-scan.mjs --self-test",
     "security:staged": "node scripts/secret-scan.mjs --staged",
     "security:hooks": "git config core.hooksPath .githooks && node -e \"console.log('AgentShield pre-commit secret scan installed (core.hooksPath=.githooks)')\"",
-    "security:verify": "node scripts/secret-scan.mjs --history && git diff --check"
+    "security:verify": "node scripts/secret-scan.mjs --history && git diff --check",
+    "ops": "npm run ops -w @agentshield/api --"
   }
 }

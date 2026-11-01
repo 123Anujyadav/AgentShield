@@ -51,6 +51,9 @@ npm test
 npm run security:hooks   # once per clone: a pre-commit hook refuses staged secrets and .env files
 ```
 
+Later, to check or back up the API's stored state, use `npm run ops -- status` (safe at any time) and
+`npm run ops -- backup` (only while the API is stopped). See [operations.md](operations.md).
+
 **Build order.** `npm run build` builds the packages in this order:
 1. `@agentshield/agent-protocol`
 2. `@agentshield/agent-sdk`

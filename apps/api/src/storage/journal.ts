@@ -31,6 +31,9 @@ import { assertNoLinkedAncestors, FileSecurityError, isRestrictedToCurrentUser, 
  *   its LF (a crash during a write) is reported and excluded. A journal written before M3-E E13 (no chain
  *   at all) is reported as legacy; its owner verifies it its own way and rewrites it in the chained form.
  * - The file never grows beyond `maxBytes`.
+ * - M3-E E14: a record of a newer format version (a downgrade, or a backup from a newer AgentShield)
+ *   stops the open instead of being treated as damage and rewritten away; a `.restoring` marker left by
+ *   an interrupted restore stops it too (see ops/backup.ts).
  */
 
 export class JournalConfigError extends Error {
@@ -70,6 +73,16 @@ export interface JournalIntegrity {
   firstUnverifiedLine: number | null;
 }
 
+/** M3-E E14: what a journal's content holds, read without opening (or locking) the journal. */
+export interface JournalInspection {
+  records: string[];
+  verified: boolean[];
+  integrity: JournalIntegrity;
+  truncatedTail: boolean;
+  /** The highest record version newer than this AgentShield understands, or null. */
+  unsupportedVersion: number | null;
+}
+
 export interface Journal {
   /** Complete records found at open, oldest first (without the chain value or LF). */
   readonly records: readonly string[];
@@ -83,7 +96,13 @@ export interface Journal {
   /** Whether the file is readable by the current user only (only checked when asked; true otherwise). */
   readonly permissionsRestricted: boolean;
   readonly bytes: number;
+  /** M3-E E14: the size limit, for capacity reporting. */
+  readonly maxBytes: number;
+  /** M3-E E14: a lock left by a process that no longer runs was replaced at open. */
+  readonly staleLockReplaced: boolean;
   readonly failed: boolean;
+  /** M3-E E14: whether the lock file is still this process's (false after it was removed or replaced). */
+  lockHeld(): boolean;
   append(record: string): void;
   rewrite(records: readonly string[]): void;
   /** Keeps a restricted copy of the file as found (before a recovery rewrite), for investigation. Returns its path. */
@@ -99,6 +118,21 @@ export interface JournalOptions {
   io?: JournalIo;
   /** Check that the file is readable by the current user only (Windows ACL / mode). Slow on Windows; the server sets it. */
   checkPermissions?: boolean;
+  /** M3-E E14: a record's version when it is newer than the owner understands, else null. Such a record stops the open. */
+  unsupportedVersion?: (record: string) => number | null;
+}
+
+/** M3-E E14: a restore writes this marker next to each store before replacing it, and removes it when done. */
+export const RESTORE_MARKER_SUFFIX = ".restoring";
+
+/** True when a restore of the store at `path` is in progress or was interrupted (an unreadable marker counts). */
+export function restoreMarkerPresent(path: string): boolean {
+  try {
+    lstatSync(`${path}${RESTORE_MARKER_SUFFIX}`);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
 }
 
 const CHAINED = /^(.*)\t([0-9a-f]{64})$/s;
@@ -115,7 +149,37 @@ function isAlive(pid: number): boolean {
   }
 }
 
-function acquireLock(lockPath: string, label: string): void {
+/** The process id in a lock file, or NaN (a link is never followed to read someone else's file as a pid). */
+function lockPid(lockPath: string): number {
+  try {
+    if (lstatSync(lockPath).isSymbolicLink()) return Number.NaN;
+    const text = readFileSync(lockPath, "utf8").trim();
+    return /^\d{1,10}$/.test(text) ? Number(text) : Number.NaN;
+  } catch {
+    return Number.NaN;
+  }
+}
+
+/** M3-E E14: a store lock as seen from outside (diagnostics, backup and restore). Read only. */
+export type LockState = { state: "free" } | { state: "held"; pid: number } | { state: "stale"; pid: number | null };
+
+export function inspectLock(lockPath: string): LockState {
+  try {
+    lstatSync(lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { state: "free" };
+  }
+  const pid = lockPid(lockPath);
+  if (Number.isSafeInteger(pid) && pid > 0 && isAlive(pid)) return { state: "held", pid };
+  return { state: "stale", pid: Number.isSafeInteger(pid) && pid > 0 ? pid : null };
+}
+
+/**
+ * Takes a store's single-writer lock for this process: a new lock file holding the process id. A lock
+ * held by a running process (or by this one) is refused; one left by a process that no longer runs is
+ * replaced and reported. Shared by the journals, the audit log, and (M3-E E14) backup and restore.
+ */
+export function acquireStoreLock(lockPath: string, label: string): { staleReplaced: boolean } {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const fd = openSync(lockPath, "wx", 0o600);
@@ -124,20 +188,11 @@ function acquireLock(lockPath: string, label: string): void {
       } finally {
         closeSync(fd);
       }
-      return;
+      return { staleReplaced: attempt > 0 };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw new JournalConfigError(`The ${label} lock file cannot be created.`);
     }
-    let pid = Number.NaN;
-    try {
-      // A link is never followed to read someone else's file as a pid.
-      if (!lstatSync(lockPath).isSymbolicLink()) {
-        const text = readFileSync(lockPath, "utf8").trim();
-        if (/^\d{1,10}$/.test(text)) pid = Number(text);
-      }
-    } catch {
-      // unreadable: replaced below if it can be removed
-    }
+    const pid = lockPid(lockPath);
     if (pid === process.pid || (Number.isSafeInteger(pid) && pid > 0 && isAlive(pid))) {
       throw new JournalConfigError(`The ${label} is in use by another AgentShield API process (pid ${pid}). Only one process may write it.`);
     }
@@ -148,6 +203,71 @@ function acquireLock(lockPath: string, label: string): void {
     }
   }
   throw new JournalConfigError(`The ${label} lock could not be taken.`);
+}
+
+/** M3-E E14: removes a lock this process holds (never another process's). */
+export function releaseStoreLock(lockPath: string): void {
+  if (lockStillHeld(lockPath)) rmSync(lockPath, { force: true });
+}
+
+/**
+ * M3-E E14: verifies a journal's content without opening it: the integrity chain, a final record cut short,
+ * and record versions. Pure; used by openJournal and by the backup, restore and status tools.
+ */
+export function inspectJournalContent(content: Buffer, label: string, unsupportedVersion?: (record: string) => number | null): JournalInspection {
+  const truncatedTail = content.length > 0 && content[content.length - 1] !== 0x0a;
+  // The last part is either the partial record (truncatedTail) or the empty string after the final LF.
+  const lines = content.toString("utf8").split("\n").slice(0, -1).filter((line) => line.length > 0);
+  // Verify the chain. Each record's chain value is checked against the previous record's stored value,
+  // so a damaged record is localised: it, and the record after a deletion or insertion, are unverified.
+  const anyChained = lines.some((line) => CHAINED.test(line));
+  const legacy = lines.length > 0 && !anyChained;
+  const records: string[] = [];
+  const verified: boolean[] = [];
+  let previous = journalGenesis(label);
+  for (const line of lines) {
+    const match = CHAINED.exec(line);
+    if (legacy) {
+      records.push(line);
+      verified.push(true);
+      continue;
+    }
+    if (!match) {
+      records.push(line);
+      verified.push(false);
+      continue;
+    }
+    const [, record, stored] = match;
+    records.push(record!);
+    verified.push(chainValue(previous, record!) === stored);
+    previous = stored!;
+  }
+  // Any record of a newer version counts, verified or not: refusing to open is safe, rewriting it away is not.
+  let newest: number | null = null;
+  if (unsupportedVersion) {
+    for (const record of records) {
+      const version = unsupportedVersion(record);
+      if (version !== null && (newest === null || version > newest)) newest = version;
+    }
+  }
+  const firstBad = verified.indexOf(false);
+  return {
+    records,
+    verified,
+    integrity: { legacy, unverified: verified.filter((v) => !v).length, firstUnverifiedLine: firstBad === -1 ? null : firstBad + 1 },
+    truncatedTail,
+    unsupportedVersion: newest,
+  };
+}
+
+/** M3-E E14: the chain value the next appended record chains from (the last stored one, or the genesis value). */
+export function journalHead(content: Buffer, label: string): string {
+  let previous = journalGenesis(label);
+  for (const line of content.toString("utf8").split("\n").slice(0, -1)) {
+    const match = CHAINED.exec(line);
+    if (match) previous = match[2]!;
+  }
+  return previous;
 }
 
 /** M3-E E13: true while the lock file is still ours (a regular file holding this process id). */
@@ -163,6 +283,10 @@ export function lockStillHeld(lockPath: string): boolean {
 /** Inspects (creating if needed) a regular, non-link file at an absolute path with no linked ancestor. */
 function prepareFile(path: string, label: string): { stat: Stats; created: boolean } {
   if (typeof path !== "string" || !isAbsolute(path)) throw new JournalConfigError(`The ${label} path must be absolute.`);
+  // M3-E E14: checked before anything is created, so an interrupted restore never leaves an empty store in its place.
+  if (restoreMarkerPresent(path)) {
+    throw new JournalConfigError(`A restore of the ${label} was interrupted (a ${RESTORE_MARKER_SUFFIX} marker is next to it). Run the same restore again; the API does not start until it completes.`);
+  }
   try {
     assertNoLinkedAncestors(path);
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -214,10 +338,8 @@ export function openJournal(path: string, options: JournalOptions): Journal {
   }
   const { stat, created } = prepareFile(path, label);
   const lockPath = `${path}.lock`;
-  acquireLock(lockPath, label);
-  const releaseLock = () => {
-    if (lockStillHeld(lockPath)) rmSync(lockPath, { force: true });
-  };
+  const { staleReplaced } = acquireStoreLock(lockPath, label);
+  const releaseLock = () => releaseStoreLock(lockPath);
   const genesis = journalGenesis(label);
 
   let fd: number;
@@ -239,36 +361,13 @@ export function openJournal(path: string, options: JournalOptions): Journal {
       read += n;
     }
     if (read !== size) throw new JournalConfigError(`The ${label} could not be read completely.`);
-    const truncatedTail = size > 0 && content[size - 1] !== 0x0a;
-    // The last part is either the partial record (truncatedTail) or the empty string after the final LF.
-    const lines = content.toString("utf8").split("\n").slice(0, -1).filter((line) => line.length > 0);
-
-    // Verify the chain. Each record's chain value is checked against the previous record's stored value,
-    // so a damaged record is localised: it, and the record after a deletion or insertion, are unverified.
-    const anyChained = lines.some((line) => CHAINED.test(line));
-    const legacy = lines.length > 0 && !anyChained;
-    const records: string[] = [];
-    const verified: boolean[] = [];
-    let previous = genesis;
-    for (const line of lines) {
-      const match = CHAINED.exec(line);
-      if (legacy) {
-        records.push(line);
-        verified.push(true);
-        continue;
-      }
-      if (!match) {
-        records.push(line);
-        verified.push(false);
-        continue;
-      }
-      const [, record, stored] = match;
-      records.push(record!);
-      verified.push(chainValue(previous, record!) === stored);
-      previous = stored!;
+    const { records, verified, integrity, truncatedTail, unsupportedVersion } = inspectJournalContent(content, label, options.unsupportedVersion);
+    // M3-E E14: never treat a newer format as damage (recovery would rewrite it away): stop instead.
+    if (unsupportedVersion !== null) {
+      throw new JournalConfigError(
+        `The ${label} holds records of format version ${unsupportedVersion}, written by a newer AgentShield. It was not opened, so nothing in it is lost. Use the AgentShield version that wrote it.`,
+      );
     }
-    const firstBad = verified.indexOf(false);
-    const integrity: JournalIntegrity = { legacy, unverified: verified.filter((v) => !v).length, firstUnverifiedLine: firstBad === -1 ? null : firstBad + 1 };
 
     let bytes = size;
     if (truncatedTail) {
@@ -296,7 +395,7 @@ export function openJournal(path: string, options: JournalOptions): Journal {
     let failed = false;
     let closed = false;
     let currentFd = fd;
-    let lastChain = previous;
+    let lastChain = journalHead(content, label);
 
     const guardLock = () => {
       if (!lockStillHeld(lockPath)) {
@@ -315,9 +414,12 @@ export function openJournal(path: string, options: JournalOptions): Journal {
       get bytes() {
         return bytes;
       },
+      maxBytes,
+      staleLockReplaced: staleReplaced,
       get failed() {
         return failed || closed;
       },
+      lockHeld: () => !closed && lockStillHeld(lockPath),
       append(record: string): void {
         if (failed || closed) throw new JournalWriteError("unavailable");
         if (record.includes("\n") || record.includes("\t")) throw new JournalWriteError("invalid-record");

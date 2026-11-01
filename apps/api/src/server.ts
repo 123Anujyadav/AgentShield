@@ -12,6 +12,8 @@ import { API_HOST } from "./host.js";
 import { loadLocalEnv } from "./load-env.js";
 import { loadPolicyStore, PolicyConfigError, type PolicyStore } from "./policies/store.js";
 import { loadOrCreateApiToken } from "./security/token.js";
+import { createStorageMonitor, storageHealthReport } from "./ops/storage-health.js";
+import { storeSources } from "./ops/store-sources.js";
 
 // Loads repo-root .env (git-ignored) if present. Never logs values.
 loadLocalEnv();
@@ -93,22 +95,29 @@ let nonceCache: DurableNonceCache;
 let idempotencyStore: IdempotencyStore;
 // M3-E E12: durable approvals (pending, decided and expired approvals survive a restart; ids are never reused).
 let approvalStore: DurableApprovalStore;
+// M3-E E14: the audit log already holds history, so a journal that has to be created now was lost, not new.
+const auditHistory = auditLog.nextSequence > 1;
+let reservedApprovalIds = false;
 try {
   nonceCache = openDurableNonceCache({ path: replayStorePathFromEnv(), now: Date.now, skewMs: signatureSkewMs, checkPermissions: true });
-  idempotencyStore = createIdempotencyStore({ path: idempotencyStorePathFromEnv(), checkPermissions: true });
+  idempotencyStore = createIdempotencyStore({ path: idempotencyStorePathFromEnv(), checkPermissions: true, historyExpected: auditHistory });
   approvalStore = openDurableApprovalStore({ path: approvalStorePathFromEnv(), checkPermissions: true });
+  // M3-E E14: never reissue an approval id the audit log shows was issued (a lost or restored approval journal).
+  reservedApprovalIds = approvalStore.reserveIdsThrough(recovery.highestApprovalId);
 } catch (error) {
   const reason = error instanceof JournalConfigError ? error.message : "unexpected error";
   console.error(`agent-state status=invalid-config reason=${reason}`);
   process.exit(1);
 }
 /** M3-E E13: integrity and permission findings for a journal, logged loudly (never silently accepted). */
-function reportJournal(name: string, r: { unverified: number; corrupt: number; legacyMigrated: boolean; damagedCopy: string | null }, permissionsRestricted: boolean): void {
+function reportJournal(name: string, r: { unverified: number; corrupt: number; legacyMigrated: boolean; damagedCopy: string | null; staleLockReplaced: boolean }, permissionsRestricted: boolean): void {
   if (r.unverified > 0 || r.corrupt > 0) {
     console.error(`${name} status=integrity-failure unverified=${r.unverified} damaged=${r.corrupt} effect=recovered-fail-safe copy=${r.damagedCopy ?? "none"} action=investigate`);
   }
   if (r.legacyMigrated) console.warn(`${name} status=migrated reason=pre-E13-journal-rewritten-with-integrity-chain`);
   if (!permissionsRestricted) console.warn(`${name} status=warning reason=permissions-not-restricted note=other-accounts-may-read-it`);
+  // M3-E E14: the previous process stopped without releasing its lock (a crash or a forced stop).
+  if (r.staleLockReplaced) console.warn(`${name} status=warning reason=stale-lock-replaced note=previous-process-did-not-stop-cleanly`);
 }
 const replay = nonceCache.recovery;
 reportJournal("replay-store", replay, nonceCache.permissionsRestricted);
@@ -120,6 +129,7 @@ const idem = idempotencyStore.recovery;
 if (idem) reportJournal("idempotency-store", idem, idem.permissionsRestricted);
 if (idem) {
   console.warn(`idempotency-store status=ready records=${idem.records} corrupt=${idem.corrupt}${idem.truncatedTail ? " truncatedTail=recovered" : ""}`);
+  if (idem.missingWithHistory) console.warn("idempotency-store status=warning reason=journal-missing-but-audit-log-has-history effect=recovery-window-applies");
   if (idem.recoveringUntil > 0) console.warn(`idempotency-store status=recovering until=${new Date(idem.recoveringUntil).toISOString()} effect=new-idempotency-keys-refused`);
 }
 const approvals = approvalStore.recovery;
@@ -127,12 +137,25 @@ reportJournal("approval-store", approvals, approvals.permissionsRestricted);
 console.warn(`approval-store status=ready approvals=${approvals.records} pending=${approvals.pending} corrupt=${approvals.corrupt}${approvals.truncatedTail ? " truncatedTail=recovered" : ""}`);
 if (approvals.interrupted > 0) console.warn(`approval-store status=recovered interrupted=${approvals.interrupted} effect=marked-OUTCOME_UNKNOWN-never-run`);
 if (approvals.quarantined > 0) console.warn(`approval-store status=recovered quarantined=${approvals.quarantined} effect=damaged-records-marked-OUTCOME_UNKNOWN`);
+if (approvals.restored > 0) console.warn(`approval-store status=recovered restored=${approvals.restored} effect=pending-approvals-from-backup-marked-OUTCOME_UNKNOWN`);
+if (approvals.created && auditHistory) console.warn("approval-store status=warning reason=journal-created-while-audit-log-has-history effect=earlier-approvals-unavailable");
+if (reservedApprovalIds) console.warn(`approval-store status=recovered reason=ids-continue-after-audit-log next=apr-${approvalStore.nextId}`);
 process.on("exit", () => {
   nonceCache.close();
   idempotencyStore.close();
   approvalStore.close();
 });
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => process.exit(0));
+
+// M3-E E14: storage capacity and health. Logged at start-up for any store that is not ok, then whenever a
+// store's level or warnings change (checked every minute). Numbers only; nothing is ever deleted or rotated.
+const storage = storeSources({ auditLog, nonceCache, idempotencyStore, approvalStore });
+const storageMonitor = createStorageMonitor(
+  () => storageHealthReport(storage, Date.now()),
+  (line, level) => (level === "ok" ? console.warn(`${line} status=ok`) : console.error(`${line} status=attention`)),
+);
+storageMonitor.check();
+setInterval(() => storageMonitor.check(), 60_000).unref();
 
 const port = Number(process.env.PORT ?? 4000);
 // Loopback only (API_HOST), and every /api route requires the API token or a session.

@@ -20,7 +20,8 @@ protection or complete prompt-injection prevention.
 - **Persistent state is local and single-process.** Since M3-E E12 approvals (pending, decided and
   expired) survive API restarts in a local journal ([`docs/approval-persistence.md`](docs/approval-persistence.md)).
   Since M3-E E10, activity events are also written to a local append-only audit file
-  and survive restarts; see [`docs/audit-log.md`](docs/audit-log.md).
+  and survive restarts; see [`docs/audit-log.md`](docs/audit-log.md). Backup, restore and storage
+  health (M3-E E14): [`docs/operations.md`](docs/operations.md).
 - **Not a live model.** The advisory model is a mock by default. Two separately authorized,
   one-request live Muse Spark smoke tests were run on 2026-10-29: the first returned an unusable
   (cut-off) answer, the second a valid advisory answer. Live mode is off again; see
@@ -144,14 +145,15 @@ npm test
 npm run build
 npm run security:verify                                   # secret scan of tracked files and history, then git diff --check
 npm run security:hooks                                    # once per clone: pre-commit scan of staged changes (M3-E E13)
+npm run ops -- status                                     # M3-E E14: read-only storage status (see docs/operations.md)
 node --test benchmarks/scanner/run-scanner-benchmark.test.mjs   # needs the engine built first
 node --test benchmarks/detection/run-benchmark.test.mjs
 npm audit                                                 # needs network access
 ```
 
-Current verified state (2026-11-01, M3-E E13): `npm test` passes 2,282 tests in 72 files
+Current verified state (2026-11-01, M3-E E14): `npm test` passes 2,324 tests in 74 files
 (agent-protocol 120 in 2 files, agent-sdk 56 in 3, reference-agent 91 in 4, engine 728 in 9, websec
-395 in 13, API 869 in 38, web 23 in 3), with none failed or skipped, and `npm run build` and
+395 in 13, API 911 in 40, web 23 in 3), with none failed or skipped, and `npm run build` and
 `npm run typecheck` pass for all seven workspaces. `npm audit` needs
 network access; it last reported 0 vulnerabilities on 2026-10-26 and was not re-run for this update.
 

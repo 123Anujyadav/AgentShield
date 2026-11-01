@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, rmSync, writeSync, type Stats } from "node:fs";
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, writeSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import type { ActivityEvent } from "@agentshield/engine";
 import { assertNoLinkedAncestors, FileSecurityError, isRestrictedToCurrentUser, writeRestrictedFileAtomically } from "../agents/file-security.js";
-import { lockStillHeld } from "../storage/journal.js";
+import { acquireStoreLock, JournalConfigError, lockStillHeld, releaseStoreLock, restoreMarkerPresent, RESTORE_MARKER_SUFFIX } from "../storage/journal.js";
+import type { StoreHealth } from "../storage/health.js";
 import { defaultTokenDirectory } from "../security/token.js";
 
 /**
@@ -40,6 +41,10 @@ import { defaultTokenDirectory } from "../security/token.js";
  * before anything is written; the opened file is checked to be the one inspected. A lock
  * file next to the log (holding the process id) stops a second API process from appending
  * to it at the same time.
+ *
+ * M3-E E14: a record of a newer format version (v3 or later) stops start-up rather than being
+ * skipped, and so does the marker of an interrupted restore. inspectAuditContent() reads a log's
+ * content without opening it, for the backup, restore and status tools.
  */
 
 export const AUDIT_LOG_FILE_NAME = "audit-events.jsonl";
@@ -96,6 +101,28 @@ export interface AuditRecovery {
   permissionsRestricted: boolean;
   bytes: number;
   maxBytes: number;
+  /** M3-E E14: the highest approval id (apr-N) any line names, so a lost approval journal never reuses an id. 0 if none. */
+  highestApprovalId: number;
+}
+
+/** M3-E E14: what an audit log's content holds, read without opening (or locking) it. */
+export interface AuditInspection {
+  loaded: ActivityEvent[];
+  records: number;
+  malformed: number;
+  malformedLines: number[];
+  unverified: number;
+  unverifiedLines: number[];
+  legacyRecords: number;
+  duplicates: number;
+  truncatedTail: boolean;
+  /** The highest sequence number seen anywhere, even in a skipped line. */
+  highestSeq: number;
+  highestApprovalId: number;
+  /** The newest record version above 2 found (a newer AgentShield wrote it), or null. */
+  unsupportedVersion: number | null;
+  /** The hash the next record's `prev` must carry. */
+  nextPrev: string;
 }
 
 export interface AuditLog {
@@ -108,6 +135,8 @@ export interface AuditLog {
   readiness(): AuditReadiness;
   /** Durably appends one event (id `evt-<n>`, n greater than every stored one). Throws AuditWriteError otherwise. */
   append(event: ActivityEvent): void;
+  /** M3-E E14: capacity and health (numbers only). Optional so test doubles need not implement it. */
+  health?(): StoreHealth;
   /** Closes the file and releases the lock. Idempotent. */
   close(): void;
 }
@@ -212,46 +241,92 @@ export function parseAuditRecord(line: string): { seq: number; event: ActivityEv
   return { seq, event: event as ActivityEvent, prev };
 }
 
-function isAlive(pid: number): boolean {
+/**
+ * Takes the single-writer lock next to the log (M3-E E14: the journals' implementation, which also never
+ * follows a link when reading the process id). Its messages name the audit log.
+ */
+function acquireLock(lockPath: string): { staleReplaced: boolean } {
   try {
-    process.kill(pid, 0);
-    return true;
+    return acquireStoreLock(lockPath, "audit log");
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
+    throw new AuditConfigError(error instanceof JournalConfigError ? error.message : "The audit log lock could not be taken.");
   }
 }
 
-/** Takes the single-writer lock next to the log. */
-function acquireLock(lockPath: string): { staleReplaced: boolean } {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const fd = openSync(lockPath, "wx", 0o600);
-      try {
-        writeSync(fd, String(process.pid));
-      } finally {
-        closeSync(fd);
-      }
-      return { staleReplaced: attempt > 0 };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw new AuditConfigError("The audit log lock file cannot be created.");
+const APPROVAL_REFERENCE = /"approvalId":"apr-([1-9][0-9]{0,8})"/;
+const RECORD_VERSION = /^\{"v":([0-9]{1,9}),/;
+
+/**
+ * M3-E E14: parses and verifies an audit log's content without opening it. Pure. A final record without
+ * its LF counts as malformed (openFileAuditLog then terminates its line).
+ */
+export function inspectAuditContent(content: Buffer, maxRecordBytes: number = MAX_AUDIT_RECORD_BYTES): AuditInspection {
+  const loaded: ActivityEvent[] = [];
+  const malformedLines: number[] = [];
+  let malformed = 0;
+  let duplicates = 0;
+  let lastSeq = 0;
+  let highestSeen = 0;
+  let highestApprovalId = 0;
+  let unsupportedVersion: number | null = null;
+  const unverifiedLines: number[] = [];
+  let unverified = 0;
+  let legacyRecords = 0;
+  let seenChained = false;
+  // The hash the next record's `prev` must carry: the previous valid record line's, or the genesis value.
+  let expectedPrev = AUDIT_CHAIN_GENESIS;
+  const truncatedTail = content.length > 0 && content[content.length - 1] !== 0x0a;
+  const lines = content.toString("utf8").split("\n");
+  // After the final LF the split leaves an empty string; a non-empty last part is the partial record.
+  const complete = truncatedTail ? lines : lines.slice(0, -1);
+  complete.forEach((line, index) => {
+    // Any line, even a damaged one, may name an issued approval id: reserving too many is safe.
+    const approval = APPROVAL_REFERENCE.exec(line)?.[1];
+    if (approval) highestApprovalId = Math.max(highestApprovalId, Number(approval));
+    const version = Number(RECORD_VERSION.exec(line)?.[1] ?? 0);
+    if (version > 2) unsupportedVersion = Math.max(unsupportedVersion ?? 0, version);
+    const record = line.length > 0 && Buffer.byteLength(line, "utf8") < maxRecordBytes ? parseAuditRecord(line) : null;
+    if (!record) {
+      malformed += 1;
+      if (malformedLines.length < MAX_REPORTED_LINES) malformedLines.push(index + 1);
+      const seq = /^\{"v":[12],"seq":([1-9][0-9]{0,14}),/.exec(line)?.[1];
+      if (seq) highestSeen = Math.max(highestSeen, Number(seq));
+      return;
     }
-    let pid = Number.NaN;
-    try {
-      const text = readFileSync(lockPath, "utf8").trim();
-      if (/^\d{1,10}$/.test(text)) pid = Number(text);
-    } catch {
-      // Unreadable: treated like a stale lock below only if it can be removed.
+    highestSeen = Math.max(highestSeen, record.seq);
+    // M3-E E13: v1 records are accepted only before the first chained record; a chained record must name
+    // the previous valid record line. Anything else is kept in the file but not trusted.
+    const chainOk = record.prev === null ? !seenChained : record.prev === expectedPrev;
+    if (record.prev === null) legacyRecords += 1;
+    else seenChained = true;
+    expectedPrev = auditLineHash(line);
+    if (!chainOk) {
+      unverified += 1;
+      if (unverifiedLines.length < MAX_REPORTED_LINES) unverifiedLines.push(index + 1);
+      return;
     }
-    if (pid === process.pid || (Number.isSafeInteger(pid) && pid > 0 && isAlive(pid))) {
-      throw new AuditConfigError(`The audit log is in use by another AgentShield API process (pid ${pid}). Only one process may write it.`);
+    if (record.seq <= lastSeq) {
+      duplicates += 1;
+      return;
     }
-    try {
-      rmSync(lockPath, { force: true });
-    } catch {
-      throw new AuditConfigError("A stale audit log lock file cannot be removed.");
-    }
-  }
-  throw new AuditConfigError("The audit log lock could not be taken.");
+    lastSeq = record.seq;
+    loaded.push(record.event);
+  });
+  return {
+    loaded,
+    records: loaded.length,
+    malformed,
+    malformedLines,
+    unverified,
+    unverifiedLines,
+    legacyRecords,
+    duplicates,
+    truncatedTail,
+    highestSeq: Math.max(lastSeq, highestSeen),
+    highestApprovalId,
+    unsupportedVersion,
+    nextPrev: expectedPrev,
+  };
 }
 
 function sameFile(a: Stats, b: Stats): boolean {
@@ -275,6 +350,10 @@ export function openFileAuditLog(path: string, options: AuditLogOptions = {}): A
   if (typeof path !== "string" || !isAbsolute(path)) throw new AuditConfigError("AUDIT_LOG_FILE must be an absolute path.");
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || !Number.isSafeInteger(maxRecordBytes) || maxRecordBytes < 1 || maxRecordBytes > maxBytes) {
     throw new AuditConfigError("The audit log limits are invalid.");
+  }
+  // M3-E E14: before anything is created, so an interrupted restore never leaves an empty log in its place.
+  if (restoreMarkerPresent(path)) {
+    throw new AuditConfigError(`A restore of the audit log was interrupted (a ${RESTORE_MARKER_SUFFIX} marker is next to it). Run the same restore again; the API does not start until it completes.`);
   }
 
   try {
@@ -306,9 +385,7 @@ export function openFileAuditLog(path: string, options: AuditLogOptions = {}): A
 
   const lockPath = `${path}.lock`;
   const { staleReplaced } = acquireLock(lockPath);
-  const releaseLock = () => {
-    if (lockStillHeld(lockPath)) rmSync(lockPath, { force: true });
-  };
+  const releaseLock = () => releaseStoreLock(lockPath);
 
   let fd: number;
   try {
@@ -332,50 +409,14 @@ export function openFileAuditLog(path: string, options: AuditLogOptions = {}): A
     }
     if (read !== content.length) throw new AuditConfigError("The audit log could not be read completely.");
 
-    const loaded: ActivityEvent[] = [];
-    const malformedLines: number[] = [];
-    let malformed = 0;
-    let duplicates = 0;
-    let lastSeq = 0;
-    let highestSeen = 0;
-    const unverifiedLines: number[] = [];
-    let unverified = 0;
-    let legacyRecords = 0;
-    let seenChained = false;
-    // The hash the next record's `prev` must carry: the previous valid record line's, or the genesis value.
-    let expectedPrev = AUDIT_CHAIN_GENESIS;
-    const truncatedTail = content.length > 0 && content[content.length - 1] !== 0x0a;
-    const lines = content.toString("utf8").split("\n");
-    // After the final LF the split leaves an empty string; a non-empty last part is the partial record.
-    const complete = truncatedTail ? lines : lines.slice(0, -1);
-    complete.forEach((line, index) => {
-      const record = line.length > 0 && Buffer.byteLength(line, "utf8") < maxRecordBytes ? parseAuditRecord(line) : null;
-      if (!record) {
-        malformed += 1;
-        if (malformedLines.length < MAX_REPORTED_LINES) malformedLines.push(index + 1);
-        const seq = /^\{"v":[12],"seq":([1-9][0-9]{0,14}),/.exec(line)?.[1];
-        if (seq) highestSeen = Math.max(highestSeen, Number(seq));
-        return;
-      }
-      highestSeen = Math.max(highestSeen, record.seq);
-      // M3-E E13: v1 records are accepted only before the first chained record; a chained record must name
-      // the previous valid record line. Anything else is kept in the file but not trusted.
-      const chainOk = record.prev === null ? !seenChained : record.prev === expectedPrev;
-      if (record.prev === null) legacyRecords += 1;
-      else seenChained = true;
-      expectedPrev = auditLineHash(line);
-      if (!chainOk) {
-        unverified += 1;
-        if (unverifiedLines.length < MAX_REPORTED_LINES) unverifiedLines.push(index + 1);
-        return;
-      }
-      if (record.seq <= lastSeq) {
-        duplicates += 1;
-        return;
-      }
-      lastSeq = record.seq;
-      loaded.push(record.event);
-    });
+    const inspection = inspectAuditContent(content, maxRecordBytes);
+    const { loaded, malformed, malformedLines, unverified, unverifiedLines, legacyRecords, duplicates, truncatedTail } = inspection;
+    // M3-E E14: a newer format is never skipped as malformed and appended after: stop instead.
+    if (inspection.unsupportedVersion !== null) {
+      throw new AuditConfigError(
+        `The audit log holds records of format version ${inspection.unsupportedVersion}, written by a newer AgentShield. It was not opened, so nothing in it is lost. Use the AgentShield version that wrote it.`,
+      );
+    }
 
     let bytes = content.length;
     if (truncatedTail) {
@@ -403,13 +444,14 @@ export function openFileAuditLog(path: string, options: AuditLogOptions = {}): A
       permissionsRestricted: permissionsRestricted(path, opened),
       bytes,
       maxBytes,
+      highestApprovalId: inspection.highestApprovalId,
     };
 
     // Ids never repeat, even after skipped records: continue after the highest sequence seen.
-    let nextSeq = Math.max(lastSeq, highestSeen) + 1;
+    let nextSeq = inspection.highestSeq + 1;
     let failed = false;
     let closed = false;
-    let prevHash = expectedPrev;
+    let prevHash = inspection.nextPrev;
 
     return {
       loaded,
@@ -422,6 +464,15 @@ export function openFileAuditLog(path: string, options: AuditLogOptions = {}): A
         if (bytes + maxRecordBytes > maxBytes) return { ok: false, reason: "audit-storage-full" };
         return { ok: true };
       },
+      health: (): StoreHealth => ({
+        bytes,
+        maxBytes,
+        entries: null,
+        entryLimit: null,
+        writable: !failed && !closed,
+        lockHeld: !closed && lockStillHeld(lockPath),
+        full: bytes + maxRecordBytes > maxBytes,
+      }),
       append(event: ActivityEvent): void {
         if (failed || closed) throw new AuditWriteError("unavailable");
         const seq = sequenceOf(event.id);

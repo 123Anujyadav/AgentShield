@@ -179,6 +179,21 @@ GETs are retried after a short `Retry-After`.
 | A request answers 503 after `lock-lost` in the log | A store's lock file was removed or replaced while the API ran, so the API stopped writing | Make sure only one API runs; restart it |
 | `git commit` fails with `secret scan FAILED` or `REFUSED <file>` | The pre-commit hook found a credential-shaped value, or a forbidden file, in the staged changes | Unstage it (`git restore --staged <file>`) and remove the secret; never commit `.env` |
 
+### Storage operations, backup and restore (M3-E E14)
+
+| Log line or message | Meaning | What to do |
+|---|---|---|
+| Start-up fails: `... A restore of the <store> was interrupted` | A restore stopped part-way. Its `.restoring` marker keeps the API from starting on half-restored state. | Run the same `npm run ops -- restore --dir <backup>` again |
+| Start-up fails: `... holds records of format version N, written by a newer AgentShield` | The store was written by a newer version (a downgrade, or a file from elsewhere). It was not opened, so nothing was lost. | Use the AgentShield version that wrote it |
+| `<store> status=warning reason=stale-lock-replaced` | The previous process did not stop cleanly (a crash or forced stop) | Nothing; check the rest of the start-up log |
+| `approval-store status=recovered restored=N` | Pending approvals from a restored backup became `OUTCOME_UNKNOWN` | Tell agents; they can evaluate again |
+| `approval-store status=recovered reason=ids-continue-after-audit-log` | The approval journal was lost or restored; ids continue after the audit log's | Nothing |
+| `idempotency-store status=warning reason=journal-missing-but-audit-log-has-history` | The idempotency journal was lost: new keys are refused for 15 minutes | Wait; do not delete journals |
+| `storage store=<name> level=warning\|critical\|failed ...` | A store is near a limit, full, or stopped writing | See [operations.md](operations.md) (Watching storage health) |
+| `ops` says `Stop the AgentShield API first` | Backups and restores run only while the API is stopped | Stop the API, run the command again |
+| `ops restore` says `Nothing was restored. ... --replace-damaged` | A present store is damaged. Start-up recovery keeps its newer records. | Usually start the API instead; use `--replace-damaged` only to discard it (it is copied aside) |
+| `verify-backup` reports `incomplete` or `does not match the manifest` | The backup never finished, or a file was changed or truncated | Use another backup |
+
 ### Approval storage (M3-E E12)
 
 | Answer | Meaning | What to do |
@@ -328,6 +343,7 @@ although it never reached the server; check, then run it again.
 | `agent-policy status=invalid-config reason=...` | Fix `AGENT_POLICY_FILE`; the reason names the position. Use an absolute path. |
 | `agent-credentials status=invalid-config reason=...` | Fix or restore the credential store. Check it with `agent-credential list`. |
 | `agent-signature status=invalid-config reason=...` | `AGENT_SIGNATURE_MAX_SKEW_SECONDS` must be a whole number from 5 to 300 |
+| `agent-state status=invalid-config reason=...` or `audit-log status=invalid-config reason=...` | A store cannot be opened safely: a lock held by another process, an unsafe path, a newer format, or an interrupted restore. The reason says which. See [operations.md](operations.md). |
 
 ### The CLI refuses to run
 

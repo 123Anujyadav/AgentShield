@@ -1,5 +1,6 @@
 import { createNonceCache, DEFAULT_NONCE_GLOBAL_LIMIT, DEFAULT_NONCE_PER_KEY_LIMIT, type NonceCache, type NonceCheck } from "./nonce-cache.js";
 import { openJournal, type Journal, type JournalIo } from "../storage/journal.js";
+import type { StoreHealth } from "../storage/health.js";
 import { join } from "node:path";
 import { defaultTokenDirectory } from "../security/token.js";
 
@@ -33,6 +34,11 @@ export const REPLAY_STORE_MAX_BYTES = 32 * 1024 * 1024;
 export const REPLAY_STORE_COMPACT_AT_BYTES = 1024 * 1024;
 const RECORD = /^n1 ([0-9a-f]{16}) ([A-Za-z0-9_-]{22}) ([1-9][0-9]{12})$/;
 const MARKER = /^r1 ([1-9][0-9]{12})$/;
+/** M3-E E14: a record of a newer format (`n2 ...`, `r2 ...`) stops the open instead of being dropped as damage. */
+export function newerReplayRecordVersion(record: string): number | null {
+  const match = /^[a-z]([0-9]{1,9}) /.exec(record);
+  return match && Number(match[1]) > 1 ? Number(match[1]) : null;
+}
 
 /** REPLAY_STORE_FILE (an absolute path), else %LOCALAPPDATA%\AgentShield\replay-nonces.journal. */
 export function replayStorePathFromEnv(env: NodeJS.ProcessEnv = process.env): string {
@@ -55,6 +61,8 @@ export interface ReplayRecovery {
   dropped: number;
   truncatedTail: boolean;
   created: boolean;
+  /** M3-E E14: a lock left by a process that no longer runs was replaced. */
+  staleLockReplaced: boolean;
   /** Requests with a timestamp up to (and including) this time are refused; 0 when not recovering. */
   recoveringUntil: number;
 }
@@ -63,6 +71,8 @@ export interface DurableNonceCache extends NonceCache {
   readonly recovery: ReplayRecovery;
   readonly permissionsRestricted: boolean;
   readonly recoveringUntil: number;
+  /** M3-E E14: capacity and health (numbers only). */
+  health(): StoreHealth;
   close(): void;
 }
 
@@ -84,12 +94,14 @@ const recordOf = (keyId: string, nonce: string, expiresAt: number) => `n1 ${keyI
 
 export function openDurableNonceCache(options: DurableNonceCacheOptions): DurableNonceCache {
   const { now, skewMs } = options;
-  const memory = createNonceCache({ now, perKeyLimit: options.perKeyLimit ?? DEFAULT_NONCE_PER_KEY_LIMIT, globalLimit: options.globalLimit ?? DEFAULT_NONCE_GLOBAL_LIMIT });
+  const globalLimit = options.globalLimit ?? DEFAULT_NONCE_GLOBAL_LIMIT;
+  const memory = createNonceCache({ now, perKeyLimit: options.perKeyLimit ?? DEFAULT_NONCE_PER_KEY_LIMIT, globalLimit });
   const journal: Journal = openJournal(options.path, {
     label: "replay store",
     maxBytes: options.maxBytes ?? REPLAY_STORE_MAX_BYTES,
     maxRecordBytes: 128,
     checkPermissions: options.checkPermissions === true,
+    unsupportedVersion: newerReplayRecordVersion,
     ...(options.io ? { io: options.io } : {}),
   });
   const compactAt = options.compactAtBytes ?? REPLAY_STORE_COMPACT_AT_BYTES;
@@ -156,6 +168,7 @@ export function openDurableNonceCache(options: DurableNonceCacheOptions): Durabl
       damagedCopy,
       truncatedTail: journal.truncatedTail,
       created: journal.created,
+      staleLockReplaced: journal.staleLockReplaced,
       recoveringUntil,
     },
     permissionsRestricted: journal.permissionsRestricted,
@@ -176,6 +189,15 @@ export function openDurableNonceCache(options: DurableNonceCacheOptions): Durabl
       live.set(`${keyId} ${nonce}`, { keyId, nonce, expiresAt });
       return "accepted";
     },
+    health: () => ({
+      bytes: journal.bytes,
+      maxBytes: journal.maxBytes,
+      entries: memory.size,
+      entryLimit: globalLimit,
+      writable: !journal.failed,
+      lockHeld: journal.lockHeld(),
+      full: false,
+    }),
     get size() {
       return memory.size;
     },
