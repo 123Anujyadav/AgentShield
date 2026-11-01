@@ -23,6 +23,7 @@ protection or complete prompt-injection prevention.
   and survive restarts; see [`docs/audit-log.md`](docs/audit-log.md). Backup, restore and storage
   health (M3-E E14): [`docs/operations.md`](docs/operations.md). Beta readiness (M3-E E15:
   conditional GO for a limited, controlled beta, not production): [`docs/beta-readiness.md`](docs/beta-readiness.md).
+  The human-run beta gates (M3-E E16, not yet run): [`docs/beta-gate-checklist.md`](docs/beta-gate-checklist.md).
 - **Not a live model.** The advisory model is a mock by default. Two separately authorized,
   one-request live Muse Spark smoke tests were run on 2026-10-29: the first returned an unusable
   (cut-off) answer, the second a valid advisory answer. Live mode is off again; see

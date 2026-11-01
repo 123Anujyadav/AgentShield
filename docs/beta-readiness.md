@@ -195,7 +195,7 @@ the beta starts (condition 3).
 | L3 | Low | Docs and the SDK still said approval ids restart at `apr-1` after a restart (stale since E12) | **Fixed** (architecture, integration guide, SDK README and type docs) |
 | L4 | Low | No agent or credential status view in the dashboard (CLI only) | Open; deferred |
 | L5 | Low | The full test suite is load-sensitive on Windows: one run of 10 timeouts in E14 | Open; reruns pass. The heaviest suite has longer timeouts. |
-| L6 | Low | Four older test files (`load-env`, `policies/store`, `credentials.v2`, the SDK's `credential`) left temporary directories in `%TEMP%` (951 accumulated on the assessment machine, some holding synthetic test credentials) | **Fixed** (every created directory is removed). Existing leftovers were not deleted; remove `%TEMP%gentshield-*` once no test is running. |
+| L6 | Low | Four older test files (`load-env`, `policies/store`, `credentials.v2`, the SDK's `credential`) left temporary directories in `%TEMP%` (951 accumulated on the assessment machine, some holding synthetic test credentials) | **Fixed** (every created directory is removed). Existing leftovers were not deleted; remove `%TEMP%\agentshield-*` once no test is running. |
 | I1 | Info | On a first-ever start (or after a replay journal is lost) signed requests are refused for the skew window (30 s by default); the SDK reports `ServiceUnavailableError` | By design (replay fence) |
 | I2 | Info | Throughput is bounded by synchronous fsync on one event loop (about 170 durable evaluations per second locally) | Acceptable for the beta |
 | I3 | Info | Reserved Windows device names are ordinary files under Node; nothing is discarded | Documented |
@@ -230,6 +230,11 @@ the beta starts (condition 3).
 **None open.** A beta should not start until conditions 1 and 3 below are met.
 
 ## Recommended beta operating conditions
+
+Conditions 1 and 3, and the storage CLI check, are turned into mandatory gates with evidence
+templates and decision rules in [beta-gate-checklist.md](beta-gate-checklist.md) (M3-E E16; prepared,
+not run).
+
 
 1. **Browser smoke test first.** A person checks the dashboard on the beta machine (sign-in, approval
    queue, decide an approval, activity view, a narrow window) and records the result.

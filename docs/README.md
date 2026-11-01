@@ -37,6 +37,7 @@ Read these in order:
 | [agent-policies.md](agent-policies.md) | The policy file schema, enforcement and recheck |
 | [approval-persistence.md](approval-persistence.md) | Durable approvals: transitions, crash recovery, `OUTCOME_UNKNOWN`, limits, integration |
 | [replay-and-idempotency.md](replay-and-idempotency.md) | Durable replay protection and evaluation idempotency: contract, storage, crash behaviour, residual risks |
+| [beta-gate-checklist.md](beta-gate-checklist.md) | M3-E E16: the three mandatory, human-run beta gates (browser smoke test, real-installation recovery drill, storage CLI), evidence templates and the GO / CONDITIONAL GO / NO-GO rules. Prepared, not run. |
 | [beta-readiness.md](beta-readiness.md) | M3-E E15 beta-readiness assessment: validated workflows, findings, residual risks, operating conditions, and the conditional GO verdict |
 | [operations.md](operations.md) | Operator guide: storage inventory, health monitoring, offline backup, restore, crash and disk-full recovery, lock files, disaster-recovery limits |
 | [storage-integrity.md](storage-integrity.md) | Integrity chains (corruption detection), filesystem hardening, operator recovery, and why tamper evidence needs a new trust boundary |
