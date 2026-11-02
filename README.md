@@ -118,6 +118,14 @@ changing its source.
 Note: the repo `.npmrc` sets `legacy-peer-deps=true`; that works around an npm
 arborist peer-resolution bug with Vitest 4 in this workspace.
 
+**Two ways to start the same API (M3-E E17).** The dashboard's messages name both, and either works:
+- `npm run dev:api` runs the API from source and reloads it when the source changes. Use it while
+  developing.
+- `npm run start -w @agentshield/api` runs the built `apps/api/dist`, as an installation does. After
+  pulling or changing code, run `npm run build` first, **then restart it**: a long-running process
+  keeps the code it loaded at start-up. In Gate A, a process started three days earlier was still
+  serving the old code (finding GA-1).
+
 **Troubleshooting.** If the web app shows "Could not reach the AgentShield API server", check
 that terminal 1 is running and printed the line above. The web app calls
 `http://localhost:4000` by default and reads `VITE_API_URL` if it is set

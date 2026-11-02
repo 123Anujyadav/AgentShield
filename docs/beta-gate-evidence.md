@@ -232,7 +232,7 @@ was driven over the DevTools protocol by Node 22's built-in WebSocket. Nothing w
 | GA-3 | Low | The operator's approve and reject events on an agent's approval were labelled "Operator (dashboard) · scenario as summary-agent", though no scenario was involved (introduced in E15) | `requesterLabel` words scenario runs (which have a `scenarioId`) and decisions apart: "… · on agent X's request". Unit test added. | Fixed |
 | GA-4 | Low | At 375 px, badge rows clipped their content with no way to scroll: the Approval Queue card's policy badge, and the decision and outcome rows of Scenario Lab and Threat Investigation. Found by screenshot review; a refined clipping check then failed on the unfixed build. | The rows wrap; pinned in `dashboard-accuracy.test.ts` | Fixed |
 | GA-5 | Info | There is no way to tell from outside which build a running API is (no version on `/health`); GA-1 was found from process start times | Recommendation for later; not changed in this gate | Open |
-| GA-6 | Info | The sign-in screen's "unreachable" text suggests `npm run start -w @agentshield/api`, while the README uses `npm run dev:api` (noted in E16) | None | Open |
+| GA-6 | Info | The sign-in screen's "unreachable" text suggests `npm run start -w @agentshield/api`, while the README uses `npm run dev:api` (noted in E16) | The README and troubleshooting.md now document both commands and when to use each (E17 sign-off preparation); the sign-in text is unchanged | Fixed (documentation) |
 
 ### What remains for a human (updated after Gate B)
 
@@ -349,7 +349,7 @@ Carried from E15 and E16. Each needs a named decision before a GO or CONDITIONAL
 | — | No real-installation recovery drill | Closed technically: Gate B passed; closes formally with the Gate B sign-off | — | — |
 | GB-2 | Backup and scratch on the same disk as the live stores (no second disk) | Not blocking for a controlled beta; requires accepting it, or rerunning B3/B10 with a second disk | — | — |
 | GA-5 | No build or version visible on `/health` | Not blocking | — | — |
-| GA-6 | Sign-in "unreachable" text names `npm run start -w @agentshield/api`, the README `npm run dev:api` | Not blocking | — | — |
+| GA-6 | Sign-in "unreachable" text names `npm run start -w @agentshield/api`, the README `npm run dev:api` | Fixed in documentation (both commands now documented); confirm the fix | — | — |
 | GB-4 | A console Ctrl+C does not stop an API started hidden by automation | Not blocking (informational) | — | — |
 | — | Residual risks in [beta-readiness.md](beta-readiness.md) | Must be acknowledged | — | — |
 
@@ -359,7 +359,8 @@ Carried from E15 and E16. Each needs a named decision before a GO or CONDITIONAL
 |---|---|
 | Decision | **Pending human sign-off.** Technically every gate passes, so it is not NO-GO. GO or CONDITIONAL GO needs the sign-offs and named acceptance of the open limitations (2026-11-02). Recommended: **CONDITIONAL GO**. |
 | Gate results | A: 16/16 PASS (A9 in Gate B). B: B0–B10 PASS. C: C1–C4 PASS. Every gate is technically PASS; operator and reviewer sign-off pending for each. |
-| Accepted limitations | None recorded yet. To decide: M2, L4, L5, GA-5, GA-6, GB-2, GB-4, and the residual risks in beta-readiness.md. |
+| Accepted limitations | None recorded yet. Every open item, limitation and residual risk to decide is listed in [beta-signoff.md](beta-signoff.md), section 3. |
 | Open blocking findings | None. GA-1 and GB-1 are fixed; M3 and the drill close formally with the sign-offs. |
+| Sign-off packet | [beta-signoff.md](beta-signoff.md): the gate sign-offs, the complete residual-risk register with ACCEPT/REJECT fields, and the final decision fields, all awaiting the operator and an independent reviewer |
 | Decided by | — (pending the operator's evidence) |
 | Reviewed by | — |

@@ -297,9 +297,13 @@ store or an old finished approval dropped to make room.
 
 ### Network errors and evaluation timeouts
 
-**API not running.** You get `NetworkError` (connection refused). Start it
-(`npm run dev:api`) and check the URL. The default is `http://127.0.0.1:4000`; the port comes from
-`PORT`.
+**API not running.** You get `NetworkError` (connection refused). Start it, then check the URL:
+- `npm run dev:api` runs it from source;
+- `npm run start -w @agentshield/api` runs the built version. The sign-in screen suggests this one.
+  Run `npm run build` first after any code change (see the main README, "Two ways to start the same
+  API").
+
+The default is `http://127.0.0.1:4000`; the port comes from `PORT`.
 
 **Evaluate timed out.** The server may have processed it, and possibly executed an
 `ALLOW`. **Do not resend automatically.** Follow

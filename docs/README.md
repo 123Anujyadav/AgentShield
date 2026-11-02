@@ -37,6 +37,7 @@ Read these in order:
 | [agent-policies.md](agent-policies.md) | The policy file schema, enforcement and recheck |
 | [approval-persistence.md](approval-persistence.md) | Durable approvals: transitions, crash recovery, `OUTCOME_UNKNOWN`, limits, integration |
 | [replay-and-idempotency.md](replay-and-idempotency.md) | Durable replay protection and evaluation idempotency: contract, storage, crash behaviour, residual risks |
+| [beta-signoff.md](beta-signoff.md) | M3-E E17: the human sign-off packet: gate sign-offs, the complete residual-risk register with ACCEPT/REJECT fields, and the final decision fields (awaiting the operator and an independent reviewer) |
 | [beta-gate-evidence.md](beta-gate-evidence.md) | M3-E E17: the evidence record for the three beta gates, filled in only from operator-supplied evidence; current decision and open findings |
 | [beta-gate-checklist.md](beta-gate-checklist.md) | M3-E E16: the three mandatory, human-run beta gates (browser smoke test, real-installation recovery drill, storage CLI), evidence templates and the GO / CONDITIONAL GO / NO-GO rules. Prepared, not run. |
 | [beta-readiness.md](beta-readiness.md) | M3-E E15 beta-readiness assessment: validated workflows, findings, residual risks, operating conditions, and the conditional GO verdict |
