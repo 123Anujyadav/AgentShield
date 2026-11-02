@@ -11,6 +11,7 @@ import { loadSecurityConfig, WEB_ORIGINS } from "./config.js";
 import { createFailureLimiter, createRateLimiter } from "./rate-limit.js";
 import { hostnameOf } from "./request-guards.js";
 import { API_TOKEN_FILE_NAME, defaultTokenDirectory, loadOrCreateApiToken } from "./token.js";
+import { isRestrictedToCurrentUser } from "../agents/file-security.js";
 
 const WEB_ORIGIN = WEB_ORIGINS[0];
 const BEARER = `Bearer ${TEST_API_TOKEN}`;
@@ -347,6 +348,14 @@ describe("M0: API token file", () => {
     const second = loadOrCreateApiToken(tokenDir);
     expect(second).toEqual({ token: first.token, path: first.path, created: false });
     expect(loadOrCreateApiToken(join(directory, "Other")).token).not.toBe(first.token);
+  });
+
+  it("M3-E E17 (R2): a new token file is restricted to the current user, whatever its folder grants", () => {
+    const tokenDir = join(directory, "AgentShield");
+    const created = loadOrCreateApiToken(tokenDir);
+    expect(created.created).toBe(true);
+    expect(isRestrictedToCurrentUser(created.path)).toBe(true);
+    expect(readFileSync(created.path, "utf8")).toBe(created.token);
   });
 
   it("refuses an invalid token file without overwriting it or echoing its content", () => {

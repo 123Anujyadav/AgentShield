@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { FileSecurityError, writeRestrictedFileAtomically } from "../agents/file-security.js";
 
 /**
  * The local API token (M0). It is generated once, stored in the user's profile
@@ -13,7 +14,10 @@ export const API_TOKEN_FILE_NAME = "api-token";
 /** 32 random bytes as base64url is 43 characters; longer hand-made tokens are accepted. */
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,256}$/;
 
-/** %LOCALAPPDATA%\AgentShield on Windows (readable only by this Windows account by default). */
+/**
+ * %LOCALAPPDATA%\AgentShield on Windows. The folder inherits the profile's permissions, which on some machines
+ * also grant other local groups read access (M3-E E17 found two), so files in it are restricted individually.
+ */
 export function defaultTokenDirectory(env: NodeJS.ProcessEnv = process.env): string {
   return join(env.LOCALAPPDATA ?? join(homedir(), ".local", "state"), "AgentShield");
 }
@@ -43,10 +47,15 @@ export function loadOrCreateApiToken(directory: string = defaultTokenDirectory()
     }
     return { token: existing, path, created: false };
   }
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
   const token = randomBytes(32).toString("base64url");
-  // "wx": never replace a file created in the meantime. mode is ignored on Windows,
-  // where the per-user profile folder's permissions apply instead.
-  writeFileSync(path, token, { flag: "wx", mode: 0o600 });
+  // M3-E E17: restricted to the current user (one ACL entry on Windows, mode 0600 elsewhere) before the token
+  // is written, like every other AgentShield state file. Before, the file inherited the folder's permissions on
+  // Windows (mode is ignored there). Never replaces a file created in the meantime.
+  try {
+    writeRestrictedFileAtomically(path, token, { overwrite: false });
+  } catch (error) {
+    if (error instanceof FileSecurityError) throw new Error(`The API token file could not be created restricted to the current user: ${path}.`);
+    throw error;
+  }
   return { token, path, created: true };
 }
