@@ -336,6 +336,21 @@ done except sign-off.
 **Limits of the CLI, as documented.** It cannot see runtime `write-failed` or `lock-lost` states, and it
 does not separate critical from warning; those come from `/api/storage/health` and the API log.
 
+## Pre-beta verification (2026-11-02)
+
+Recorded in detail in [beta-signoff.md](beta-signoff.md), section 5 (evidence:
+`AgentShield-gate-evidence\2026-11-02-pre-beta\`).
+
+| Item | Result |
+|---|---|
+| I4 | `npm audit`: 0 vulnerabilities across 333 dependencies (resolved) |
+| GB-1 | Exactly-once verified on a copy of the backup; one historical duplicate (`apr-2`) is still to come on the live installation |
+| L6 | 942 test temp directories removed |
+| R2 | **New finding:** the existing API token file is readable by two local groups (`CodexSandboxUsers`, `MuseSandboxUsers`); new token files are now created restricted (`129fe5c`); the operator decides on the existing file |
+| O1 | Automated visual pass, 9 views at 3 sizes: no overflow or clipping; human review still required (O1, O4) |
+| O3 | **The live API ended abruptly** between 22:53 and 22:55 (most likely when the automation's shell was recycled). The data is verified intact. The operator must start it in their own terminal. |
+| PB-1 | The drill's scratch folder inherits `C:\` permissions (store files themselves restricted) |
+
 ## Open findings and acceptance
 
 Carried from E15 and E16. Each needs a named decision before a GO or CONDITIONAL GO.

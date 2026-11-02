@@ -215,7 +215,10 @@ the beta starts (condition 3).
   can read and rewrite the stores, the backups, the credential store and the API token. The
   integrity chains only detect accidental or unsophisticated damage (E13; tamper evidence needs a
   new trust boundary).
-- **The API token** keeps the profile's default ACL (E9).
+- **The API token** keeps the profile's default ACL (E9). **Verified in M3-E E17:** on the assessment
+  machine that ACL also grants read access to the local groups `CodexSandboxUsers` and
+  `MuseSandboxUsers`. New token files are now created restricted; the existing one needs the operator's
+  decision (beta-signoff.md, R2).
 - **Restoring an old credential store** undoes later revocations. It needs an explicit flag, and the
   credential list should be reviewed afterwards.
 - **Prompt-injection detection** is pattern-based. Novel phrasings may be missed, and the scanner

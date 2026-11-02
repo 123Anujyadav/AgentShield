@@ -96,7 +96,10 @@ record after a chained one is an integrity failure.
 | Atomic compaction | A restricted temporary file is fsynced and renamed over the journal. A crash before the rename leaves the old journal intact; this is tested. |
 
 **Not changed:**
-- the API token file is still created with mode 0600 only, so on Windows it inherits the
+- (updated in M3-E E17) a **new** API token file is created restricted to the current user. A token
+  file created earlier keeps the folder's inherited permissions, which on the assessment machine also
+  let two local groups read it (see beta-signoff.md, R2). The previous wording was: the API token file
+  is still created with mode 0600 only, so on Windows it inherits the
   profile's ACL;
 - the `--out` ACL timing on shared directories (E9 L6).
 
