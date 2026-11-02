@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { evaluateAction, getScenario } from "@agentshield/engine";
 import { approvalStorePathFromEnv, openDurableApprovalStore, type DurableApprovalStore } from "./approval-journal.js";
-import { createPendingApproval, processApproval, processRejection } from "./approvals.js";
+import { createPendingApproval, expirePendingApprovals, processApproval, processRejection } from "./approvals.js";
 import { createSimulator } from "./simulator.js";
 
 /** M3-E E12: the durable approval store on its own. Temporary files only. */
@@ -135,6 +135,21 @@ describe("M3-E E12: durable approval store", () => {
     pending(store);
     expect(() => pending(store)).toThrow(/approval-queue-full/);
     expect(store.records.has(a.id)).toBe(true);
+  });
+
+  it("M3-E E17 (Gate B, GB-1): an EXPIRED event written by the expiry sweep is recorded durably, so a restart never writes it again", () => {
+    let store = open();
+    const a = pending(store);
+    const later = new Date(Date.now() + 16 * 60 * 1000); // past the 15-minute expiry
+    const written: string[] = [];
+    const onExpired = (approval: { id: string }) => written.push(approval.id);
+    expirePendingApprovals(store, later, onExpired);
+    expect(written).toEqual([a.id]);
+    expect(readFileSync(path, "utf8")).toContain(`"t":"expiry-recorded","id":"${a.id}"`);
+    store = restart(store);
+    expect(store.records.get(a.id)).toMatchObject({ status: "EXPIRED", expiryEventPending: false });
+    expirePendingApprovals(store, later, onExpired);
+    expect(written).toEqual([a.id]); // not written a second time
   });
 
   it("default location under the profile", () => {

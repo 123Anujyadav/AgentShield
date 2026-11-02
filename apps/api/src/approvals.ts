@@ -235,7 +235,9 @@ export function expirePendingApprovals(
       // pending for the next retry and never blocks later stale records.
       try {
         onExpired(toPublicApproval(record));
-        record.expiryEventPending = false;
+        // M3-E E17 (Gate B, GB-1): record durably that the event was written (as approve and reject already
+        // did). Clearing only the in-memory marker made every restart write the EXPIRED event again.
+        markExpiryEventRecorded(store, record.id);
       } catch {
         // Pending marker stays set; a later sweep or approve/reject retries.
         console.warn(`approval-expiry-event status=write-failed approvalId=${record.id} retry=pending`);
