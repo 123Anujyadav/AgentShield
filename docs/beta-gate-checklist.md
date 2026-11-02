@@ -125,6 +125,13 @@ anyway.
 
 **Before the drill.**
 - Pick a time with no pending approvals that matter: the API is stopped for steps B1 to B4.
+- **B0 (M3-E E17):** just before B1, with the live API running, run the "Injection: malicious document,
+  permitted action" scenario in Scenario Lab and leave its approval **pending**. Without a pending approval
+  in the backup, B7 restores none (`restored=0`) and A9 cannot be shown. B4 must then report `pending=1`.
+- **One disk only (M3-E E17):** if no second disk is available, use folders on the same disk outside
+  `%LOCALAPPDATA%\AgentShield`, the repository and any cloud-synced folder (for example
+  `C:\AgentShieldBackups\<date>`). Record it as a limitation: the drill then proves the procedure, not
+  recovery from losing that disk.
 - Have a second disk or folder for the backup (for example `D:\AgentShieldBackups\<date>`). It must
   not be under `%LOCALAPPDATA%\AgentShield`.
 - Pick an empty scratch folder for the restore (for example `D:\AgentShieldDrill\<date>\state`). It
@@ -143,11 +150,11 @@ anyway.
 | B6b | **Verify every scratch path again, immediately before starting the scratch API** (M3-E E17) | In the scratch window, read every `path=` line of B6a | **All five `path=` lines are under the scratch folder.** If any is not, STOP: do not start an API in this window. | The five path lines |
 | B7 | Start an API on the scratch stores | Only after B6b passed: stop the live API (Ctrl+C), then in the **scratch window**: `npm run dev:api` | The start-up log shows: `audit-log status=ready records=<n>` and no `status=integrity-failure`; `approval-store status=recovered restored=<n> effect=pending-approvals-from-backup-marked-OUTCOME_UNKNOWN` (n = B4's `pending`; this line is absent when n is 0); `replay-store status=recovering until=…`; `idempotency-store status=recovering until=… effect=new-idempotency-keys-refused` | Start-up log |
 | B7a | `OUTCOME_UNKNOWN` in the dashboard (Gate A9) | If the web app is not still running from Gate A, `npm run dev:web`. Sign in again (the scratch API has no sessions), open **Approval Queue**, and only observe: run no scenario and decide nothing on the scratch API. | Every approval that was pending in the backup is in the history as OUTCOME_UNKNOWN, amber, with the restored-from-backup reason, and cannot be decided | Screenshot |
-| B7b | Storage health on the scratch API | In another window: the documented `Invoke-RestMethod http://127.0.0.1:4000/api/storage/health …` command from [operations.md](operations.md) (Watching storage health) | `replay-store` and `idempotency-store` have the `recovering` warning; `approval-store` has `approvals-made-outcome-unknown-at-startup`; no store is `failed`. The response contains no path. | Output |
+| B7b | Storage health on the scratch API | In another window: the documented `Invoke-RestMethod http://127.0.0.1:4000/api/storage/health …` command from [operations.md](operations.md) (Watching storage health) | `idempotency-store` has the `recovering` warning (its window lasts 15 minutes). `replay-store` has it only within the skew window after the scratch start (30 seconds by default): checked later it is `ok`, and its fence is shown by B7's start-up log. `approval-store` has `approvals-made-outcome-unknown-at-startup`; no store is `failed`. The response contains no path. | Output |
 | B7c | Audit integrity | Read the B7 start-up log | No `audit-log status=integrity-failure`; the record count equals the backup's audit-log `records` (B3) | Comparison |
 | B8 | Stop the scratch API; restart the live API | Ctrl+C in the scratch window; **close that window** (its variables end with it); in the usual terminal: `npm run dev:api` | The live API starts with **no** `restored=` line and no `status=recovering` for replay or idempotency: the live stores were not touched | Start-up log |
 | B9 | Post-drill status | In a window **without** the scratch variables, at a moment of your choosing: `npm run ops -- status` (safe while the API runs) | The same stores as B2, all `status=verified`, `lock=held-by-pid-<n>` while the API runs, `storage status: ok` | Output |
-| B10 | Keep the evidence | Copy the backup folder to the second disk, if it is not already there. Keep the scratch folder for review, or delete **only that scratch folder** after sign-off. | — | Location |
+| B10 | Keep the evidence | Copy the backup folder to the second disk, if it is not already there (with one disk only, record that limitation). Keep the scratch folder for review, or delete **only that scratch folder** after sign-off. | — | Location |
 
 **STOP conditions for Gate B** (record FAIL, keep the output, do not continue the drill):
 

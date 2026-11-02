@@ -7,19 +7,27 @@
 from source inspection, automated tests or in-process rendering.
 
 **Current state (2026-11-02).**
-- **Gate A's first run on the beta installation failed at A6** (a stale API process, GA-1).
-- **The stale API was replaced and Gate A was re-run on the beta installation.** A1–A8 and A10–A16
-  pass. A9 runs inside Gate B, and Gate A also needs sign-off.
-- **Gates B and C have not been run.**
+- **Gate A's first run on the beta installation failed at A6** (a stale API process, GA-1). The stale API
+  was replaced and Gate A was re-run: **all 16 checks pass**, with A9 shown during Gate B.
+- **Gate B's recovery drill passed B0–B10** on the beta installation, restoring into an isolated scratch
+  folder. It found one defect (GB-1, duplicate EXPIRED audit events after a restart), which was fixed and
+  regression-tested.
+- **Gate C passed C1–C4.**
+- **What remains is human:** the operator and reviewer sign-offs, and named decisions on the open
+  limitations (see Decision rules).
 
 | Gate | Result | Evidence |
 |---|---|---|
-| A. Dashboard browser smoke test | **Not yet PASS:** on the beta installation, 15 of 16 checks PASS (A1–A8, A10–A16). A9, which is required, runs inside Gate B (B7a). Operator and reviewer sign-off are pending. The first run's FAIL (A6, GA-1) was corrected and re-run. | Re-run on the beta installation (2026-11-02), see Gate A |
-| B. Real-installation recovery drill | **NOT RUN** | None |
-| C. Storage health CLI | **NOT RUN** | None |
+| A. Dashboard browser smoke test | **Technically PASS: all 16 checks pass** on the beta installation (A9 during Gate B, B7a). Operator and reviewer sign-off pending. The first run's FAIL (A6, GA-1) was corrected and re-run. | See Gate A |
+| B. Real-installation recovery drill | **Technically PASS: B0–B10 pass** (backup `d4b8bf8a76bfdde4`). Operator and reviewer sign-off pending. Finding GB-1 found and fixed; GB-2 (one disk) recorded as a limitation. | See Gate B |
+| C. Storage health CLI | **Technically PASS: C1–C4 pass** (C1–C3 inside Gate B, C4 = B2 and B9). Operator and reviewer sign-off pending. | See Gate C |
 
-**Current beta decision: NO-GO.**
-- **Why:** Gate A is not complete (A9 runs in Gate B; sign-offs pending), and Gates B and C have not been run.
+**Current beta decision: pending human sign-off.**
+- **Technically:** every gate's checks pass, and no blocking finding is open.
+- **Why it is not GO or CONDITIONAL GO yet:** the decision rules require the operator and reviewer to sign
+  off, and every open limitation to have a named decision. Automation cannot supply either.
+- **Recommendation:** CONDITIONAL GO, once the limitations listed under "Open findings and acceptance" are
+  explicitly accepted by name.
 - **What stands:** E15's assessment (**CONDITIONAL GO**, conditions not yet met) remains the
   technical baseline.
 - **AgentShield is not production-ready.**
@@ -114,7 +122,7 @@ check that nothing sensitive is visible.
 | A6 | PASS | `apr-2`: all card fields; "Requested by: Operator (dashboard) · scenario as demo-summarizer" | `A6-scenario-approval.png` | automated, real browser |
 | A7 | PASS | `apr-1`, risk 65: "Requested by: Agent summary-agent · key 20a2038eb7d964f5". `agent-credential list` shows `20a2038eb7d964f5 summary-agent ed25519 active`. `/api/approvals` shows `requestedBy: agent/20a2038eb7d964f5`. No credential displayed. | Operator's report (dashboard and terminal); the list and approvals cross-check were recorded in this review | operator; cross-checked |
 | A8 | PASS | **Approve:** `apr-1` EXECUTED (simulated); the agent printed "Approved by the operator (apr-1) and executed." and "Saved summary-1 (69 characters) to the simulated workspace." (operator). **Reject:** `apr-3` REJECTED in the history; the agent printed "The operator rejected apr-3. Nothing was saved." and exited 2 (automated). | Operator's terminal output; `A8-agent-pending.png`, `A8-history.png`, `A8-agent-reject.txt` | operator and automated |
-| A9 | NOT RUN | Deferred to Gate B (B7a) | — | — |
+| A9 | PASS | Shown during Gate B (B7a), on the scratch API restored from backup `d4b8bf8a76bfdde4`: `apr-4` is in the history as **OUTCOME_UNKNOWN** in amber (badge colour `rgb(251, 191, 36)` = `--confirm`, not `--block` `#f87171`). The reason "This approval was restored from a backup; whether it was decided after the backup was taken is unknown. It will not run." is shown. No buttons in its row; it is not in the pending list (0 pending). Observed only: nothing was run or decided. | `2026-11-02-gate-b\B7a-A9-outcome-unknown.png`, `B7a-A9-result.json` | automated, real browser |
 | A10 | PASS | Each event shows its id and lifecycle. "Requested by:" reads the agent and key on its CONFIRM events, "Operator (dashboard) · on agent summary-agent's request" on its approve and reject events, and "Operator (dashboard) · scenario as demo-summarizer" on the scenario. The durable-log wording is shown. | `A10-activity-expanded.png`, `A10-events.txt` | automated, real browser |
 | A11 | PASS | All six provider fields; MOCK; "Live OFF"; SIMULATED ONLY | `A11-model-diagnostics.png` | automated, real browser |
 | A12 | PASS | The operator stopped the API (PID 49884) in its terminal; the dashboard showed the offline state | Operator's report (2026-11-02); no screenshot file named | operator |
@@ -226,11 +234,10 @@ was driven over the DevTools protocol by Node 22's built-in WebSocket. Nothing w
 | GA-5 | Info | There is no way to tell from outside which build a running API is (no version on `/health`); GA-1 was found from process start times | Recommendation for later; not changed in this gate | Open |
 | GA-6 | Info | The sign-in screen's "unreachable" text suggests `npm run start -w @agentshield/api`, while the README uses `npm run dev:api` (noted in E16) | None | Open |
 
-### What remains for a human (updated after A12 and A13)
+### What remains for a human (updated after Gate B)
 
-1. **A9:** runs inside Gate B, step B7a (the `OUTCOME_UNKNOWN` presentation against the drill's scratch API).
-2. **Operator and reviewer sign-off** for Gate A, in the table above, once A9 has passed.
-3. Optional: a human look at A14 and A15 on a real screen and in a narrow window. The automated run used
+1. **Operator and reviewer sign-off** for Gate A, in the table above. A9 passed during Gate B.
+2. Optional: a human look at A14 and A15 on a real screen and in a narrow window. The automated run used
    a headless browser, with mobile emulation for A15.
 
 The normal policy configuration is restored. Items 1–4 below were the steps after the first run; all are
@@ -256,27 +263,78 @@ done except sign-off.
 
 | Field | Entry |
 |---|---|
-| Result | **NOT RUN** |
-| Date and environment | — |
-| Checklist items completed | None |
-| Evidence reference | — |
-| Checks: pending approvals became OUTCOME_UNKNOWN; replay fence; idempotency window; audit integrity; live stores untouched | — |
-| Findings and corrective actions | — |
+| Result | **Technically PASS: B0–B10.** Sign-off pending. |
+| Date and environment | 2026-11-02, 22:00–22:23 local (16:30–16:53 UTC). The beta installation (Windows 11, Node.js v22.22.3), commit `d0824f5` build until B8; from B8 the live API runs the build with the GB-1 fix. |
+| Paths | Live stores at their defaults in `C:\Users\abhik\AppData\Local\AgentShield\` (no store variables set). Backup `C:\AgentShieldBackups\2026-11-02`. Scratch `C:\AgentShieldDrill\2026-11-02\state`. |
+| Checklist items completed | B0–B10, including B6b (twice: by status, and in the process that started the scratch API) |
+| Evidence reference | `AgentShield-gate-evidence\2026-11-02-gate-b\`, beside the repository |
+| Checks | Pending approvals became OUTCOME_UNKNOWN: **yes** (`restored=1`, `apr-4`). Replay fence: **yes** (`replay-store status=recovering`). Idempotency window: **yes** (`idempotency-store status=recovering`, 15 minutes). Audit integrity: **yes** (7 records at the scratch start = B3; 0 unverified). Live stores untouched: **yes** (unchanged by the restore, compared byte for byte; B9 sizes equal B2). |
+| Findings and corrective actions | GB-1 (fixed), GB-2 (limitation), GB-3 (checklist corrected), GB-4 (informational), below |
 | Operator sign-off | — |
 | Reviewer sign-off | — |
+
+**Who did what.**
+- **The operator:** B0 and B1, after a first attempt at 22:00 that had not taken effect (recorded); B4a.
+- **Automated, with the operator's explicit authority:** the rest.
+  - **CLI steps:** each ran as a separate process; the scratch ones with the five variables set in that
+    child process only.
+  - **Live API stop at B7:** a console Ctrl+C sent to the positively identified PID 38672, so its locks were
+    released cleanly.
+  - **Scratch API:** started after a B6b re-check in its own launching process; stopped at B8.
+  - **Live API restart at B8:** in a visible "AgentShield API (live)" window that the operator owns, with the
+    store and policy variables cleared.
+
+| Step | Result | Exact result | Evidence |
+|---|---|---|---|
+| B0 | PASS | One pending approval, `apr-4` (scenario `injection-in-document`, operator, 16:33:29 UTC); event `evt-7` PENDING_CONFIRMATION | `B0-B1-verification.txt` |
+| B1 | PASS | API PID 50976 stopped by Ctrl+C: port 4000 free; its four locks released | `B0-B1-verification.txt` |
+| B2 | PASS | `npm run ops -- status`: all five stores verified at the default paths, `lock=free`, `storage status: ok`, `$LASTEXITCODE = 0` | `B2-status.txt` |
+| B3 | PASS | `npm run ops -- backup --out C:\AgentShieldBackups\2026-11-02`: five stores copied and verified (replay and idempotency `restorable=no`); `backup complete: id=d4b8bf8a76bfdde4`; `$LASTEXITCODE = 0` | `B3-backup.txt` |
+| B4 | PASS | `verify-backup`: all verified, approvals `pending=1`, `backup verified`, `$LASTEXITCODE = 0`. Re-verified before B7, also exit 0. | `B4-verify-backup.txt` |
+| B4a | PASS | The operator restarted the live API (PID 38672): audit log 7 records, approvals 4 (1 pending), no integrity failure | Operator's report; the check before B5 |
+| B5 | PASS | Scratch session `status`: all five `path=` lines under the scratch folder, all `missing`, `ok`, `$LASTEXITCODE = 0` | `B5-scratch-status.txt` |
+| B6 | PASS | `restore --dir C:\AgentShieldBackups\2026-11-02` in the scratch session: audit log and approvals restore; idempotency recovery window; replay keep; credentials skip; `Approval ids continue at apr-5.`; `$LASTEXITCODE = 0`. The live folder was compared before and after: unchanged. | `B6-restore.txt` |
+| B6a | PASS | Audit log (7), approvals (9) and idempotency (1, the window) verified; replay and credentials `missing` with the "missing while other stores hold records" note; ATTENTION, `$LASTEXITCODE = 1`, as expected | `B6a-scratch-status.txt` |
+| B6b | PASS | All five configured and all five reported paths inside the scratch folder (0 outside). Re-checked in the process that started the scratch API: all five resolved paths inside it; `AGENT_POLICY_FILE` unset. | `B6a-scratch-status.txt`, `B6b-recheck.txt` |
+| B7 | PASS | Live PID 38672 stopped by console Ctrl+C (locks released). Scratch API PID 21200 started, log: `audit-log status=ready records=7 … path=C:\AgentShieldDrill\…`; `approval-store status=recovered restored=1 effect=pending-approvals-from-backup-marked-OUTCOME_UNKNOWN`; `replay-store status=recovering`; `idempotency-store status=recovering`; no integrity failure. The scratch locks were held by 21200; the live folder had no lock. | `B7-scratch-api.err.log`, `B7-scratch-api.out.log` |
+| B7a | PASS | See A9 above | `B7a-A9-outcome-unknown.png`, `B7a-A9-result.json` |
+| B7b | PASS | Storage health (token used in the header only): overall `warning`; idempotency `recovering`; approvals `approvals-made-outcome-unknown-at-startup`; every store `integrityFailures=0`, writable, lock held; none `failed`; no path in the response. Replay was `ok`: its fence (start + 30 s, until 16:48:05 UTC) had ended before the check at 16:48:36 (GB-3). | `B7b-storage-health.json` |
+| B7c | PASS | The scratch start-up loaded **7** audit records, equal to B3's **7**; 0 unverified. Later, the scratch log held 8: the extra `evt-8` was a duplicate EXPIRED event for `apr-2` (GB-1). | `B7-scratch-api.err.log`, `B3-backup.txt` |
+| B8 | PASS | Scratch API stopped. Console Ctrl+C was ignored by the automation-started process (GB-4), so PID 21200 was stopped directly after re-confirming its identity; its four lock files remain in the scratch folder only. Live API restarted (PID 24008, window PID 34400) with the store and policy variables cleared. Log: `audit-log status=ready records=7 … path=C:\Users\abhik\AppData\Local\AgentShield\…`; **no `restored=`, no `recovering`**. No leak: the live locks belong to 24008, and the scratch locks still name 21200. | `B8-live-api.log` |
+| B9 | PASS | Live `status`: all five stores verified, the same sizes as B2 (17,616 / 14,072 / 5,516 / 12,160 / 393 bytes), journal locks held by 24008, `ok`, `$LASTEXITCODE = 0` | `B9-live-status.txt` |
+| B10 | PASS (with limitation GB-2) | Backup and scratch folders retained, nothing deleted. Both are on the same physical disk (C:) as the live stores; no second disk exists. | — |
+
+**Findings from Gate B:**
+
+| Id | Severity | Finding | Corrective action | Status |
+|---|---|---|---|---|
+| GB-1 | Medium | The expiry sweep (run when approvals are listed) wrote the EXPIRED audit event but never recorded it in the approval journal; approve and reject did. Every API restart therefore wrote the EXPIRED event again. It was found in B7: the live journal had `to apr-2 EXPIRED` but no `expiry-recorded`, and the scratch API wrote `evt-8` as a duplicate of `evt-6`. Audit duplicates only: nothing ran, and no status changed. | `expirePendingApprovals` now calls `markExpiryEventRecorded`, which persists `expiry-recorded`. Regression test in `approval-journal.test.ts` (fails without the fix). The live API runs the fix from B8. The live journal already lacks the record for `apr-2`, so the fixed API writes that event once more, then records it. | Fixed |
+| GB-2 | Low (limitation) | Only one disk (C:) is available: the backup, the scratch folder and the live stores share it. The drill proves the procedure, not recovery from losing that disk. | Recorded; the checklist now says how to proceed and record this | Needs an accepted-limitation decision |
+| GB-3 | Info | B7b's expectation that the replay store shows `recovering` holds only within the skew window (30 s) after the scratch start | Checklist B7b corrected | Fixed (documentation) |
+| GB-4 | Info | A process started hidden by the automation ignores a console Ctrl+C (it inherits "ignore Ctrl+C"), so the scratch API was stopped directly. An operator's own terminal is not affected (PID 38672 stopped cleanly). | Recorded | Open (informational) |
 
 ## Gate C: storage health CLI
 
 | Field | Entry |
 |---|---|
-| Result | **NOT RUN** |
-| Date and environment | — |
-| Checklist items completed | None |
-| Evidence reference (outputs and exit codes) | — |
-| Documented action followed (for any ATTENTION) | — |
-| Findings and corrective actions | — |
+| Result | **Technically PASS: C1–C4.** Sign-off pending. |
+| Date and environment | 2026-11-02, during and after Gate B; the same environment |
+| Checklist items completed | C1–C4. C1–C3 overlap with Gate B by design, so the same outputs are referenced, not repeated. |
+| Evidence reference (outputs and exit codes) | `2026-11-02-gate-b\`: `B5-scratch-status.txt`, `B6a-scratch-status.txt`, `C2-scratch-status-while-running.txt`, `B7b-storage-health.json`, `B2-status.txt`, `B9-live-status.txt` |
+| Documented action followed (for any ATTENTION) | Every ATTENTION was the expected one: credentials and (before the scratch start) replay intentionally missing in scratch. No action was needed. |
+| Findings and corrective actions | None beyond Gate B's |
 | Operator sign-off | — |
 | Reviewer sign-off | — |
+
+| Check | Result | Exact result |
+|---|---|---|
+| C1 | PASS | Before the restore (B5): all five `missing`, `storage status: ok`, `$LASTEXITCODE = 0`. After the restore (B6a): ATTENTION, `$LASTEXITCODE = 1`, with the "missing while other stores hold records" note for replay and credentials. This matches the checklist. |
+| C2 | PASS | With the scratch API running: every scratch journal shows `lock=held-by-pid-21200`; the scratch API kept serving, so the check is read-only. ATTENTION, exit 1, because the credential store is intentionally missing in scratch. |
+| C3 | PASS | The CLI (C2) and the storage-health route (B7b) agree on every store: audit log 20,714 bytes, approvals 13,890, idempotency 99, replay 82; integrity `verified` / `integrityFailures=0`. The CLI shows no level, as documented. |
+| C4 | PASS | On the beta installation: B2 (API stopped) all verified, `lock=free`, `ok`, exit 0; B9 (API running) all verified, journal locks `held-by-pid-24008`, `ok`, exit 0 |
+
+**Limits of the CLI, as documented.** It cannot see runtime `write-failed` or `lock-lost` states, and it
+does not separate critical from warning; those come from `/api/storage/health` and the API log.
 
 ## Open findings and acceptance
 
@@ -284,20 +342,24 @@ Carried from E15 and E16. Each needs a named decision before a GO or CONDITIONAL
 
 | Id | Finding | Blocking | Decision | Acceptance owner |
 |---|---|---|---|---|
-| M2 | No storage-health panel in the dashboard | Not blocking if Gate C passes and the daily CLI check is adopted | — | — |
-| M3 | Dashboard not tested in a browser | **Blocking** until Gate A passes | Closed only by a Gate A PASS | — |
+| M2 | No storage-health panel in the dashboard | Not blocking: Gate C passed; requires adopting the daily `npm run ops -- status` check | — | — |
+| M3 | Dashboard not tested in a browser | Closed technically: Gate A's 16 checks pass in a real browser; closes formally with the Gate A sign-off | — | — |
 | L4 | No agent or credential view in the dashboard | Not blocking | — | — |
 | L5 | The full test suite is sensitive to machine load | Not blocking | — | — |
-| — | No real-installation recovery drill | **Blocking** until Gate B passes | Closed only by a Gate B PASS | — |
+| — | No real-installation recovery drill | Closed technically: Gate B passed; closes formally with the Gate B sign-off | — | — |
+| GB-2 | Backup and scratch on the same disk as the live stores (no second disk) | Not blocking for a controlled beta; requires accepting it, or rerunning B3/B10 with a second disk | — | — |
+| GA-5 | No build or version visible on `/health` | Not blocking | — | — |
+| GA-6 | Sign-in "unreachable" text names `npm run start -w @agentshield/api`, the README `npm run dev:api` | Not blocking | — | — |
+| GB-4 | A console Ctrl+C does not stop an API started hidden by automation | Not blocking (informational) | — | — |
 | — | Residual risks in [beta-readiness.md](beta-readiness.md) | Must be acknowledged | — | — |
 
 ## Decision record
 
 | Field | Entry |
 |---|---|
-| Decision | **NO-GO**: Gate A not complete (A9 runs in Gate B; sign-offs pending); Gates B and C NOT RUN (2026-11-02) |
-| Gate results | A: 15/16 PASS on the beta installation (A1–A8, A10–A16); A9 pending in Gate B; sign-offs pending. B: NOT RUN. C: NOT RUN. |
-| Accepted limitations | None recorded |
-| Open blocking findings | M3 (closed only by a Gate A PASS on the beta installation); no real-installation drill |
+| Decision | **Pending human sign-off.** Technically every gate passes, so it is not NO-GO. GO or CONDITIONAL GO needs the sign-offs and named acceptance of the open limitations (2026-11-02). Recommended: **CONDITIONAL GO**. |
+| Gate results | A: 16/16 PASS (A9 in Gate B). B: B0–B10 PASS. C: C1–C4 PASS. Every gate is technically PASS; operator and reviewer sign-off pending for each. |
+| Accepted limitations | None recorded yet. To decide: M2, L4, L5, GA-5, GA-6, GB-2, GB-4, and the residual risks in beta-readiness.md. |
+| Open blocking findings | None. GA-1 and GB-1 are fixed; M3 and the drill close formally with the sign-offs. |
 | Decided by | — (pending the operator's evidence) |
 | Reviewed by | — |
