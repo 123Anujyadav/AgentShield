@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
+import activity from "./components/views/ActivityAuditView.tsx?raw";
 import approvalQueue from "./components/views/ApprovalQueueView.tsx?raw";
+import scenarioLab from "./components/views/ScenarioLabView.tsx?raw";
+import threatInvestigation from "./components/views/ThreatInvestigationView.tsx?raw";
 import modelDiagnostics from "./components/views/ModelDiagnosticsView.tsx?raw";
 import policy from "./components/views/PolicyActionsView.tsx?raw";
 import toolTrust from "./components/views/ToolTrustView.tsx?raw";
@@ -33,6 +36,20 @@ describe("M3-B (G10): dashboard text matches the engine", () => {
     expect(modelDiagnostics).toContain("Up to 2 retries by default");
     expect(modelDiagnostics).not.toContain("MODEL_LIVE_ENABLED=false (Enforced)");
     expect(modelDiagnostics).toContain('modelStatus?.isMock === false ? "Live provider (advisory only)" : "Offline synthetic provider"');
+  });
+
+  it("M3-E E17: Activity & Audit says events are durable (E10 audit log), never that they reset on restart", () => {
+    expect(activity).not.toMatch(/in-memory|in memory|reset when the API restarts|Resets on API restart/i);
+    expect(activity).toContain("survives API restarts");
+  });
+
+  it("M3-E E17 (Gate A, A15): approval card rows wrap on narrow screens, so no badge or button is clipped", () => {
+    // Only the page header's two short badges stay on one line; every card row wraps.
+    expect(approvalQueue.match(/className="flex items-center gap-2"/g)?.length).toBe(1);
+    expect(approvalQueue.match(/className="flex flex-wrap items-center gap-2"/g)?.length).toBe(3);
+    // The decision and outcome badge rows of Scenario Lab and Threat Investigation clipped the same way.
+    expect(scenarioLab).toMatch(/"flex flex-wrap items-center gap-2">\s*<span[^>]*>Evaluation Decision:/);
+    expect(threatInvestigation).toMatch(/"flex flex-wrap items-center gap-2">\s*<span[^>]*>Evaluation Outcome:/);
   });
 
   it("Approval queue: an approved action with no handler is shown amber, not as a block", () => {

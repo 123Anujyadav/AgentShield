@@ -5,12 +5,19 @@ import type { ApprovalStatus, RequestActor } from "@agentshield/engine";
  * Pure helpers (unit-tested without a browser).
  */
 
-/** Who asked for an action: the agent and its key id, or the operator who ran a seeded scenario. */
-export function requesterLabel(item: { agentId?: string | null; requestedBy?: RequestActor; actor?: RequestActor }): string {
+/**
+ * Who made the request: the agent and its key id, or the operator. An operator either ran a seeded scenario
+ * (it has a scenarioId) or, M3-E E17, decided an agent's approval (no scenarioId): the two are worded apart.
+ */
+export function requesterLabel(item: { agentId?: string | null; requestedBy?: RequestActor; actor?: RequestActor; scenarioId?: string | null }): string {
   const by = item.requestedBy ?? item.actor;
   const agent = item.agentId ? item.agentId : null;
   if (by?.kind === "agent") return `Agent ${agent ?? "(unknown)"} · key ${by.credentialId}`;
-  if (by?.kind === "operator") return `Operator (${by.method === "session" ? "dashboard" : "API token"})${agent ? ` · scenario as ${agent}` : ""}`;
+  if (by?.kind === "operator") {
+    const who = `Operator (${by.method === "session" ? "dashboard" : "API token"})`;
+    if (!agent) return who;
+    return item.scenarioId ? `${who} · scenario as ${agent}` : `${who} · on agent ${agent}'s request`;
+  }
   return agent ? `Agent ${agent} · requester not recorded` : "Requester not recorded";
 }
 

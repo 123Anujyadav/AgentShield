@@ -309,7 +309,7 @@ export default function ScenarioLabView({
           }}
         >
           <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-bold uppercase tracking-wider text-muted">Evaluation Decision:</span>
               <DecisionBadge decision={result.evaluation.decision} />
               <span className="badge text-[10px]">Risk: {result.evaluation.riskScore}/100</span>

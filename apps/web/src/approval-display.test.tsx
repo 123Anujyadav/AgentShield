@@ -33,7 +33,9 @@ const approval = (over: Partial<PendingApproval>): PendingApproval => ({
 describe("M3-E E15: requester and status display", () => {
   it("names the agent and its key id, or the operator, and says when it was not recorded", () => {
     expect(requesterLabel({ agentId: "writer", requestedBy: { kind: "agent", credentialId: "0123456789abcdef" } })).toBe("Agent writer · key 0123456789abcdef");
-    expect(requesterLabel({ agentId: "demo-agent", requestedBy: { kind: "operator", method: "session" } })).toBe("Operator (dashboard) · scenario as demo-agent");
+    expect(requesterLabel({ agentId: "demo-agent", scenarioId: "injection-in-document", requestedBy: { kind: "operator", method: "session" } })).toBe("Operator (dashboard) · scenario as demo-agent");
+    // M3-E E17 (Gate A, A10): the operator deciding an agent's approval ran no scenario.
+    expect(requesterLabel({ agentId: "summary-agent", scenarioId: null, actor: { kind: "operator", method: "session" } })).toBe("Operator (dashboard) · on agent summary-agent's request");
     expect(requesterLabel({ agentId: null, actor: { kind: "operator", method: "bearer" } })).toBe("Operator (API token)");
     expect(requesterLabel({})).toBe("Requester not recorded");
   });

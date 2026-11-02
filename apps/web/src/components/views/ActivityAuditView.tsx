@@ -71,10 +71,10 @@ export default function ActivityAuditView({
           </div>
           <div>
             <h2 className="text-base font-bold" style={{ color: "var(--text-bright)" }}>
-              Activity & Audit · Session Event Timeline (In-Memory)
+              Activity & Audit · Event Timeline
             </h2>
             <p className="text-xs" style={{ color: "var(--muted)" }}>
-              Session record of agent action proposals, scanner checks, human authorizations, and engine decisions. Events are held in memory and reset when the API restarts.
+              Record of agent action proposals, scanner checks, human authorizations, and engine decisions. Each event is stored in the local audit log before it appears here and survives API restarts; this view lists the newest events (1,000 by default).
             </p>
           </div>
         </div>
@@ -189,7 +189,7 @@ export default function ActivityAuditView({
             </h4>
             <p className="text-xs text-muted max-w-md mx-auto">
               {events.length === 0
-                ? "Actions evaluated in the Scenario Lab or Command Center will automatically be cataloged into this in-memory session timeline."
+                ? "Actions evaluated in the Scenario Lab, the Command Center or by agents are recorded in the audit log and listed here."
                 : "Try resetting your decision filter or search keyword to view all recorded timeline events."}
             </p>
             {events.length === 0 && (
@@ -315,7 +315,7 @@ export default function ActivityAuditView({
         style={{ background: "#05090d" }}
       >
         <span className="text-[11px]">
-          Session memory audit timeline · Resets on API restart · In-memory evaluation records only
+          Durable audit timeline · Stored in the local audit log · Survives API restarts
         </span>
         <span className="badge text-[9px] text-emerald-300">DETERMINISTIC VERIFICATION</span>
       </div>

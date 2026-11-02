@@ -118,7 +118,7 @@ export default function ApprovalQueueView({
                   }}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 mb-3 border-b" style={{ borderColor: "var(--border-subtle)" }}>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="font-mono font-bold text-sm text-amber-400">{approval.id}</span>
                       <span className="badge text-[10px] text-amber-300 border-amber-900 bg-amber-950/40">
                         {approval.status}
@@ -158,7 +158,7 @@ export default function ApprovalQueueView({
                     <span className="text-[11px] text-muted">
                       Execution Mode: <strong className="text-cyan-300 font-mono">SIMULATED</strong> (No real tool executes)
                     </span>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         onClick={() => void onApprovalAction(approval, "reject")}
@@ -197,7 +197,7 @@ export default function ApprovalQueueView({
                 className="p-3 rounded-lg text-xs border flex flex-wrap items-center justify-between gap-2"
                 style={{ background: "#060d11", borderColor: "var(--border-subtle)" }}
               >
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono font-bold text-slate-200">{item.id}</span>
                   <span
                     className="badge text-[9px] font-bold"
