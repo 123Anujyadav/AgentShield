@@ -39,6 +39,22 @@ or the main [README](../README.md#run-locally). If a step's output differs from 
 5. **A gate is PASS only if every one of its required checks passes.** A FAIL is never re-labelled as
    acceptable (see [Decision rules](#decision-rules)).
 
+## Execution order (M3-E E17 clarification)
+
+Run the gates in this order:
+1. **Gate A**, all checks except A9.
+2. **Gate B**, including A9 (step B7a) and C1 to C3.
+3. **C4.**
+
+A9 can only be produced safely inside Gate B.
+
+**Gate A runs on the beta installation and leaves test records there.** By design:
+- its test audit events are permanent: the audit log is never pruned;
+- its approvals stay in the history;
+- its test credential is revoked in A16.
+
+Record the time window of Gate A in the evidence, so these records can be recognised later.
+
 ## Gate A: dashboard browser smoke test
 
 **Why.** E15 rendered the views in process only (markup, no browser). No layout, interaction or
@@ -49,6 +65,14 @@ session behaviour has been checked in a real browser (E15 finding M3).
 - terminal 2: `npm run dev:web`;
 - open **http://localhost:5173**. To sign in, copy the token without displaying it:
   `Get-Content -Raw "$env:LOCALAPPDATA\AgentShield\api-token" | Set-Clipboard`.
+
+**A7 needs a policy for the test agent.** `summary-agent` must have a policy, or every request it
+makes is blocked and A7 cannot produce a CONFIRM.
+- Before A7, start the API as [quick-start.md](quick-start.md) sections 3–4 describe: in the API
+  terminal, set `$env:AGENT_POLICY_FILE` to the quick-start policy file, then run `npm run dev:api`.
+  That file keeps the `demo-summarizer` policy the seeded scenarios use.
+- If the beta installation normally uses its own policy file, return to it after Gate A: open a new
+  terminal without that variable, or set it back to your own file, and start the API again.
 
 **Agent-created approvals** use the quick-start's short-lived test credential (`--days 7`) and the
 reference agent:
@@ -116,8 +140,9 @@ anyway.
 | B5 | Open a **new** PowerShell window and point every store at the scratch folder | `$env:AUDIT_LOG_FILE = "D:\AgentShieldDrill\<date>\state\audit-events.jsonl"`; `$env:APPROVAL_STORE_FILE = "D:\AgentShieldDrill\<date>\state\approvals.journal"`; `$env:IDEMPOTENCY_STORE_FILE = "D:\AgentShieldDrill\<date>\state\idempotency.journal"`; `$env:REPLAY_STORE_FILE = "D:\AgentShieldDrill\<date>\state\replay-nonces.journal"`; `$env:AGENT_CREDENTIAL_FILE = "D:\AgentShieldDrill\<date>\state\agent-credentials.json"`; then `npm run ops -- status` | **Every `path=` line is under the scratch folder.** Every store `status=missing`; `storage status: ok` (no store holds records yet) | Output |
 | B6 | Restore into the scratch folder | In the same window: `npm run ops -- restore --dir D:\AgentShieldBackups\<date>` | The plan: `audit-log restore`, `approval-store restore`, `idempotency-store create-recovery-window`, `replay-store keep` (never restored), `credential-store skip` (no `--restore-credentials`); `restore complete from backup <id>`; `Approval ids continue at apr-<n>.`; exit 0 | Output |
 | B6a | Scratch status after the restore | `npm run ops -- status` | Audit log and approvals `status=verified`; idempotency `status=verified`; replay and credentials `status=missing`, each with the note "missing while other stores hold records" (expected here); no `restore=interrupted` | Output |
-| B7 | Start an API on the scratch stores | Stop the live API (Ctrl+C), then in the **scratch window**: `npm run dev:api` | The start-up log shows: `audit-log status=ready records=<n>` and no `status=integrity-failure`; `approval-store status=recovered restored=<n> effect=pending-approvals-from-backup-marked-OUTCOME_UNKNOWN` (n = B4's `pending`; this line is absent when n is 0); `replay-store status=recovering until=…`; `idempotency-store status=recovering until=… effect=new-idempotency-keys-refused` | Start-up log |
-| B7a | `OUTCOME_UNKNOWN` in the dashboard (Gate A9) | `npm run dev:web`, sign in, open **Approval Queue** | Every approval that was pending in the backup is in the history as OUTCOME_UNKNOWN, amber, with the restored-from-backup reason, and cannot be decided | Screenshot |
+| B6b | **Verify every scratch path again, immediately before starting the scratch API** (M3-E E17) | In the scratch window, read every `path=` line of B6a | **All five `path=` lines are under the scratch folder.** If any is not, STOP: do not start an API in this window. | The five path lines |
+| B7 | Start an API on the scratch stores | Only after B6b passed: stop the live API (Ctrl+C), then in the **scratch window**: `npm run dev:api` | The start-up log shows: `audit-log status=ready records=<n>` and no `status=integrity-failure`; `approval-store status=recovered restored=<n> effect=pending-approvals-from-backup-marked-OUTCOME_UNKNOWN` (n = B4's `pending`; this line is absent when n is 0); `replay-store status=recovering until=…`; `idempotency-store status=recovering until=… effect=new-idempotency-keys-refused` | Start-up log |
+| B7a | `OUTCOME_UNKNOWN` in the dashboard (Gate A9) | If the web app is not still running from Gate A, `npm run dev:web`. Sign in again (the scratch API has no sessions), open **Approval Queue**, and only observe: run no scenario and decide nothing on the scratch API. | Every approval that was pending in the backup is in the history as OUTCOME_UNKNOWN, amber, with the restored-from-backup reason, and cannot be decided | Screenshot |
 | B7b | Storage health on the scratch API | In another window: the documented `Invoke-RestMethod http://127.0.0.1:4000/api/storage/health …` command from [operations.md](operations.md) (Watching storage health) | `replay-store` and `idempotency-store` have the `recovering` warning; `approval-store` has `approvals-made-outcome-unknown-at-startup`; no store is `failed`. The response contains no path. | Output |
 | B7c | Audit integrity | Read the B7 start-up log | No `audit-log status=integrity-failure`; the record count equals the backup's audit-log `records` (B3) | Comparison |
 | B8 | Stop the scratch API; restart the live API | Ctrl+C in the scratch window; **close that window** (its variables end with it); in the usual terminal: `npm run dev:api` | The live API starts with **no** `restored=` line and no `status=recovering` for replay or idempotency: the live stores were not touched | Start-up log |
@@ -133,7 +158,8 @@ anyway.
 | B4 | `backup verification FAILED` | The backup is not usable. Stop. Restart the API. Delete nothing. |
 | B5 | **Any `path=` line is not under the scratch folder** | Close the window, open a new one, set all five variables again. Never run `restore` until all five paths are in the scratch folder. |
 | B6 | Restore refuses (`Nothing was restored …`) | Stop. Record the reason. **Do not add `--replace-damaged` or `--restore-credentials`.** |
-| B7 | The scratch API refuses to start, or reports `status=integrity-failure` | Stop the scratch API. Record. Go to B8. |
+| B6b | Any `path=` line is not under the scratch folder | Do not start the scratch API. Close the window; the live stores were not written by the restore (it never replaces a healthy store). Restart the live API (B8) and record FAIL. |
+| B7 | The scratch API refuses to start, or reports `status=integrity-failure`, or its start-up log shows an `audit-log … path=` outside the scratch folder | Stop the scratch API at once (Ctrl+C). Record. Go to B8. |
 | B8 | The live API reports `restored=`, `recovering`, or an integrity failure | **Serious finding:** the live stores were affected. Stop the API. Do not restore anything. Escalate with [operations.md](operations.md) and record NO-GO. |
 
 **Rollback.** No step changes the live stores. The only live-side actions are stopping and starting
@@ -246,8 +272,8 @@ NOT RUN if the gate was not attempted.
 | Result | PASS / FAIL / NOT RUN |
 | Date and time | Start and end; how long the API was stopped |
 | Environment | Machine; commit; backup folder; scratch folder |
-| Steps performed | B1 … B10 (mark each ✓ / ✗ / not run; note any STOP condition met) |
-| Evidence | Output files for B2, B3, B4, B5, B6, B6a, B7, B7b, B8, B9; screenshot for B7a; backup id |
+| Steps performed | B1 … B10, including B6b (mark each ✓ / ✗ / not run; note any STOP condition met) |
+| Evidence | Output files for B2, B3, B4, B5, B6, B6a, B6b, B7, B7b, B8, B9; screenshot for B7a; backup id |
 | Checks | Pending approvals from the backup became OUTCOME_UNKNOWN (count matches B4); replay fence in force; idempotency recovery window in force; audit record count matches; live stores untouched (B8, B9) |
 | Findings | |
 | Operator sign-off | |
