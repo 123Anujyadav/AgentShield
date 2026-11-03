@@ -110,7 +110,7 @@ from the E16–E17 gate runs is listed separately. None is merged or downgraded.
 | Id | Risk | Status | Blocking | Impact | Mitigation / operating condition | Follow-up | Decision (ACCEPT / REJECT) | Owner | Date |
 |---|---|---|---|---|---|---|---|---|---|
 | R1 | Same-account trust: anyone controlling the operator's Windows account, or an administrator, can read and rewrite the stores, backups, credential store and API token; the integrity chains detect only accidental or unsophisticated damage | **Open** | No | A compromised account compromises AgentShield | **Condition:** a dedicated, trusted Windows account; restricted access to the machine | Tamper evidence needs a new trust boundary (E13 report) | | | |
-| R2 | The API token keeps the profile's default ACL. **Verified 2026-11-02:** the existing token file grants read (`RX`) to `MSI\CodexSandboxUsers` and `MSI\MuseSandboxUsers`, inherited from `%LOCALAPPDATA%\AgentShield` (all five store files are restricted to the operator alone) | **Remediated (verified 2026-11-03 08:01:59 +05:30):** the existing token file now has exactly one entry, `MSI\abhik` full control, inheritance disabled; the two groups have no access; the token is unchanged (length and timestamps). The change was found already applied at 08:01:42 (made after 22:53:58 on 2026-11-02, presumably by the operator); no command was re-run. **Fixed for new tokens** (commit `129fe5c`). **Folder remediated (2026-11-03 08:06):** `%LOCALAPPDATA%\AgentShield` no longer grants either group anything. It now holds only SYSTEM, Administrators and the operator, each with full control, and no longer inherits from `%LOCALAPPDATA%`. The six protected files are unchanged; the four lock files lost only their inherited sandbox entries. The application's access was verified (see `R2-folder-acl-remediation.txt`). Residual: the parent `%LOCALAPPDATA%` still grants both groups read (outside AgentShield's folder). | No | Members of those two local groups can read the operator token and act as the operator | **Action for the operator:** restrict the existing token file: `icacls "$env:LOCALAPPDATA\AgentShield\api-token" /inheritance:r /grant:r "${env:USERNAME}:(F)"` (it does not change the token; the running API keeps working). Or accept the exposure, naming why those groups need it. | Re-check with `icacls` after the change | | | |
+| R2 | The API token kept the profile's default ACL. **Verified 2026-11-02:** the token file and its folder granted read (`RX`) to `MSI\CodexSandboxUsers` and `MSI\MuseSandboxUsers`. | **Remediated for AgentShield (verified 2026-11-03):** **(1) token file** `%LOCALAPPDATA%\AgentShield\api-token`: one entry, `MSI\abhik` full control; inheritance disabled; the token is unchanged (found already applied at 08:01:42, verified 08:01:59). **(2) AgentShield folder** `%LOCALAPPDATA%\AgentShield`: only SYSTEM, Administrators and `MSI\abhik`, each with full control; both groups removed; no longer inherits; the five stores and the token are restricted individually too (08:06). **(3) new token files:** created restricted (commit `129fe5c`). **Residual, outside AgentShield, not modified:** the parent `%LOCALAPPDATA%` (`C:\Users\abhik\AppData\Local`) still grants both groups inheritable read. It can show that a folder named `AgentShield` exists, but it gives no access inside it; it affects other applications' data under `%LOCALAPPDATA%`, which is outside this project. | No | For AgentShield: none remaining. The parent-folder grant is a machine-level decision about the sandbox groups. | **Condition:** keep `%LOCALAPPDATA%\AgentShield` protected (re-check with `icacls` after any profile or permission change). | Decide whether the sandbox groups should keep read access to `%LOCALAPPDATA%` at all (a machine-level question, outside AgentShield) | | | |
 | R3 | Restoring an old credential store undoes later revocations | **Open** | No | A revoked credential could become valid again | `--restore-credentials` is never used without review; Gate B did not use it | **Condition:** after any credential restore, review `agent-credential list` and revoke again | | | |
 | R4 | Prompt-injection detection is pattern-based; novel phrasings may be missed | **Open** | No | An injection may not escalate to CONFIRM | Policy enforcement and operator approval remain the controlling defences | Track misses during the beta (exit criteria) | | | |
 | R5 | The secret-scanning hook can be bypassed (`--no-verify`); there is no CI | **Open** | No | A secret could be committed | **Condition:** never use `--no-verify`; run `npm run security:verify` before any push | CI (later phase) | | | |
@@ -193,3 +193,63 @@ user).
 
 **Verification after the changes:** `npm test` 2,352 tests in 80 files, all passing; `npm run build` and
 `npm run typecheck` pass; `security:scan`, `security:self-test` (61 checks) and `security:verify` pass.
+
+## 6. Operator decision sheet
+
+**One line per register entry that needs a decision.**
+- **Recommendation:** prepared by automation from the evidence, *not* a decision. No operator
+  recommendations were supplied separately, so confirm or replace each one.
+- **Fill in the Decision, Owner and Date columns of section 3** (the authoritative register), not here.
+- **Leave nothing blank:** an entry without a decision blocks GO and CONDITIONAL GO.
+
+**Needs ACCEPT or REJECT (open limitations and residual risks):**
+
+| Id | One-line summary | Prepared recommendation | Condition if accepted |
+|---|---|---|---|
+| M2 | No storage-health panel | ACCEPT | Daily `npm run ops -- status`; read the API's `storage` log lines |
+| L4 | No agent or credential view in the dashboard | ACCEPT | Use `npm run agent-credential -w @agentshield/api -- list` |
+| L5 | Test suite sensitive to machine load | ACCEPT | Rerun an affected suite before treating a failure as real |
+| I1 | 30 s replay fence after a first start or lost journal | ACCEPT | By design; agents retry after `ServiceUnavailableError` |
+| I2 | About 170 durable evaluations per second | ACCEPT | Fewer than 10 agents |
+| I3 | Reserved device names are ordinary files | ACCEPT | None (documented) |
+| K1 | Simulated execution only | ACCEPT | No real tool execution |
+| K2 | One process, one machine, one account, loopback, no TLS | ACCEPT | One Windows 11 machine, loopback only |
+| K3 | Mock model only | ACCEPT | MOCK mode, live OFF |
+| K4 | Offline, manual backups | ACCEPT | Daily offline backup, copied to another disk |
+| K5 | Website scanning not assessed | ACCEPT | Scanning stays off |
+| R1 | Same-account trust | ACCEPT | Dedicated, trusted Windows account; restricted machine access |
+| R2 | Parent `%LOCALAPPDATA%` still readable by the two sandbox groups (AgentShield's folder and token are protected) | ACCEPT for AgentShield; decide the machine-level question separately | Keep `%LOCALAPPDATA%\AgentShield` protected; re-check with `icacls` |
+| R3 | An old credential store undoes revocations | ACCEPT | Never `--restore-credentials` without reviewing `agent-credential list` afterwards |
+| R4 | Pattern-based injection detection | ACCEPT | Operator approval stays mandatory; record misses (exit criteria) |
+| R5 | Bypassable hook, no CI | ACCEPT | Never `--no-verify`; `npm run security:verify` before any push |
+| R6 | Losing both the approval journal and the audit log | ACCEPT | Daily backups (K4) |
+| GA-5 | No build or version on `/health` | ACCEPT | After code changes: `npm run build`, then restart the API |
+| GB-2 | Backup and scratch on the same disk as the live stores | ACCEPT for the controlled beta | Copy backups to another disk when available |
+| GB-4 | Console Ctrl+C does not stop an API started hidden by automation | ACCEPT | Operators run the API in their own terminal |
+| O1 | No human visual review yet | **Do not accept: complete the review** (section 7) | — |
+| O2 | A7 and A8 approval evidence is a text report, without screenshots | ACCEPT | CLI and API cross-checks recorded |
+| O4 | Small "Copy" buttons | Decide during the visual review (section 7) | — |
+| PB-1 | Drill scratch folder inherits `C:\` permissions (its files are restricted) | ACCEPT, or restrict the folder (command in the PB-1 row) | Scratch is evidence only |
+
+**Needs CONFIRM FIX (verified as fixed or resolved):** M1, M3, M4, L1, L2, L3, L6, I4, GA-1, GA-2, GA-3,
+GA-4, GA-6, GB-1, GB-3, O3, and the R2 remediation (token file, folder, new tokens).
+
+## 7. Visual review checklist (O1, O4)
+
+**Who and how:** done by a person, on the beta machine, signed in to the live dashboard. Record pass or
+fail per line, with the browser name, version and window sizes.
+
+| # | Check | Pass when |
+|---|---|---|
+| V1 | Desktop, maximised window: open every sidebar view | Nothing overlaps, is cut off or unreadable |
+| V2 | Narrow window (about 375–400 px wide, or a phone through the browser's device mode): open every view through the screen selector or the bottom bar | Every view is reachable; no content is hidden without a way to scroll to it |
+| V3 | Approval Queue, narrow width | Approval cards wrap; the requester, risk, policy and both decision buttons are visible and usable |
+| V4 | Activity & Audit: expand an event | The event id, lifecycle and "Requested by" are readable; the header says events survive restarts |
+| V5 | Threat Investigation and Scenario Lab, narrow width: the small "Copy" buttons (O4) | Easy to tap; if not, record O4 as a finding or accept it |
+| V6 | Status badges | EXECUTED green, REJECTED red, OUTCOME_UNKNOWN and APPROVED_NOT_EXECUTED amber (see `B7a-A9-outcome-unknown.png` for a reference) |
+| V7 | General legibility (contrast, font size) at both widths | Comfortable to read |
+
+**Automated results for reference** (not a substitute for this review): `2026-11-02-pre-beta\O1-isolated\`
+(27 renderings, no overflow or clipping) and `2026-11-02-gate-a-beta-installation\A14-*.png`, `A15-*.png`.
+
+**Reviewer handoff:** see [beta-reviewer-handoff.md](beta-reviewer-handoff.md).
