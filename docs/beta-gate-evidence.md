@@ -346,7 +346,7 @@ Recorded in detail in [beta-signoff.md](beta-signoff.md), section 5 (evidence:
 | I4 | `npm audit`: 0 vulnerabilities across 333 dependencies (resolved) |
 | GB-1 | Exactly-once verified on a copy of the backup; one historical duplicate (`apr-2`) is still to come on the live installation |
 | L6 | 942 test temp directories removed |
-| R2 | **New finding:** the existing API token file is readable by two local groups (`CodexSandboxUsers`, `MuseSandboxUsers`); new token files are now created restricted (`129fe5c`); the operator decides on the existing file |
+| R2 | **Found:** the existing API token file was readable by two local groups (`CodexSandboxUsers`, `MuseSandboxUsers`). **Remediated:** verified 2026-11-03 08:01:59 +05:30, it is restricted to the current user only (found already applied, presumably by the operator; token unchanged). New token files are created restricted (`129fe5c`). |
 | O1 | Automated visual pass, 9 views at 3 sizes: no overflow or clipping; human review still required (O1, O4) |
 | O3 | **The live API ended abruptly** between 22:53 and 22:55 (most likely when the automation's shell was recycled). The data is verified intact. The operator must start it in their own terminal. |
 | PB-1 | The drill's scratch folder inherits `C:\` permissions (store files themselves restricted) |
